@@ -25,6 +25,7 @@ CENSUS_ALIASES: Dict[str, List[str]] = {
     "join_date": ["date joined", "join date", "hire date", "employment date"],
 }
 
+_EMPLOYEE_RELATIONS = {"employee", "principal", "main member", "member", "self"}
 _SPOUSE_RELATIONS = {"wife", "husband", "spouse"}
 _CHILD_RELATIONS = {"son", "daughter", "child", "children"}
 
@@ -38,7 +39,7 @@ def _classify_relation(relation: Any) -> str:
     if not relation or (isinstance(relation, float) and pd.isna(relation)):
         return "other"
     value = str(relation).strip().lower()
-    if value == "employee":
+    if value in _EMPLOYEE_RELATIONS:
         return "employee"
     if value in _SPOUSE_RELATIONS:
         return "spouse"
