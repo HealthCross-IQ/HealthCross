@@ -81,6 +81,40 @@ the `ScoringWeightSet` and is the main thing the feedback loop is meant to
    `ScoringWeightSet` - nothing is overwritten, so you can always see (or
    revert to) what the model looked like before.
 
+## Standing analysis standards
+
+These are the fixed defaults for reviewing a submission - every case is
+analyzed on its own terms and not benchmarked against other cases.
+
+**Table of benefits summary** (`app/scoring/rules/benefits_summary.py`) - any
+plan, from any insurer, gets summarized in the same fixed 10-field layout:
+Area of Cover, Annual Limit, Deductible, Pre-existing & Chronic Limit,
+Maternity Limit, Dental, Optical, Coinsurance, Alternative/Complementary
+Treatment, Pharmacy Limit & Coinsurance. A field the source document doesn't
+specify is shown as "Not specified" rather than silently dropped.
+
+**Claims projection - burning cost method** (`app/scoring/rules/claims_projection.py`) -
+`project_annual_claims()` runs the agreed formula:
+1. Average the first 6 *full* months of paid claims (excluding any partial
+   stub month at policy inception).
+2. Annualize (x12), then add a flat 10% IBNR load.
+3. Divide by the average of the claims report's opening and closing member
+   counts to get an annual burning cost per member.
+4. Multiply by the *current* census member count for this submission.
+5. Apply 7.5% inflation, then 90% credibility, then gross up for a 28%
+   commission/OPEX loading via `/ (1 - 0.28)` (not a multiplicative add-on).
+
+All five percentages are keyword defaults on `ClaimsProjectionAssumptions`,
+overridable per call rather than hardcoded.
+
+**Diagnosis exposure classification** (`app/reference/diagnosis_classification.py`) -
+every top-N diagnosis grouping from a claims report gets tagged chronic /
+non-chronic / mixed, plus a `high_exposure` flag for cancer, heart disease,
+and kidney/genitourinary conditions regardless of current claim volume.
+`flag_diagnosis_group()` also flags an in-patient-claim average above AED
+30,000 as a probable large/shock claim, and below AED 1,000 as a likely
+day-case-miscoded-as-in-patient data artifact.
+
 ## API
 
 - `POST /cases` - create a case (broker, company, industry, region)
