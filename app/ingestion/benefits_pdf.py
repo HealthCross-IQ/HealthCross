@@ -18,6 +18,8 @@ from typing import Any, BinaryIO, Dict, List, Optional
 
 import pdfplumber
 
+from app.ingestion.benefits_ocr import build_ocr_benefit_summary
+
 # Maps our standard field name to a label substring (case-insensitive) to
 # search for among the benefit rows extracted from the document. The first
 # matching row wins.
@@ -92,6 +94,38 @@ def parse_benefits_pdf(file: BinaryIO, filename: str) -> Dict[str, Dict[str, str
     with pdfplumber.open(file) as pdf:
         rows = _extract_benefit_rows(pdf)
     return _build_tier_summaries(rows)
+
+
+def parse_benefits_pdf_text_fallback(file: BinaryIO, filename: str) -> Dict[str, Any]:
+    """Fallback for a table-of-benefits PDF that has real extractable text
+    (so it isn't a scan needing OCR) but whose tables aren't recoverable by
+    `parse_benefits_pdf()` above - e.g. a layout that uses whitespace
+    alignment rather than actual bordered table lines, which pdfplumber's
+    line-based `find_tables()` can't reconstruct into a clean grid (seen on
+    a real Sukoon "renewal" TOB with 4 tier columns, where every page
+    fragmented into dozens of single-cell pseudo-tables instead of one
+    clean tier table).
+
+    Rather than a second bespoke column-splitting parser - fragile here,
+    since values range from a plain number to multi-line prose like "In-
+    patient: -Limit 8,000/- pppy..." with no reliable column delimiter in
+    the extracted text - this reuses the same label-anchored nearby-value
+    scan built for OCR (app/ingestion/benefits_ocr.py's
+    build_ocr_benefit_summary), just fed this PDF's real extracted text
+    directly instead of an OCR'd image. That function already reports
+    every distinct value found near a label rather than guessing one, which
+    is exactly the right behavior here too: a label with 4 real per-category
+    values (not a low-confidence OCR artifact) will still show all 4 with
+    the "verify" note, since the text stream doesn't reveal which value
+    belongs to which category once the table structure is lost.
+    """
+    with pdfplumber.open(file) as pdf:
+        pages_text = [page.extract_text() or "" for page in pdf.pages]
+
+    return {
+        "summary": build_ocr_benefit_summary(pages_text),
+        "raw_text": "\n\n".join(f"--- page {i + 1} ---\n{text}" for i, text in enumerate(pages_text)),
+    }
 
 
 def _find_matching_label(rows: Dict[str, Dict[str, str]], anchor: str) -> Optional[str]:

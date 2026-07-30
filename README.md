@@ -195,6 +195,19 @@ spreadsheet parsers:
   label-column-next-to-bordered-table layout is used, regardless of tier
   names or insurer. Produces the standard 10-field summary directly, for
   every tier found, in one pass.
+  - **Fallback when no bordered table is recoverable** - a real
+    (non-scanned) PDF whose tiers are laid out with whitespace alignment
+    rather than actual table lines (seen on a real Sukoon "renewal" TOB
+    with 4 categories) leaves `find_tables()` with nothing usable.
+    `parse_benefits_pdf_text_fallback()` reuses the OCR module's
+    label-anchored nearby-value scan (`build_ocr_benefit_summary`) against
+    this PDF's real extracted text instead of an OCR'd image - the same
+    "report every candidate value with a verify note" behavior applies,
+    since a flat text stream can't reveal which of several per-category
+    values belongs to which category once the table structure is lost.
+    `/benefits` tries the bordered-table parser first and only falls back
+    here if it finds zero tier tables, storing the result as
+    `source_format="pdf-text-fallback"`.
 - **Scanned (image-only) table of benefits** (`app/ingestion/benefits_ocr.py`) -
   when a PDF has no extractable text at all (a raster scan, not a real PDF
   table), `/benefits` automatically falls back to OCR (pdfplumber renders

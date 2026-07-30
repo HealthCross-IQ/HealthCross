@@ -6,7 +6,11 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.ingestion.benefits import parse_table_of_benefits
 from app.ingestion.benefits_ocr import is_scanned_pdf, parse_benefits_pdf_ocr
-from app.ingestion.benefits_pdf import parse_benefits_pdf, to_benefit_plan_fields
+from app.ingestion.benefits_pdf import (
+    parse_benefits_pdf,
+    parse_benefits_pdf_text_fallback,
+    to_benefit_plan_fields,
+)
 from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
 from app.ingestion.claims_report import parse_claims_report
@@ -86,10 +90,32 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
             ]
         elif is_pdf:
             tier_summaries = parse_benefits_pdf(file.file, file.filename)
-            plans = [
-                models.BenefitPlan(case_id=case.id, **to_benefit_plan_fields(tier, summary))
-                for tier, summary in tier_summaries.items()
-            ]
+            if tier_summaries:
+                plans = [
+                    models.BenefitPlan(case_id=case.id, **to_benefit_plan_fields(tier, summary))
+                    for tier, summary in tier_summaries.items()
+                ]
+            else:
+                # Real extractable text, but no bordered table recognizable
+                # as a tier table (e.g. a layout that uses whitespace
+                # alignment rather than actual table lines) - fall back to
+                # the same label-anchored nearby-value scan used for
+                # scanned/OCR'd PDFs, just against this PDF's real text
+                # instead of an OCR'd image (see
+                # app/ingestion/benefits_pdf.py's
+                # parse_benefits_pdf_text_fallback for why this is safer
+                # than a second bespoke table parser here).
+                file.file.seek(0)
+                fallback_result = parse_benefits_pdf_text_fallback(file.file, file.filename)
+                plans = [
+                    models.BenefitPlan(
+                        case_id=case.id,
+                        plan_name="Text extract (verify against source - table structure not recognized)",
+                        source_format="pdf-text-fallback",
+                        standard_summary=fallback_result["summary"],
+                        raw_ocr_text=fallback_result["raw_text"],
+                    )
+                ]
         else:
             parsed = parse_table_of_benefits(file.file, file.filename)
             plans = [models.BenefitPlan(case_id=case.id, source_format=file.filename.rsplit(".", 1)[-1].lower(), **row) for row in parsed]
