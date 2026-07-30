@@ -19,11 +19,36 @@ have, this module:
 
 Always spot-check numbers this module produces against the source document.
 """
+import os
 import re
+import shutil
 from typing import Any, BinaryIO, Dict, List
 
 import pdfplumber
 import pytesseract
+
+# pytesseract shells out to a `tesseract` command on PATH by default. The
+# official Windows installer doesn't reliably add itself to PATH, and asking
+# a non-technical user to edit their Windows PATH by hand is its own source
+# of errors - so fall back to Tesseract's own default install locations (or
+# an explicit TESSERACT_CMD env var override) before giving up.
+_WINDOWS_DEFAULT_PATHS = [
+    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+]
+
+
+def _configure_tesseract_cmd() -> None:
+    if shutil.which("tesseract"):
+        return
+    env_override = os.environ.get("TESSERACT_CMD")
+    for candidate in ([env_override] if env_override else []) + _WINDOWS_DEFAULT_PATHS:
+        if candidate and os.path.isfile(candidate):
+            pytesseract.pytesseract.tesseract_cmd = candidate
+            return
+
+
+_configure_tesseract_cmd()
 
 # label -> regex to search for in the flattened OCR text of the whole document
 _FIELD_LABEL_PATTERNS = {

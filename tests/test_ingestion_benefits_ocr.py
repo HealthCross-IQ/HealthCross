@@ -1,4 +1,33 @@
-from app.ingestion.benefits_ocr import _nearby_values, build_ocr_benefit_summary
+import pytesseract
+
+from app.ingestion import benefits_ocr
+from app.ingestion.benefits_ocr import _configure_tesseract_cmd, _nearby_values, build_ocr_benefit_summary
+
+
+def test_configure_tesseract_cmd_leaves_path_lookup_alone_when_found(monkeypatch):
+    monkeypatch.setattr(benefits_ocr.shutil, "which", lambda cmd: "/usr/bin/tesseract")
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+    _configure_tesseract_cmd()
+    assert pytesseract.pytesseract.tesseract_cmd == "tesseract"
+
+
+def test_configure_tesseract_cmd_falls_back_to_default_windows_install_path(monkeypatch):
+    monkeypatch.setattr(benefits_ocr.shutil, "which", lambda cmd: None)
+    monkeypatch.delenv("TESSERACT_CMD", raising=False)
+    target = benefits_ocr._WINDOWS_DEFAULT_PATHS[0]
+    monkeypatch.setattr(benefits_ocr.os.path, "isfile", lambda path: path == target)
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+    _configure_tesseract_cmd()
+    assert pytesseract.pytesseract.tesseract_cmd == target
+
+
+def test_configure_tesseract_cmd_prefers_env_override(monkeypatch):
+    monkeypatch.setattr(benefits_ocr.shutil, "which", lambda cmd: None)
+    monkeypatch.setenv("TESSERACT_CMD", r"D:\custom\tesseract.exe")
+    monkeypatch.setattr(benefits_ocr.os.path, "isfile", lambda path: path == r"D:\custom\tesseract.exe")
+    pytesseract.pytesseract.tesseract_cmd = "tesseract"
+    _configure_tesseract_cmd()
+    assert pytesseract.pytesseract.tesseract_cmd == r"D:\custom\tesseract.exe"
 
 
 def test_single_distinct_value_is_reported_as_is():
