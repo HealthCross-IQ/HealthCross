@@ -271,6 +271,16 @@ function showNewCaseForm() {
           <div><label>Region</label><input type="text" name="region" placeholder="e.g. Dubai"></div>
           <div><label>Declared employee count</label><input type="number" name="employee_count_declared"></div>
         </div>
+        <div class="row">
+          <div>
+            <label>Business type</label>
+            <select name="business_type" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
+              <option value="new">New business</option>
+              <option value="existing">Existing business (renewal)</option>
+            </select>
+          </div>
+          <div><label>Current annual premium (renewals only)</label><input type="number" name="current_annual_premium" placeholder="e.g. 3000000"></div>
+        </div>
         <div style="margin-top:16px;"><button class="primary" type="submit">Create case</button></div>
       </form>
     </div>
@@ -287,6 +297,8 @@ async function createCase(event) {
     industry: form.get('industry'),
     region: form.get('region') || null,
     employee_count_declared: form.get('employee_count_declared') ? Number(form.get('employee_count_declared')) : null,
+    business_type: form.get('business_type') || null,
+    current_annual_premium: form.get('current_annual_premium') ? Number(form.get('current_annual_premium')) : null,
   };
   try {
     const created = await api('/cases', {
@@ -312,13 +324,22 @@ function renderCaseWorkspace() {
   const c = currentCase;
   document.getElementById('main').innerHTML = `
     <div class="card">
-      <h3>${escapeHtml(c.company_name)} <span style="color:var(--ink-muted); font-weight:400;">#${c.id}</span></h3>
+      <h3>${escapeHtml(c.company_name)} <span style="color:var(--ink-muted); font-weight:400;">#${c.id}</span>
+        <span class="tier-pill ${c.business_type === 'existing' ? 'dir-review' : 'dir-same'}">${c.business_type === 'existing' ? 'Existing business (renewal)' : 'New business'}</span>
+      </h3>
       <div class="hint">${escapeHtml(c.broker_name)} &middot; ${escapeHtml(c.industry)} &middot; ${escapeHtml(c.region || '-')} &middot; status: ${c.status}</div>
+      <div class="row" style="margin-top:12px; align-items:flex-end;">
+        <div>
+          <label>Current annual premium (for renewal rating)</label>
+          <input type="number" id="current-annual-premium" value="${c.current_annual_premium ?? ''}" placeholder="e.g. 3000000">
+        </div>
+        <button onclick="saveCurrentPremium()">Save</button>
+      </div>
     </div>
 
     <div class="card">
       <h3>1. Upload files</h3>
-      <div class="hint">Census is required to score. Table of benefits is required. Claims are optional.</div>
+      <div class="hint">Census is required to score. Table of benefits is required. Claims/claims ledger are optional.</div>
 
       <div class="upload-row">
         <span style="width:110px;">Census</span>
@@ -345,6 +366,13 @@ function renderCaseWorkspace() {
         <span id="status-quote" class="status-pending"></span>
       </div>
       <div class="hint">Quote: a new insurer's proposal for this case, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
+      <div class="upload-row">
+        <span style="width:110px;">Claims ledger</span>
+        <input type="file" id="file-claims-ledger" accept=".xlsx,.xls,.csv">
+        <button onclick="uploadFile('claims-ledger')">Upload</button>
+        <span id="status-claims-ledger" class="status-pending"></span>
+      </div>
+      <div class="hint">Claims ledger: a raw per-claim-line export (e.g. the "ServicePlan" format) - only available for existing-business renewals, powering the top patients/diagnoses and renewal-increase analysis below instead of the burning-cost quote projection.</div>
     </div>
 
     <div id="census-summary-area"></div>
@@ -353,6 +381,8 @@ function renderCaseWorkspace() {
     <div id="benefits-comparison-area"></div>
     <div id="claims-projection-area"></div>
     <div id="diagnosis-exposure-area"></div>
+    <div id="claims-ledger-analysis-area"></div>
+    <div id="renewal-rating-area"></div>
 
     <div class="card">
       <h3>2. Compute risk scorecard</h3>
@@ -389,6 +419,23 @@ function renderCaseWorkspace() {
   loadBenefitsComparison();
   loadClaimsProjection();
   loadDiagnosisExposure();
+  loadClaimsLedgerAnalysis();
+  loadRenewalRating();
+}
+
+async function saveCurrentPremium() {
+  const value = document.getElementById('current-annual-premium').value;
+  try {
+    currentCase = await api(`/cases/${currentCase.id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ current_annual_premium: value ? Number(value) : null }),
+    });
+    toast('Current annual premium saved');
+    await loadRenewalRating();
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 async function uploadFile(kind) {
@@ -416,6 +463,7 @@ async function uploadFile(kind) {
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadDiagnosisExposure(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); }
   } catch (err) {
     statusEl.textContent = 'Failed';
     statusEl.className = 'status-err';
@@ -668,6 +716,109 @@ async function loadDiagnosisExposure() {
   } catch (err) {
     area.innerHTML = '';
   }
+}
+
+async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
+  const area = document.getElementById('claims-ledger-analysis-area');
+  try {
+    const params = new URLSearchParams();
+    if (inflationOverride != null) params.set('inflation_pct', inflationOverride);
+    if (loadingOverride != null) params.set('loading_pct', loadingOverride);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const a = await api(`/cases/${currentCase.id}/claims-ledger-analysis${qs}`);
+
+    const expectedBlock = a.expected_annual_premium != null ? `
+      <table style="margin-top:16px;">
+        <tr><th>Average month (full months)</th><td>${a.avg_month.toLocaleString()}</td></tr>
+        <tr><th>Annualized incurred claims</th><td>${a.annualized_incurred_claims.toLocaleString()}</td></tr>
+        <tr><th>+ Inflation (${(a.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${a.trended_claims.toLocaleString()}</td></tr>
+        <tr><th><b>Expected annual premium</b> (÷ loading)</th><td><b>${a.expected_annual_premium.toLocaleString()}</b></td></tr>
+      </table>
+      <div class="row" style="margin-top:12px; align-items:flex-end;">
+        <div><label>Inflation %</label><input type="number" id="ledger-inflation-override" step="0.1" value="${(a.assumptions_used.inflation_pct*100).toFixed(1)}"></div>
+        <div><label>Loading %</label><input type="number" id="ledger-loading-override" step="0.1" value="${(a.assumptions_used.loading_pct*100).toFixed(1)}"></div>
+        <button onclick="recomputeClaimsLedgerAnalysis()">Recompute</button>
+      </div>
+    ` : `<div class="hint">Not enough full months of claims data yet for an annualized projection.</div>`;
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>Claims ledger analysis (existing business)</h3>
+        <div class="row">
+          <table>
+            <tr><th>Patient</th><th>Final claims amount</th><th>Claim count</th></tr>
+            ${a.top_patients.map(p => `
+              <tr><td>${escapeHtml(p.patient_id)}</td><td>${p.final_amount.toLocaleString()}</td><td>${p.claim_count}</td></tr>
+            `).join('')}
+          </table>
+          <table>
+            <tr><th>Diagnosis</th><th>Value</th><th>Count</th><th>Classification</th></tr>
+            ${a.top_diagnoses.map(d => `
+              <tr>
+                <td>${escapeHtml(d.diagnosis_description || d.diagnosis_code || '-')}</td>
+                <td>${d.value.toLocaleString()}</td>
+                <td>${d.count}</td>
+                <td>${d.classification}${d.high_exposure ? ' <span class="tier-pill tier-Substandard">high exposure</span>' : ''}</td>
+              </tr>
+            `).join('')}
+          </table>
+        </div>
+        <table style="margin-top:16px;">
+          <tr><th>Month</th><th>Final claims amount</th></tr>
+          ${a.monthly_final_amount.map(m => `
+            <tr><td>${m.year}-${String(m.month).padStart(2,'0')}</td><td>${m.final_amount.toLocaleString()}</td></tr>
+          `).join('')}
+        </table>
+        ${expectedBlock}
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function recomputeClaimsLedgerAnalysis() {
+  const inflation = Number(document.getElementById('ledger-inflation-override').value) / 100;
+  const loading = Number(document.getElementById('ledger-loading-override').value) / 100;
+  await loadClaimsLedgerAnalysis(inflation, loading);
+}
+
+async function loadRenewalRating(inflationOverride, loadingOverride) {
+  const area = document.getElementById('renewal-rating-area');
+  try {
+    const params = new URLSearchParams();
+    if (inflationOverride != null) params.set('inflation_pct', inflationOverride);
+    if (loadingOverride != null) params.set('loading_pct', loadingOverride);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const r = await api(`/cases/${currentCase.id}/renewal-rating${qs}`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Renewal rating</h3>
+        <div class="hint">Months used: ${r.months_used.join(', ')}</div>
+        <table>
+          <tr><th>Annualized incurred claims</th><td>${r.annualized_incurred_claims.toLocaleString()}</td></tr>
+          <tr><th>Current annual premium</th><td>${r.current_annual_premium.toLocaleString()}</td></tr>
+          <tr><th>Actual loss ratio</th><td>${(r.actual_loss_ratio*100).toFixed(1)}%</td></tr>
+          <tr><th>+ Inflation (${(r.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${r.trended_claims.toLocaleString()}</td></tr>
+          <tr><th>Required premium (÷ loading)</th><td>${r.required_premium.toLocaleString()}</td></tr>
+          <tr><th><b>Renewal increase</b></th><td><b>${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</b></td></tr>
+        </table>
+        <div class="row" style="margin-top:12px; align-items:flex-end;">
+          <div><label>Inflation %</label><input type="number" id="renewal-inflation-override" step="0.1" value="${(r.assumptions_used.inflation_pct*100).toFixed(1)}"></div>
+          <div><label>Loading %</label><input type="number" id="renewal-loading-override" step="0.1" value="${(r.assumptions_used.loading_pct*100).toFixed(1)}"></div>
+          <button onclick="recomputeRenewalRating()">Recompute</button>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function recomputeRenewalRating() {
+  const inflation = Number(document.getElementById('renewal-inflation-override').value) / 100;
+  const loading = Number(document.getElementById('renewal-loading-override').value) / 100;
+  await loadRenewalRating(inflation, loading);
 }
 
 async function computeScore() {

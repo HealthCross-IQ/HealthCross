@@ -10,6 +10,8 @@ class CaseCreate(BaseModel):
     industry: str
     region: Optional[str] = None
     employee_count_declared: Optional[int] = None
+    business_type: Optional[str] = None  # "new" or "existing"
+    current_annual_premium: Optional[float] = None
 
 
 class CaseOut(BaseModel):
@@ -28,6 +30,8 @@ class CaseOut(BaseModel):
     renewal_date: Optional[date] = None
     status: str
     submitted_at: datetime
+    business_type: Optional[str] = None
+    current_annual_premium: Optional[float] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -84,6 +88,30 @@ class ClaimsRecordOut(BaseModel):
     amount_billed: Optional[float] = None
     amount_paid: Optional[float] = None
     policy_year: Optional[int] = None
+
+
+class ClaimsLedgerEntryOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    patient_id: Optional[str] = None
+    claim_id: Optional[str] = None
+    claim_status: Optional[str] = None
+    policy_start_date: Optional[date] = None
+    policy_end_date: Optional[date] = None
+    date_of_treatment: Optional[date] = None
+    relation: Optional[str] = None
+    ip_op_maternity: Optional[str] = None
+    medical_category: Optional[str] = None
+    diagnosis_code: Optional[str] = None
+    diagnosis_description: Optional[str] = None
+    claimed_amount: Optional[float] = None
+    final_amount: Optional[float] = None
+
+
+class CaseUpdate(BaseModel):
+    business_type: Optional[str] = None
+    current_annual_premium: Optional[float] = None
 
 
 class ClaimsReportOut(BaseModel):

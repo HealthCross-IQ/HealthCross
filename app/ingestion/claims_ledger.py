@@ -1,0 +1,73 @@
+"""Parser for a raw per-claim-line claims ledger export (e.g. the
+"ServicePlan" format seen from QIC/HealthCross's TPA: PATIENT_ID, CLAIM_ID,
+DATE_OF_TREATMENT, DIAGNOSIS_CODE, "Final Amount in AED", etc.).
+
+Only relevant for existing-business renewals - a fresh quote has no claims
+ledger of its own to upload. Distinct from both the generic
+app/ingestion/claims.py spreadsheet parser and the pre-aggregated DHA-style
+app/ingestion/claims_report.py: this is raw, line-level detail, letting
+top-patient/top-diagnosis breakdowns and the renewal-increase calculation
+(app/scoring/rules/renewal_rating.py) be computed directly from the
+group's own real experience rather than a third party's report.
+"""
+from typing import Any, BinaryIO, Dict, List
+
+import pandas as pd
+
+from app.ingestion.column_mapping import map_columns
+
+CLAIMS_LEDGER_ALIASES: Dict[str, List[str]] = {
+    "patient_id": ["patient_id", "patient id"],
+    "claim_id": ["claim_id", "claim id"],
+    "claim_status": ["claim status", "claim_status", "status"],
+    "policy_start_date": ["policy_start_date", "policy start date"],
+    "policy_end_date": ["policy_end_date", "policy end date"],
+    "date_of_treatment": ["date_of_treatment", "date of treatment", "treatment date"],
+    "relation": ["relation", "relationship"],
+    "ip_op_maternity": ["ip_op_maternity", "ip/op/maternity", "claim type"],
+    "medical_category": ["medical_category", "medical category"],
+    "diagnosis_code": ["diagnosis_code", "diagnosis code", "icd code", "icd10"],
+    "diagnosis_description": ["diagnosis_description", "diagnosis description", "diagnosis_short_description", "diagnosis short description"],
+    "claimed_amount": ["claimed amount aed", "claimed_amount_aed", "claimed amount"],
+    "final_amount": ["final amount in aed", "final_amount_in_aed", "final amount", "amount paid"],
+}
+
+
+def parse_claims_ledger(file: BinaryIO, filename: str) -> List[dict]:
+    if filename.lower().endswith(".csv"):
+        df = pd.read_csv(file)
+    else:
+        df = pd.read_excel(file)
+
+    df = map_columns(df, CLAIMS_LEDGER_ALIASES)
+
+    def _date_or_none(value: Any):
+        parsed_date = pd.to_datetime(value, errors="coerce")
+        return parsed_date.date() if pd.notna(parsed_date) else None
+
+    def _str_or_none(value: Any) -> Any:
+        return str(value).strip() if pd.notna(value) else None
+
+    def _float_or_none(value: Any) -> Any:
+        return float(value) if pd.notna(value) else None
+
+    records = []
+    for _, row in df.iterrows():
+        records.append(
+            {
+                "patient_id": _str_or_none(row.get("patient_id")),
+                "claim_id": _str_or_none(row.get("claim_id")),
+                "claim_status": _str_or_none(row.get("claim_status")),
+                "policy_start_date": _date_or_none(row.get("policy_start_date")),
+                "policy_end_date": _date_or_none(row.get("policy_end_date")),
+                "date_of_treatment": _date_or_none(row.get("date_of_treatment")),
+                "relation": _str_or_none(row.get("relation")),
+                "ip_op_maternity": _str_or_none(row.get("ip_op_maternity")),
+                "medical_category": _str_or_none(row.get("medical_category")),
+                "diagnosis_code": _str_or_none(row.get("diagnosis_code")),
+                "diagnosis_description": _str_or_none(row.get("diagnosis_description")),
+                "claimed_amount": _float_or_none(row.get("claimed_amount")),
+                "final_amount": _float_or_none(row.get("final_amount")),
+            }
+        )
+    return records

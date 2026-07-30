@@ -65,6 +65,54 @@ DIAGNOSIS_CLASSIFICATION: Dict[str, dict] = {
         "high_exposure": True,
         "note": "Where kidney disease/dialysis claims would appear - monitor even if currently small; catastrophic if it emerges.",
     },
+    # Chapters below round out ICD-10 coverage for raw per-claim-line
+    # ledgers (see app/reference/icd10_chapters.py) - the DHA claims report
+    # groupings above never surfaced these directly.
+    "certain infectious and parasitic diseases": {
+        "classification": NON_CHRONIC,
+        "high_exposure": False,
+        "note": "Typically acute infections - watch for a chronic pattern only if concentrated in one member.",
+    },
+    "diseases of blood and blood-forming organs": {
+        "classification": MIXED,
+        "high_exposure": False,
+        "note": "Can include ongoing anemia management or a one-off acute episode.",
+    },
+    "mental and behavioural disorders": {
+        "classification": MIXED,
+        "high_exposure": False,
+        "note": "Ranges from a single acute episode to ongoing psychiatric care - not uniformly chronic.",
+    },
+    "diseases of the skin and subcutaneous tissue": {
+        "classification": MIXED,
+        "high_exposure": False,
+        "note": "Usually minor/acute dermatology, but can include chronic skin conditions.",
+    },
+    "pregnancy, childbirth and the puerperium": {
+        "classification": NON_CHRONIC,
+        "high_exposure": False,
+        "note": "Maternity - episodic by nature, tracked separately via the maternity benefit rather than as an ongoing chronic driver.",
+    },
+    "certain conditions originating in the perinatal period": {
+        "classification": NON_CHRONIC,
+        "high_exposure": False,
+        "note": "Newborn-period conditions - typically resolve within the newborn cover window.",
+    },
+    "congenital malformations": {
+        "classification": MIXED,
+        "high_exposure": False,
+        "note": "Can be a lifelong condition or a one-off corrective procedure.",
+    },
+    "injury, poisoning and external causes": {
+        "classification": NON_CHRONIC,
+        "high_exposure": False,
+        "note": "Classic one-off claim (accident, fracture) rather than an ongoing cost driver.",
+    },
+    "factors influencing health status": {
+        "classification": NON_CHRONIC,
+        "high_exposure": False,
+        "note": "Checkups, vaccinations, and other administrative/preventive codes - not a disease-risk category.",
+    },
 }
 
 # In-patient claim-average thresholds used to flag likely one-off/shock

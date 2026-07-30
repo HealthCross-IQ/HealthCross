@@ -10,7 +10,14 @@ from app.reference.diagnosis_classification import classify_diagnosis_group, fla
 from app.scoring.rules.benefits_comparison import compare_benefit_summaries, compare_benefit_value
 from app.scoring.rules.benefits_summary import build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
+from app.scoring.rules.claims_ledger_analysis import (
+    full_months_only,
+    monthly_final_amount,
+    top_diagnoses_by_final_amount,
+    top_patients_by_final_amount,
+)
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
+from app.scoring.rules.renewal_rating import RenewalRatingAssumptions, calculate_renewal_rating
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
 
@@ -268,3 +275,125 @@ def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
             }
         )
     return comparisons
+
+
+def _ledger_entry_dicts(entries: List[models.ClaimsLedgerEntry]) -> List[dict]:
+    return [
+        {
+            "patient_id": e.patient_id,
+            "claim_id": e.claim_id,
+            "final_amount": e.final_amount,
+            "diagnosis_code": e.diagnosis_code,
+            "diagnosis_description": e.diagnosis_description,
+            "ip_op_maternity": e.ip_op_maternity,
+            "date_of_treatment": e.date_of_treatment,
+        }
+        for e in entries
+    ]
+
+
+def _full_months_from_ledger(entries: List[models.ClaimsLedgerEntry]) -> List[dict]:
+    monthly = monthly_final_amount(_ledger_entry_dicts(entries))
+    policy_start = entries[0].policy_start_date
+    return full_months_only(
+        monthly,
+        policy_start_year=policy_start.year if policy_start else None,
+        policy_start_month=policy_start.month if policy_start else None,
+        policy_start_day=policy_start.day if policy_start else None,
+    )
+
+
+@router.get("/{case_id}/claims-ledger-analysis")
+def get_claims_ledger_analysis(
+    case_id: int,
+    db: Session = Depends(get_db),
+    inflation_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+):
+    """Comprehensive analysis over an uploaded claims ledger (see
+    POST /cases/{id}/claims-ledger and
+    app/scoring/rules/claims_ledger_analysis.py) - top 10 patients and
+    diagnoses by final claims amount (diagnoses classified chronic/
+    non-chronic via their ICD-10 chapter), the month-wise claims trend,
+    and an expected-annual-premium figure grossed up from the average of
+    the full months only. Unlike the burning-cost method in
+    claims_projection.py, this does NOT rescale by a report's member count
+    vs the current census - it's the same group's own experience, so no
+    rescaling is needed. inflation_pct/loading_pct are overridable per
+    call (defaults 7.5%/28%, same as elsewhere) since both are negotiated
+    per case, not fixed.
+    """
+    case = _get_case_or_404(db, case_id)
+    entries = case.claims_ledger_entries
+    if not entries:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+
+    entry_dicts = _ledger_entry_dicts(entries)
+    result = {
+        "top_patients": top_patients_by_final_amount(entry_dicts),
+        "top_diagnoses": top_diagnoses_by_final_amount(entry_dicts),
+        "monthly_final_amount": monthly_final_amount(entry_dicts),
+    }
+
+    full_months = _full_months_from_ledger(entries)
+    result["full_months_used"] = full_months
+    if full_months:
+        defaults = RenewalRatingAssumptions()
+        assumptions = RenewalRatingAssumptions(
+            inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
+            loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+        )
+        avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
+        annualized = avg_month * 12
+        trended = annualized * (1 + assumptions.inflation_pct)
+        expected_annual_premium = trended / (1 - assumptions.loading_pct)
+        result.update(
+            {
+                "avg_month": round(avg_month, 2),
+                "annualized_incurred_claims": round(annualized, 2),
+                "trended_claims": round(trended, 2),
+                "expected_annual_premium": round(expected_annual_premium, 2),
+                "assumptions_used": {"inflation_pct": assumptions.inflation_pct, "loading_pct": assumptions.loading_pct},
+            }
+        )
+    return result
+
+
+@router.get("/{case_id}/renewal-rating")
+def get_renewal_rating(
+    case_id: int,
+    db: Session = Depends(get_db),
+    inflation_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+):
+    """The renewal-increase calculation (app/scoring/rules/renewal_rating.py):
+    actual loss ratio (annualized incurred claims from the ledger over the
+    case's current_annual_premium), trended for inflation, then grossed up
+    for the commission/OPEX loading. Requires both a claims ledger upload
+    and current_annual_premium set on the case (PATCH /cases/{id}).
+    """
+    case = _get_case_or_404(db, case_id)
+    entries = case.claims_ledger_entries
+    if not entries:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+    if not case.current_annual_premium:
+        raise HTTPException(
+            status_code=400,
+            detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
+        )
+
+    full_months = _full_months_from_ledger(entries)
+    if not full_months:
+        raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
+
+    avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
+    annualized = avg_month * 12
+
+    defaults = RenewalRatingAssumptions()
+    assumptions = RenewalRatingAssumptions(
+        inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
+        loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+    )
+    result = calculate_renewal_rating(annualized, case.current_annual_premium, assumptions=assumptions)
+    result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
+    return result

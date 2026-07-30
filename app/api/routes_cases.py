@@ -13,6 +13,7 @@ from app.ingestion.benefits_pdf import (
 )
 from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
+from app.ingestion.claims_ledger import parse_claims_ledger
 from app.ingestion.claims_report import parse_claims_report
 from app.ingestion.plan_details import parse_plan_details
 from app.ingestion.quote_pdf import parse_quote_pdf
@@ -46,6 +47,16 @@ def list_cases(db: Session = Depends(get_db)):
 @router.get("/{case_id}", response_model=schemas.CaseOut)
 def get_case(case_id: int, db: Session = Depends(get_db)):
     return _get_case_or_404(db, case_id)
+
+
+@router.patch("/{case_id}", response_model=schemas.CaseOut)
+def update_case(case_id: int, payload: schemas.CaseUpdate, db: Session = Depends(get_db)):
+    case = _get_case_or_404(db, case_id)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(case, field, value)
+    db.commit()
+    db.refresh(case)
+    return case
 
 
 @router.post("/{case_id}/census", response_model=List[schemas.CensusRecordOut])
@@ -225,6 +236,33 @@ def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depe
     for record in records:
         db.refresh(record)
     return records
+
+
+@router.post("/{case_id}/claims-ledger", response_model=List[schemas.ClaimsLedgerEntryOut])
+def upload_claims_ledger(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Uploads a raw per-claim-line claims ledger (e.g. the "ServicePlan"
+    format) for an existing-business renewal - see
+    app/scoring/rules/claims_ledger_analysis.py and renewal_rating.py for
+    what this powers. Distinct from /claims, which handles a simpler
+    generic claims spreadsheet or a pre-aggregated DHA-style report.
+    """
+    case = _get_case_or_404(db, case_id)
+    try:
+        parsed = parse_claims_ledger(file.file, file.filename)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse claims ledger: {exc}")
+    if not parsed:
+        raise HTTPException(status_code=400, detail="No claims ledger rows found in file")
+
+    # Replace, not accumulate - see the census upload for why.
+    db.query(models.ClaimsLedgerEntry).filter_by(case_id=case.id).delete()
+
+    entries = [models.ClaimsLedgerEntry(case_id=case.id, **row) for row in parsed]
+    db.add_all(entries)
+    db.commit()
+    for entry in entries:
+        db.refresh(entry)
+    return entries
 
 
 @router.post("/{case_id}/plan-details", response_model=schemas.PlanDetailsOut)

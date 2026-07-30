@@ -44,10 +44,21 @@ class Case(Base):
     submitted_at = Column(DateTime, default=datetime.datetime.utcnow)
     status = Column(SAEnum(CaseStatus), default=CaseStatus.SUBMITTED)
 
+    # "new" (a fresh quote, no prior insurer relationship to price off of) or
+    # "existing" (a renewal - the group's own claims ledger and current
+    # premium are available, enabling the renewal-increase calculation in
+    # app/scoring/rules/renewal_rating.py rather than just a burning-cost
+    # quote for a new group).
+    business_type = Column(String, nullable=True)
+    # The expiring/current year's premium for an existing-business renewal -
+    # distinct from target_premium (a broker's target for a NEW quote).
+    current_annual_premium = Column(Float, nullable=True)
+
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")
     claims_reports = relationship("ClaimsReport", back_populates="case", cascade="all, delete-orphan")
+    claims_ledger_entries = relationship("ClaimsLedgerEntry", back_populates="case", cascade="all, delete-orphan")
     scorecards = relationship("Scorecard", back_populates="case", cascade="all, delete-orphan")
     outcome = relationship("Outcome", back_populates="case", uselist=False, cascade="all, delete-orphan")
 
@@ -130,6 +141,39 @@ class ClaimsRecord(Base):
     policy_year = Column(Integer, nullable=True)
 
     case = relationship("Case", back_populates="claims_records")
+
+
+class ClaimsLedgerEntry(Base):
+    """One row per per-claim-line item from an insurer/TPA's raw claims
+    ledger export (e.g. the "ServicePlan" format: PATIENT_ID, CLAIM_ID,
+    DATE_OF_TREATMENT, DIAGNOSIS_CODE, Final Amount in AED, etc.) - only
+    available for existing-business renewals, where the group's own claims
+    history (not a third-party's, rescaled) directly drives the renewal
+    increase calculation. Distinct from both ClaimsRecord (a simpler
+    generic spreadsheet) and ClaimsReport (a pre-aggregated summary report
+    like the DHA Mandated Format) - this is raw, line-level detail, letting
+    top-patient and top-diagnosis breakdowns be computed directly rather
+    than trusting a report's own pre-computed top-10.
+    """
+    __tablename__ = "claims_ledger_entries"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=False)
+    patient_id = Column(String, nullable=True)
+    claim_id = Column(String, nullable=True)
+    claim_status = Column(String, nullable=True)  # "Paid Claims" / "Outstanding Claims"
+    policy_start_date = Column(Date, nullable=True)
+    policy_end_date = Column(Date, nullable=True)
+    date_of_treatment = Column(Date, nullable=True)
+    relation = Column(String, nullable=True)
+    ip_op_maternity = Column(String, nullable=True)
+    medical_category = Column(String, nullable=True)
+    diagnosis_code = Column(String, nullable=True)
+    diagnosis_description = Column(String, nullable=True)
+    claimed_amount = Column(Float, nullable=True)
+    final_amount = Column(Float, nullable=True)
+
+    case = relationship("Case", back_populates="claims_ledger_entries")
 
 
 class ClaimsReport(Base):

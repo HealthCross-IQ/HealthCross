@@ -158,6 +158,58 @@ and kidney/genitourinary conditions regardless of current claim volume.
 day-case-miscoded-as-in-patient data artifact.
 `GET /cases/{id}/diagnosis-exposure` returns this, sorted by value.
 
+## New business vs. existing business (renewals)
+
+`Case.business_type` ("new" or "existing") distinguishes the two situations
+a submission can be in, since a renewal has real data a fresh quote doesn't:
+
+- **New business** uses the claims-projection burning-cost method above,
+  built to rescale a claims REPORT's population-level experience (opening/
+  closing member counts from a DHA-style report) onto whatever the current
+  census's member count is - appropriate when the group being quoted isn't
+  the same population the report was drawn from.
+- **Existing business** is a renewal for the *same* group: no rescaling is
+  needed, because the claims ledger and current premium both belong to the
+  exact group being priced. `Case.current_annual_premium` holds the
+  expiring/current premium (distinct from `target_premium`, a broker's
+  target for a new quote), set via `PATCH /cases/{id}`.
+
+**Claims ledger** (`app/ingestion/claims_ledger.py`, `POST /cases/{id}/claims-ledger`) -
+a raw per-claim-line export (e.g. the "ServicePlan" format: PATIENT_ID,
+CLAIM_ID, DATE_OF_TREATMENT, DIAGNOSIS_CODE, "Final Amount in AED", etc.),
+stored as `ClaimsLedgerEntry` rows - distinct from both the generic
+`ClaimsRecord` spreadsheet and the pre-aggregated `ClaimsReport`. Both
+"Paid Claims" and "Outstanding Claims" status rows count toward totals,
+since outstanding claims are already-incurred cost, not a speculative
+estimate.
+
+`app/scoring/rules/claims_ledger_analysis.py` computes:
+- Top 10 patients and top 10 diagnoses by final claims amount
+  (`GET /cases/{id}/claims-ledger-analysis`). Diagnoses are classified
+  chronic/non-chronic via their ICD-10 chapter
+  (`app/reference/icd10_chapters.py` maps a raw code like "J454" to the
+  same broad chapter labels `diagnosis_classification.py` already uses,
+  extended to cover chapters a DHA report's own pre-aggregated groupings
+  never surfaced - mental/behavioural, skin, blood, pregnancy, injury,
+  infectious, and administrative/Z-code chapters).
+- A month-wise claims trend (by treatment date), averaging only the FULL
+  months - the first month is dropped if the policy didn't start on the
+  1st, and the last month present is always dropped as a trailing partial
+  (a ledger export is "as of" some date mid-month, not a guaranteed-complete
+  month).
+- An `expected_annual_premium`: the average full month annualized (x12),
+  trended for inflation, then grossed up for the commission/OPEX loading
+  via `/ (1 - loading)` - the same convention as the burning-cost method,
+  just without its member-count rescaling step. `inflation_pct`/
+  `loading_pct` are overridable per call (defaults 7.5%/28%).
+
+**Renewal rating** (`app/scoring/rules/renewal_rating.py`,
+`GET /cases/{id}/renewal-rating`) - the actual renewal-increase
+calculation: actual loss ratio (the ledger's annualized incurred claims
+over `current_annual_premium`), trended for inflation, then grossed up for
+the loading, same gross-up convention throughout. Requires both a claims
+ledger upload and `current_annual_premium` set on the case.
+
 ## PDF ingestion
 
 Two insurer document formats are parsed directly, no manual conversion to
@@ -229,19 +281,22 @@ spreadsheet parsers:
 
 Opening the server's root URL (`http://127.0.0.1:8000/`) serves a small
 self-contained single-page UI (`app/static/index.html` - no build step, no
-JS framework, no external requests): create a case, upload census/benefits/
-claims/quote files, compute the scorecard, and record an outcome, all by
-clicking around instead of using `/docs`. It's a thin client over the same
-API below.
+JS framework, no external requests): create a case (choosing new vs.
+existing business), upload census/benefits/claims/quote/claims-ledger
+files, compute the scorecard, and record an outcome, all by clicking
+around instead of using `/docs`. It's a thin client over the same API
+below.
 
 ## API
 
 - `GET /cases` - list all cases
-- `POST /cases` - create a case (broker, company, industry, region)
+- `POST /cases` - create a case (broker, company, industry, region, business_type, current_annual_premium)
+- `PATCH /cases/{id}` - update business_type/current_annual_premium after creation
 - `POST /cases/{id}/census` - upload the census (xlsx/csv)
 - `POST /cases/{id}/benefits` - upload the existing/incumbent table of benefits (xlsx/csv/pdf)
 - `POST /cases/{id}/quote` - upload a new insurer's quotation for comparison (pdf)
 - `POST /cases/{id}/claims` - upload claims history (xlsx/csv, optional)
+- `POST /cases/{id}/claims-ledger` - upload a raw per-claim-line claims ledger for an existing-business renewal (xlsx/csv)
 - `POST /cases/{id}/plan-details` - upload the broker's "CLIENT & PLAN
   details" sheet to populate broker/industry/existing-insurer/target-premium
   metadata on the case
@@ -253,8 +308,10 @@ API below.
 - `GET /cases/{id}/premium-by-category` - the uploaded quote's per-category members, network, gross premium, and premium/member, plus a blended total
 - `GET /cases/{id}/benefits-comparison` - existing plan(s) vs. quoted plan(s), compared field by field
 - `GET /cases/{id}/claims-report` - the latest parsed claims report
-- `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection
-- `GET /cases/{id}/diagnosis-exposure` - chronic/high-exposure-flagged diagnosis breakdown
+- `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection (new business)
+- `GET /cases/{id}/diagnosis-exposure` - chronic/high-exposure-flagged diagnosis breakdown (new business, from a claims report)
+- `GET /cases/{id}/claims-ledger-analysis` - top patients/diagnoses, monthly trend, and expected annual premium from an uploaded claims ledger (existing business)
+- `GET /cases/{id}/renewal-rating` - the renewal-increase calculation from actual loss ratio (existing business)
 - `GET /admin/weights` - full version history of scoring weight sets
 - `POST /admin/recalibrate` - trigger recalibration from recorded outcomes
 
