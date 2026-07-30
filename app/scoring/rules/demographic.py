@@ -19,7 +19,7 @@ case outcomes accumulate (see app/feedback/recalibration.py).
 from statistics import mean
 from typing import Dict, List, Optional
 
-from app.reference.nationality_zones import ALL_ZONES, ZONE_OTHER
+from app.reference.nationality_zones import ALL_ZONES, ZONE_MIDDLE_EAST
 
 AGE_BANDS = [
     (0, 17, 0.70),
@@ -76,7 +76,7 @@ def _member_risk_multiplier(member: dict, zone_multipliers: Dict[str, float]) ->
         if marital_status == "married" and age is not None and MATERNITY_AGE_MIN <= age <= MATERNITY_AGE_MAX:
             multiplier *= MATERNITY_LOADING
 
-    zone = member.get("nationality_zone") or ZONE_OTHER
+    zone = member.get("nationality_zone") or ZONE_MIDDLE_EAST
     multiplier *= zone_multipliers.get(zone, 1.0)
 
     return multiplier
@@ -125,7 +125,11 @@ def demographic_risk(
 
     zone_counts = {zone: 0 for zone in ALL_ZONES}
     for m in census:
-        zone_counts[m.get("nationality_zone") or ZONE_OTHER] += 1
+        # Anything not one of the current zones (missing, or a zone from
+        # before the 4th zone was folded away) counts toward Middle East
+        # rather than raising - see nationality_zones.py.
+        zone = m.get("nationality_zone")
+        zone_counts[zone if zone in zone_counts else ZONE_MIDDLE_EAST] += 1
     zone_mix = {zone: round(count / len(census), 4) for zone, count in zone_counts.items()}
 
     return {

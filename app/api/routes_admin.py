@@ -47,11 +47,14 @@ def recalibrate(db: Session = Depends(get_db)):
         "w_benefit_richness": active.w_benefit_richness,
         "w_industry": active.w_industry,
     }
+    # zone_4_other is a legacy column (see app/reference/nationality_zones.py -
+    # there are only 3 zones now) - it isn't part of ALL_ZONES, so it's
+    # deliberately excluded from recalibration and carried forward unchanged
+    # below rather than passed through recalibrate_zone_multipliers.
     current_zone_multipliers = {
         "zone_1_asia": active.zone_1_asia_multiplier,
         "zone_2_middle_east": active.zone_2_middle_east_multiplier,
         "zone_3_europe_americas": active.zone_3_europe_americas_multiplier,
-        "zone_4_other": active.zone_4_other_multiplier,
     }
 
     weight_result = recalibrate_weights(weight_samples, current_weights)
@@ -81,7 +84,7 @@ def recalibrate(db: Session = Depends(get_db)):
         zone_1_asia_multiplier=new_zone_multipliers["zone_1_asia"],
         zone_2_middle_east_multiplier=new_zone_multipliers["zone_2_middle_east"],
         zone_3_europe_americas_multiplier=new_zone_multipliers["zone_3_europe_americas"],
-        zone_4_other_multiplier=new_zone_multipliers["zone_4_other"],
+        zone_4_other_multiplier=active.zone_4_other_multiplier,
     )
     db.add(new_version)
     db.commit()

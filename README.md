@@ -49,13 +49,19 @@ touching the surrounding logic.
 
 ## Nationality zones - and why they're *learned*, not asserted
 
-Nationalities are grouped into four zones (`app/reference/nationality_zones.py`):
+Nationalities are grouped into three zones (`app/reference/nationality_zones.py`):
 
 - Zone 1 - Asia
-- Zone 2 - Middle East (incl. North Africa, per broker convention)
+- Zone 2 - Middle East (incl. North Africa, Sub-Saharan Africa, and
+  anything else unmapped, per broker convention - nothing silently
+  disappears, and there's no 4th zone to catch it separately)
 - Zone 3 - Europe & Americas
-- Zone 4 - Other (mainly Sub-Saharan Africa in the sample data, plus
-  anything unmapped - nothing silently disappears)
+
+`ScoringWeightSet` still carries a legacy `zone_4_other_multiplier` column
+from when there was a 4th zone, kept only so old recorded weight-set
+history stays readable - `classify_zone()` never produces it for new data,
+it's excluded from `ALL_ZONES`, and `/admin/recalibrate` carries it forward
+unchanged rather than actively recalibrating it.
 
 Unlike the demographic rules above, nobody asserted which zone should carry
 more risk or by how much. So each zone's multiplier starts neutral (1.0) on
@@ -221,7 +227,7 @@ API below.
 - `POST /cases/{id}/score` - compute and store a scorecard
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
-- `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away
+- `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away, plus the top 5 nationalities within each zone
 - `GET /cases/{id}/benefits-summary` - every uploaded existing/incumbent plan/tier in the standard 10-field format
 - `GET /cases/{id}/premium-by-category` - the uploaded quote's per-category members, network, gross premium, and premium/member, plus a blended total
 - `GET /cases/{id}/benefits-comparison` - existing plan(s) vs. quoted plan(s), compared field by field

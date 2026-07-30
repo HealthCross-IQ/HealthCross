@@ -86,8 +86,7 @@ def test_zone_recalibration_learns_a_riskier_zone():
         zone_mix = {
             "zone_1_asia": (1 - zone_2_fraction) * 0.6,
             "zone_2_middle_east": zone_2_fraction,
-            "zone_3_europe_americas": (1 - zone_2_fraction) * 0.3,
-            "zone_4_other": (1 - zone_2_fraction) * 0.1,
+            "zone_3_europe_americas": (1 - zone_2_fraction) * 0.4,
         }
         profitable = zone_2_fraction < 0.5
         samples.append({"zone_mix": zone_mix, "profitable": profitable})

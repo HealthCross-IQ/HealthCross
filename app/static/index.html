@@ -212,6 +212,11 @@
 <script>
 const API = '';
 let currentCase = null;
+const ZONE_LABELS = {
+  zone_1_asia: 'Asia',
+  zone_2_middle_east: 'Middle East',
+  zone_3_europe_americas: 'Europe & Americas',
+};
 
 function toast(message, isError) {
   const el = document.getElementById('toast');
@@ -479,11 +484,25 @@ async function loadCensusSummary() {
           <table>
             <tr><th>Marital status</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
             ${_pctTableWithGender(s.marital_status_counts, s.marital_status_pct, s.marital_status_gender_counts)}
+            <tr style="border-top:2px solid var(--border);">
+              <th>Married female, 18-40 (maternity risk)</th>
+              <td>-</td>
+              <td>${s.maternity_risk_count}</td>
+              <td>${s.maternity_risk_count}</td>
+              <td>${(s.maternity_risk_pct * 100).toFixed(1)}%</td>
+            </tr>
           </table>
         </div>
         <table style="margin-top:16px;">
-          <tr><th>Nationality zone</th><th>Count</th><th>%</th></tr>
-          ${_pctTable(s.nationality_zone_counts, s.nationality_zone_pct)}
+          <tr><th>Nationality zone</th><th>Count</th><th>%</th><th>Top nationalities</th></tr>
+          ${Object.keys(s.nationality_zone_counts).map(zone => `
+            <tr>
+              <th>${escapeHtml(ZONE_LABELS[zone] || zone)}</th>
+              <td>${s.nationality_zone_counts[zone]}</td>
+              <td>${(s.nationality_zone_pct[zone] * 100).toFixed(1)}%</td>
+              <td>${(s.nationality_zone_top5[zone] || []).map(n => `${escapeHtml(n.nationality)} (${n.count})`).join(', ') || '-'}</td>
+            </tr>
+          `).join('')}
         </table>
       </div>
     `;

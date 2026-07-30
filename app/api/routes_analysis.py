@@ -147,6 +147,7 @@ def get_census_summary(case_id: int, db: Session = Depends(get_db)):
             "marital_status": c.marital_status,
             "relation": c.relation,
             "nationality_zone": c.nationality_zone,
+            "nationality": c.nationality,
         }
         for c in case.census_records
     ]

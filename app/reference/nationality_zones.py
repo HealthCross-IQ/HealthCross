@@ -1,9 +1,17 @@
 """Nationality-to-underwriting-zone classification.
 
-Zones follow the broker convention: Asian nationalities in one zone, Middle
-East in a second, Europe/Americas in a third. A fourth "other" zone catches
-nationalities that don't fit those three groups (mainly Sub-Saharan Africa)
-so nothing silently disappears from the risk calculation.
+Just 3 zones, per the broker convention: Asian nationalities in one zone,
+Middle East in a second, Europe/Americas in a third. There is no fourth
+"other" zone - Sub-Saharan African and any other unmapped nationality
+counts toward Zone 2 (Middle East) rather than a separate bucket, so
+nothing silently disappears from the risk calculation without needing a
+4th zone.
+
+ZONE_OTHER is kept defined (not exported in ALL_ZONES) purely so that any
+census row persisted before this change - back when a 4th zone existed -
+still resolves to something recognizable; `classify_zone()` itself never
+produces it for new data, and callers should fold it into ZONE_MIDDLE_EAST
+for display (see app/scoring/rules/demographic.py and census_summary.py).
 
 The per-zone risk multiplier is intentionally left neutral (1.0) here -
 direction and magnitude are not asserted by underwriting policy, so they are
@@ -14,9 +22,9 @@ feedback/recalibration loop as real case outcomes accumulate.
 ZONE_ASIA = "zone_1_asia"
 ZONE_MIDDLE_EAST = "zone_2_middle_east"
 ZONE_EUROPE_AMERICAS = "zone_3_europe_americas"
-ZONE_OTHER = "zone_4_other"
+ZONE_OTHER = "zone_4_other"  # legacy only - see module docstring
 
-ALL_ZONES = [ZONE_ASIA, ZONE_MIDDLE_EAST, ZONE_EUROPE_AMERICAS, ZONE_OTHER]
+ALL_ZONES = [ZONE_ASIA, ZONE_MIDDLE_EAST, ZONE_EUROPE_AMERICAS]
 
 # Keys are lower-cased nationality/country strings as they commonly appear on
 # broker census templates (adjective form or bare country name - both show
@@ -181,26 +189,27 @@ _NATIONALITY_ZONE_MAP = {
     "irish": ZONE_EUROPE_AMERICAS,
     "ireland": ZONE_EUROPE_AMERICAS,
 
-    # Zone 4: other (predominantly Sub-Saharan Africa in the sample data)
-    "kenyan": ZONE_OTHER,
-    "kenya": ZONE_OTHER,
-    "zimbabwe": ZONE_OTHER,
-    "zimbabwean": ZONE_OTHER,
-    "ghanian": ZONE_OTHER,  # common spelling seen on census templates
-    "ghanaian": ZONE_OTHER,
-    "ghana": ZONE_OTHER,
-    "ugandan": ZONE_OTHER,
-    "uganda": ZONE_OTHER,
-    "zambian": ZONE_OTHER,
-    "zambia": ZONE_OTHER,
-    "nigerian": ZONE_OTHER,
-    "nigeria": ZONE_OTHER,
-    "south african": ZONE_OTHER,
-    "south africa": ZONE_OTHER,
-    "ethiopian": ZONE_OTHER,
-    "ethiopia": ZONE_OTHER,
-    "tanzanian": ZONE_OTHER,
-    "tanzania": ZONE_OTHER,
+    # Sub-Saharan Africa - folds into Zone 2 (Middle East) rather than a
+    # separate 4th zone, per broker convention.
+    "kenyan": ZONE_MIDDLE_EAST,
+    "kenya": ZONE_MIDDLE_EAST,
+    "zimbabwe": ZONE_MIDDLE_EAST,
+    "zimbabwean": ZONE_MIDDLE_EAST,
+    "ghanian": ZONE_MIDDLE_EAST,  # common spelling seen on census templates
+    "ghanaian": ZONE_MIDDLE_EAST,
+    "ghana": ZONE_MIDDLE_EAST,
+    "ugandan": ZONE_MIDDLE_EAST,
+    "uganda": ZONE_MIDDLE_EAST,
+    "zambian": ZONE_MIDDLE_EAST,
+    "zambia": ZONE_MIDDLE_EAST,
+    "nigerian": ZONE_MIDDLE_EAST,
+    "nigeria": ZONE_MIDDLE_EAST,
+    "south african": ZONE_MIDDLE_EAST,
+    "south africa": ZONE_MIDDLE_EAST,
+    "ethiopian": ZONE_MIDDLE_EAST,
+    "ethiopia": ZONE_MIDDLE_EAST,
+    "tanzanian": ZONE_MIDDLE_EAST,
+    "tanzania": ZONE_MIDDLE_EAST,
 }
 
 
@@ -211,9 +220,10 @@ def _normalize(value: str) -> str:
 def classify_zone(nationality: str) -> str:
     """Return the underwriting zone for a nationality string.
 
-    Falls back to ZONE_OTHER for anything unmapped rather than raising, so a
-    single unfamiliar nationality never blocks scoring a whole census.
+    Falls back to ZONE_MIDDLE_EAST for anything unmapped rather than
+    raising or inventing a 4th zone, so a single unfamiliar nationality
+    never blocks scoring a whole census.
     """
     if not nationality:
-        return ZONE_OTHER
-    return _NATIONALITY_ZONE_MAP.get(_normalize(str(nationality)), ZONE_OTHER)
+        return ZONE_MIDDLE_EAST
+    return _NATIONALITY_ZONE_MAP.get(_normalize(str(nationality)), ZONE_MIDDLE_EAST)

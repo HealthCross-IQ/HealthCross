@@ -1,13 +1,14 @@
 from app.scoring.rules.census_summary import census_demographic_summary
 
 
-def _member(age, gender, marital_status="single", relation="employee", nationality_zone="zone_1_asia"):
+def _member(age, gender, marital_status="single", relation="employee", nationality_zone="zone_1_asia", nationality=None):
     return {
         "age": age,
         "gender": gender,
         "marital_status": marital_status,
         "relation": relation,
         "nationality_zone": nationality_zone,
+        "nationality": nationality,
     }
 
 
@@ -81,3 +82,34 @@ def test_infant_vs_favorable_children():
     summary = census_demographic_summary(census)
     assert summary["infant_count"] == 1
     assert summary["favorable_children_count"] == 1
+
+
+def test_unrecognized_or_missing_zone_folds_into_middle_east():
+    # There is no 4th zone - a record with no zone, or a zone string left
+    # over from before the 4th zone was folded away, must not KeyError and
+    # must count toward Middle East.
+    census = [
+        _member(30, "M", nationality_zone=None),
+        _member(30, "M", nationality_zone="zone_4_other"),
+        _member(30, "M", nationality_zone="zone_2_middle_east"),
+    ]
+    summary = census_demographic_summary(census)
+    assert summary["nationality_zone_counts"]["zone_2_middle_east"] == 3
+    assert set(summary["nationality_zone_counts"].keys()) == {"zone_1_asia", "zone_2_middle_east", "zone_3_europe_americas"}
+
+
+def test_top_5_nationalities_per_zone():
+    census = [
+        _member(30, "M", nationality_zone="zone_1_asia", nationality="Indian"),
+        _member(31, "M", nationality_zone="zone_1_asia", nationality="Indian"),
+        _member(32, "M", nationality_zone="zone_1_asia", nationality="Indian"),
+        _member(33, "F", nationality_zone="zone_1_asia", nationality="Filipino"),
+        _member(34, "F", nationality_zone="zone_1_asia", nationality="Nepali"),
+        _member(40, "M", nationality_zone="zone_2_middle_east", nationality="Egyptian"),
+    ]
+    summary = census_demographic_summary(census)
+    zone_1_top = summary["nationality_zone_top5"]["zone_1_asia"]
+    assert zone_1_top[0] == {"nationality": "Indian", "count": 3}
+    assert {"nationality": "Filipino", "count": 1} in zone_1_top
+    assert summary["nationality_zone_top5"]["zone_2_middle_east"] == [{"nationality": "Egyptian", "count": 1}]
+    assert summary["nationality_zone_top5"]["zone_3_europe_americas"] == []

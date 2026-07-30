@@ -2,7 +2,6 @@ from app.reference.nationality_zones import (
     ZONE_ASIA,
     ZONE_EUROPE_AMERICAS,
     ZONE_MIDDLE_EAST,
-    ZONE_OTHER,
     classify_zone,
 )
 
@@ -22,15 +21,17 @@ def test_european_and_american_nationalities_map_to_zone_3():
         assert classify_zone(nationality) == ZONE_EUROPE_AMERICAS
 
 
-def test_unmapped_nationalities_fall_back_to_other_zone():
+def test_sub_saharan_and_unmapped_nationalities_fold_into_middle_east():
+    # There is no 4th zone - Sub-Saharan Africa and anything else unmapped
+    # counts toward Zone 2 (Middle East) instead.
     for nationality in ["Kenyan", "Nigerian", "South African", "Atlantis"]:
-        assert classify_zone(nationality) == ZONE_OTHER
+        assert classify_zone(nationality) == ZONE_MIDDLE_EAST
 
 
 def test_classification_is_case_and_whitespace_insensitive():
     assert classify_zone("  iNdIaN  ") == ZONE_ASIA
 
 
-def test_empty_nationality_falls_back_to_other():
-    assert classify_zone("") == ZONE_OTHER
-    assert classify_zone(None) == ZONE_OTHER
+def test_empty_nationality_falls_back_to_middle_east():
+    assert classify_zone("") == ZONE_MIDDLE_EAST
+    assert classify_zone(None) == ZONE_MIDDLE_EAST

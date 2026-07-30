@@ -5,16 +5,19 @@ nationality zone mix) rather than a risk multiplier. Kept as its own module
 since it answers "what does this group look like" rather than "how risky is
 it" - the latter is `app/scoring/rules/demographic.py`.
 """
+from collections import Counter
 from statistics import mean
 from typing import List
 
-from app.reference.nationality_zones import ALL_ZONES, ZONE_OTHER
+from app.reference.nationality_zones import ALL_ZONES, ZONE_MIDDLE_EAST
 from app.scoring.rules.demographic import (
     AGE_BANDS,
     INFANT_AGE_MAX,
     MATERNITY_AGE_MAX,
     MATERNITY_AGE_MIN,
 )
+
+TOP_NATIONALITIES_PER_ZONE = 5
 
 
 def _age_band_label(low: int, high: int) -> str:
@@ -69,8 +72,21 @@ def census_demographic_summary(census: List[dict]) -> dict:
             relation_gender_counts[relation][m["gender"]] += 1
 
     zone_counts = {zone: 0 for zone in ALL_ZONES}
+    zone_nationality_tallies = {zone: Counter() for zone in ALL_ZONES}
     for m in census:
-        zone_counts[m.get("nationality_zone") or ZONE_OTHER] += 1
+        # Anything not one of the current zones (missing, or a zone from
+        # before the 4th zone was folded away) counts toward Middle East
+        # rather than raising - see nationality_zones.py.
+        zone = m.get("nationality_zone")
+        zone = zone if zone in zone_counts else ZONE_MIDDLE_EAST
+        zone_counts[zone] += 1
+        if m.get("nationality"):
+            zone_nationality_tallies[zone][m["nationality"]] += 1
+
+    zone_top_nationalities = {
+        zone: [{"nationality": name, "count": count} for name, count in tally.most_common(TOP_NATIONALITIES_PER_ZONE)]
+        for zone, tally in zone_nationality_tallies.items()
+    }
 
     married_female_count = sum(
         1 for m in census if m.get("gender") == "F" and (m.get("marital_status") or "").lower() == "married"
@@ -111,6 +127,7 @@ def census_demographic_summary(census: List[dict]) -> dict:
         "relation_gender_counts": relation_gender_counts,
         "nationality_zone_counts": zone_counts,
         "nationality_zone_pct": {z: _pct(c, total) for z, c in zone_counts.items()},
+        "nationality_zone_top5": zone_top_nationalities,
         "married_female_count": married_female_count,
         "married_female_pct": _pct(married_female_count, total),
         "maternity_risk_count": maternity_risk_count,
