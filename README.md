@@ -241,14 +241,17 @@ since outstanding claims are already-incurred cost, not a speculative
 estimate.
 
 `app/scoring/rules/claims_ledger_analysis.py` computes:
-- Top 10 patients and top 10 diagnoses by final claims amount
-  (`GET /cases/{id}/claims-ledger-analysis`). Diagnoses are classified
-  chronic/non-chronic via their ICD-10 chapter
+- Top 10 patients, top 10 diagnoses, and top 10 medical providers by final
+  claims amount (`GET /cases/{id}/claims-ledger-analysis`). Diagnoses are
+  classified chronic/non-chronic via their ICD-10 chapter
   (`app/reference/icd10_chapters.py` maps a raw code like "J454" to the
   same broad chapter labels `diagnosis_classification.py` already uses,
   extended to cover chapters a DHA report's own pre-aggregated groupings
   never surfaced - mental/behavioural, skin, blood, pregnancy, injury,
-  infectious, and administrative/Z-code chapters).
+  infectious, and administrative/Z-code chapters). Providers need a
+  `provider_name` column in the source ledger (several aliases recognized,
+  e.g. "Provider Name", "Hospital/Clinic") - omitted entirely if the ledger
+  doesn't carry one, rather than guessing.
 - A month-wise claims trend (by treatment date), averaging only the FULL
   months - the first month is dropped if the policy didn't start on the
   1st, and the last month present is always dropped as a trailing partial
@@ -259,6 +262,23 @@ estimate.
   via `/ (1 - loading)` - the same convention as the burning-cost method,
   just without its member-count rescaling step. `inflation_pct`/
   `loading_pct` are overridable per call (defaults 7.5%/28%).
+- A **category-wise burning cost breakdown** (`category_burning_cost()`):
+  the same average/annualize/trend/load formula as above, computed
+  separately per `medical_category` value (whatever categorization the
+  source ledger uses), over the identical full-months window already
+  established for the overall figure - so every category is measured over
+  the same time period rather than each deciding its own edge exclusions.
+  When a quote has been uploaded for this case (`POST /cases/{id}/quote`),
+  each category row is matched against that quote's own category letter
+  (or an exact plan-name match) to attach the quoted plan's product name,
+  network, and gross premium, plus a `projected_loss_ratio` (this
+  category's projected annual claims over its quoted premium) - a direct
+  "if we accept this quote, does our own claims experience support it"
+  check, distinct from the renewal rating's loss ratio (which compares
+  against the *current*, not quoted, premium). A category with no matching
+  quoted plan still shows its burning cost, just without the comparison
+  columns - `quote_available_for_comparison` on the response says whether
+  a quote exists for this case at all.
 
 **Renewal rating** (`app/scoring/rules/renewal_rating.py`,
 `GET /cases/{id}/renewal-rating`) - the actual renewal-increase
@@ -405,7 +425,7 @@ below.
 - `GET /cases/{id}/claims-report` - the latest parsed claims report
 - `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection (new business)
 - `GET /cases/{id}/diagnosis-exposure` - chronic/high-exposure-flagged diagnosis breakdown (new business, from a claims report)
-- `GET /cases/{id}/claims-ledger-analysis` - top patients/diagnoses, monthly trend, and expected annual premium from an uploaded claims ledger (existing business)
+- `GET /cases/{id}/claims-ledger-analysis` - top patients/diagnoses/providers, monthly trend, expected annual premium, and category-wise burning cost (compared against a quoted premium if a quote is available) from an uploaded claims ledger (existing business)
 - `GET /cases/{id}/renewal-rating` - the renewal-increase calculation from actual loss ratio (existing business)
 - `GET /admin/weights` - full version history of scoring weight sets
 - `POST /admin/recalibrate` - trigger recalibration from recorded outcomes

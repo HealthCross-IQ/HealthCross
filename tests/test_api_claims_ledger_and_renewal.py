@@ -101,6 +101,102 @@ def test_claims_ledger_analysis_returns_top_patients_and_diagnoses(client):
     assert cancer["high_exposure"] is True
 
 
+def test_claims_ledger_analysis_returns_top_providers(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C1", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 10, 5), provider_name="American Hospital", final_amount=5000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C2", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 11, 5), provider_name="Mediclinic City", final_amount=1000,
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    top_providers = resp.json()["top_providers"]
+    assert top_providers[0]["provider_name"] == "American Hospital"
+    assert top_providers[0]["final_amount"] == 5000.0
+
+
+def test_claims_ledger_analysis_category_burning_cost_without_quote(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C1", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 10, 5), medical_category="A", final_amount=1000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C2", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 11, 5), medical_category="A", final_amount=3000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C3", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 12, 5), medical_category="A", final_amount=999999,
+            ),  # trailing partial month - excluded
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["quote_available_for_comparison"] is False
+    category_row = next(r for r in body["category_burning_cost"] if r["category"] == "A")
+    assert category_row["avg_month"] == 2000.0
+    assert category_row["product"] is None
+    assert category_row["projected_loss_ratio"] is None
+
+
+def test_claims_ledger_analysis_category_burning_cost_matches_quoted_premium(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C1", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 10, 5), medical_category="A", final_amount=1000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C2", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 11, 5), medical_category="A", final_amount=3000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C3", policy_start_date=date(2025, 10, 1),
+                date_of_treatment=date(2025, 12, 5), medical_category="A", final_amount=999999,
+            ),
+        ]
+    )
+    db.add(
+        models.BenefitPlan(
+            case_id=case_id, role="quoted", category="A", plan_name="Gold Category A",
+            network_type="MSH Platinum", gross_premium=50000.0, member_count=10,
+        )
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["quote_available_for_comparison"] is True
+    category_row = next(r for r in body["category_burning_cost"] if r["category"] == "A")
+    assert category_row["product"] == "Gold Category A"
+    assert category_row["network"] == "MSH Platinum"
+    assert category_row["quoted_premium"] == 50000.0
+    assert category_row["projected_loss_ratio"] == round(category_row["projected_annual_claims"] / 50000.0, 4)
+
+
 def test_claims_ledger_analysis_404_without_upload(client):
     case_id = _create_case(client)
     resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")

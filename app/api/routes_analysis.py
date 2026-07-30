@@ -1,3 +1,4 @@
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -11,10 +12,12 @@ from app.scoring.rules.benefits_comparison import compare_benefit_summaries, com
 from app.scoring.rules.benefits_summary import build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.claims_ledger_analysis import (
+    category_burning_cost,
     full_months_only,
     monthly_final_amount,
     top_diagnoses_by_final_amount,
     top_patients_by_final_amount,
+    top_providers_by_final_amount,
 )
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 from app.scoring.rules.renewal_rating import RenewalRatingAssumptions, calculate_renewal_rating
@@ -287,9 +290,44 @@ def _ledger_entry_dicts(entries: List[models.ClaimsLedgerEntry]) -> List[dict]:
             "diagnosis_description": e.diagnosis_description,
             "ip_op_maternity": e.ip_op_maternity,
             "date_of_treatment": e.date_of_treatment,
+            "provider_name": e.provider_name,
+            "medical_category": e.medical_category,
         }
         for e in entries
     ]
+
+
+def _category_letter(text: Optional[str]) -> Optional[str]:
+    """Recognizes only an unambiguous single-letter category (e.g. "A",
+    "Category A", "Category: A") - anchored to the whole string rather than
+    searching for any standalone letter anywhere, so a medical_category
+    value that just happens to contain a letter isn't mistaken for one.
+    """
+    if not text:
+        return None
+    normalized = text.strip()
+    if len(normalized) == 1 and normalized.isalpha():
+        return normalized.upper()
+    match = re.match(r"^category\s*[:\-]?\s*([a-z])$", normalized, re.IGNORECASE)
+    return match.group(1).upper() if match else None
+
+
+def _match_quoted_plan(category_text: str, quoted_plans: List[models.BenefitPlan]) -> Optional[models.BenefitPlan]:
+    """Matches a claims ledger's free-text medical_category value (e.g.
+    "Category A", "A", or a plan name) against a quoted BenefitPlan's own
+    category letter, so a category-wise burning cost can be compared
+    against that category's own quoted premium. Returns None (rather than
+    guessing) when nothing lines up - the burning cost is still shown, just
+    without a loss-ratio comparison for that row.
+    """
+    normalized_category = (category_text or "").strip().lower()
+    letter = _category_letter(category_text)
+    for plan in quoted_plans:
+        if plan.category and letter and plan.category.strip().upper() == letter:
+            return plan
+        if plan.plan_name and plan.plan_name.strip().lower() == normalized_category:
+            return plan
+    return None
 
 
 def _full_months_from_ledger(entries: List[models.ClaimsLedgerEntry]) -> List[dict]:
@@ -332,6 +370,7 @@ def get_claims_ledger_analysis(
     result = {
         "top_patients": top_patients_by_final_amount(entry_dicts),
         "top_diagnoses": top_diagnoses_by_final_amount(entry_dicts),
+        "top_providers": top_providers_by_final_amount(entry_dicts),
         "monthly_final_amount": monthly_final_amount(entry_dicts),
     }
 
@@ -356,6 +395,30 @@ def get_claims_ledger_analysis(
                 "assumptions_used": {"inflation_pct": assumptions.inflation_pct, "loading_pct": assumptions.loading_pct},
             }
         )
+
+        full_month_keys = [(m["year"], m["month"]) for m in full_months]
+        category_rows = category_burning_cost(
+            entry_dicts, full_month_keys, assumptions.inflation_pct, assumptions.loading_pct
+        )
+        quoted_plans = [p for p in case.benefit_plans if p.role == "quoted"]
+        for row in category_rows:
+            matched_plan = _match_quoted_plan(row["category"], quoted_plans) if quoted_plans else None
+            if matched_plan:
+                row["product"] = matched_plan.plan_name
+                row["network"] = matched_plan.network_type
+                row["quoted_premium"] = matched_plan.gross_premium
+                row["projected_loss_ratio"] = (
+                    round(row["projected_annual_claims"] / matched_plan.gross_premium, 4)
+                    if matched_plan.gross_premium
+                    else None
+                )
+            else:
+                row["product"] = None
+                row["network"] = None
+                row["quoted_premium"] = None
+                row["projected_loss_ratio"] = None
+        result["category_burning_cost"] = category_rows
+        result["quote_available_for_comparison"] = bool(quoted_plans)
     return result
 
 

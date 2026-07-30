@@ -36,6 +36,32 @@ def top_patients_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT
     return rows[:top_n]
 
 
+def top_providers_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT) -> List[dict]:
+    totals: dict = defaultdict(lambda: {"final_amount": 0.0, "claim_count": 0, "claim_ids": set(), "patient_ids": set()})
+    for e in entries:
+        provider_name = e.get("provider_name")
+        if not provider_name:
+            continue
+        bucket = totals[provider_name]
+        bucket["final_amount"] += e.get("final_amount") or 0.0
+        if e.get("claim_id"):
+            bucket["claim_ids"].add(e["claim_id"])
+        if e.get("patient_id"):
+            bucket["patient_ids"].add(e["patient_id"])
+
+    rows = [
+        {
+            "provider_name": provider_name,
+            "final_amount": round(v["final_amount"], 2),
+            "claim_count": len(v["claim_ids"]),
+            "patient_count": len(v["patient_ids"]),
+        }
+        for provider_name, v in totals.items()
+    ]
+    rows.sort(key=lambda r: r["final_amount"], reverse=True)
+    return rows[:top_n]
+
+
 def top_diagnoses_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT) -> List[dict]:
     totals: dict = defaultdict(lambda: {
         "description": None, "value": 0.0, "count": 0, "ip_value": 0.0, "ip_count": 0,
@@ -97,6 +123,56 @@ def monthly_final_amount(entries: List[dict]) -> List[dict]:
         {"year": year, "month": month, "final_amount": round(amount, 2)}
         for (year, month), amount in sorted(totals.items())
     ]
+
+
+def category_burning_cost(
+    entries: List[dict],
+    full_month_keys: List[tuple],
+    inflation_pct: float,
+    loading_pct: float,
+) -> List[dict]:
+    """Same burning-cost formula as the overall renewal rating (average of
+    the full months, annualize x12, trend for inflation, gross up for the
+    commission/OPEX loading), computed separately per `medical_category` -
+    e.g. Inpatient/Outpatient/Dental/Optical, or whatever categorization the
+    source ledger uses.
+
+    `full_month_keys` is the (year, month) set already established as
+    "full" (see full_months_only()) from the WHOLE ledger, not recomputed
+    per category - so every category is measured over the identical time
+    window rather than each independently deciding its own edge exclusions.
+    """
+    full_month_set = set(full_month_keys)
+    by_category: dict = defaultdict(lambda: defaultdict(float))
+    patients_by_category: dict = defaultdict(set)
+
+    for e in entries:
+        category = e.get("medical_category") or "Uncategorized"
+        d = e.get("date_of_treatment")
+        if not d or (d.year, d.month) not in full_month_set:
+            continue
+        by_category[category][(d.year, d.month)] += e.get("final_amount") or 0.0
+        if e.get("patient_id"):
+            patients_by_category[category].add(e["patient_id"])
+
+    rows = []
+    for category, monthly_totals in by_category.items():
+        avg_month = sum(monthly_totals.values()) / len(full_month_set)
+        annualized = avg_month * 12
+        trended = annualized * (1 + inflation_pct)
+        projected_annual_claims = trended / (1 - loading_pct)
+        rows.append(
+            {
+                "category": category,
+                "member_count": len(patients_by_category[category]),
+                "avg_month": round(avg_month, 2),
+                "annualized_incurred_claims": round(annualized, 2),
+                "trended_claims": round(trended, 2),
+                "projected_annual_claims": round(projected_annual_claims, 2),
+            }
+        )
+    rows.sort(key=lambda r: r["trended_claims"], reverse=True)
+    return rows
 
 
 def full_months_only(monthly: List[dict], policy_start_year: Optional[int] = None, policy_start_month: Optional[int] = None, policy_start_day: Optional[int] = None) -> List[dict]:

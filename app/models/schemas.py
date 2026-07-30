@@ -103,6 +103,7 @@ class ClaimsLedgerEntryOut(BaseModel):
     relation: Optional[str] = None
     ip_op_maternity: Optional[str] = None
     medical_category: Optional[str] = None
+    provider_name: Optional[str] = None
     diagnosis_code: Optional[str] = None
     diagnosis_description: Optional[str] = None
     claimed_amount: Optional[float] = None

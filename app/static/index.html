@@ -758,6 +758,24 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
       </div>
     ` : `<div class="hint">Not enough full months of claims data yet for an annualized projection.</div>`;
 
+    const categoryBlock = a.category_burning_cost && a.category_burning_cost.length ? `
+      <table style="margin-top:16px;">
+        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Burning cost (annualized)</th><th>Quoted premium</th><th>Projected loss ratio</th></tr>
+        ${a.category_burning_cost.map(c => `
+          <tr>
+            <td>${escapeHtml(c.category)}</td>
+            <td>${c.product ? escapeHtml(c.product) : '-'}</td>
+            <td>${c.network ? escapeHtml(c.network) : '-'}</td>
+            <td>${c.member_count}</td>
+            <td>${c.projected_annual_claims.toLocaleString()}</td>
+            <td>${c.quoted_premium != null ? c.quoted_premium.toLocaleString() : '-'}</td>
+            <td>${c.projected_loss_ratio != null ? (c.projected_loss_ratio*100).toFixed(1) + '%' : '-'}</td>
+          </tr>
+        `).join('')}
+      </table>
+      ${!a.quote_available_for_comparison ? '<div class="hint">Upload a quote (see Quote above) to compare category burning cost against a quoted premium.</div>' : ''}
+    ` : '';
+
     area.innerHTML = `
       <div class="card">
         <h3>Claims ledger analysis (existing business)</h3>
@@ -779,6 +797,12 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
               </tr>
             `).join('')}
           </table>
+          <table>
+            <tr><th>Provider</th><th>Final claims amount</th><th>Claim count</th></tr>
+            ${a.top_providers.map(p => `
+              <tr><td>${escapeHtml(p.provider_name)}</td><td>${p.final_amount.toLocaleString()}</td><td>${p.claim_count}</td></tr>
+            `).join('')}
+          </table>
         </div>
         <table style="margin-top:16px;">
           <tr><th>Month</th><th>Final claims amount</th></tr>
@@ -787,6 +811,7 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
           `).join('')}
         </table>
         ${expectedBlock}
+        ${categoryBlock}
       </div>
     `;
   } catch (err) {
