@@ -330,10 +330,17 @@ function renderCaseWorkspace() {
       <div class="hint">${escapeHtml(c.broker_name)} &middot; ${escapeHtml(c.industry)} &middot; ${escapeHtml(c.region || '-')} &middot; status: ${c.status}</div>
       <div class="row" style="margin-top:12px; align-items:flex-end;">
         <div>
+          <label>Business type</label>
+          <select id="case-business-type" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
+            <option value="new" ${c.business_type === 'existing' ? '' : 'selected'}>New business</option>
+            <option value="existing" ${c.business_type === 'existing' ? 'selected' : ''}>Existing business (renewal)</option>
+          </select>
+        </div>
+        <div>
           <label>Current annual premium (for renewal rating)</label>
           <input type="number" id="current-annual-premium" value="${c.current_annual_premium ?? ''}" placeholder="e.g. 3000000">
         </div>
-        <button onclick="saveCurrentPremium()">Save</button>
+        <button onclick="saveCaseDetails()">Save</button>
       </div>
     </div>
 
@@ -423,16 +430,20 @@ function renderCaseWorkspace() {
   loadRenewalRating();
 }
 
-async function saveCurrentPremium() {
-  const value = document.getElementById('current-annual-premium').value;
+async function saveCaseDetails() {
+  const premiumValue = document.getElementById('current-annual-premium').value;
+  const businessType = document.getElementById('case-business-type').value;
   try {
     currentCase = await api(`/cases/${currentCase.id}`, {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ current_annual_premium: value ? Number(value) : null }),
+      body: JSON.stringify({
+        business_type: businessType,
+        current_annual_premium: premiumValue ? Number(premiumValue) : null,
+      }),
     });
-    toast('Current annual premium saved');
-    await loadRenewalRating();
+    toast('Case details saved');
+    renderCaseWorkspace();
   } catch (err) {
     toast(err.message, true);
   }
