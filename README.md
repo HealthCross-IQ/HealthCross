@@ -92,6 +92,7 @@ Area of Cover, Annual Limit, Deductible, Pre-existing & Chronic Limit,
 Maternity Limit, Dental, Optical, Coinsurance, Alternative/Complementary
 Treatment, Pharmacy Limit & Coinsurance. A field the source document doesn't
 specify is shown as "Not specified" rather than silently dropped.
+`GET /cases/{id}/benefits-summary` renders this for every uploaded plan/tier.
 
 **Claims projection - burning cost method** (`app/scoring/rules/claims_projection.py`) -
 `project_annual_claims()` runs the agreed formula:
@@ -105,7 +106,9 @@ specify is shown as "Not specified" rather than silently dropped.
    commission/OPEX loading via `/ (1 - 0.28)` (not a multiplicative add-on).
 
 All five percentages are keyword defaults on `ClaimsProjectionAssumptions`,
-overridable per call rather than hardcoded.
+overridable per call rather than hardcoded. `GET /cases/{id}/claims-projection`
+runs this against the case's latest uploaded claims report and current
+census count.
 
 **Diagnosis exposure classification** (`app/reference/diagnosis_classification.py`) -
 every top-N diagnosis grouping from a claims report gets tagged chronic /
@@ -114,6 +117,33 @@ and kidney/genitourinary conditions regardless of current claim volume.
 `flag_diagnosis_group()` also flags an in-patient-claim average above AED
 30,000 as a probable large/shock claim, and below AED 1,000 as a likely
 day-case-miscoded-as-in-patient data artifact.
+`GET /cases/{id}/diagnosis-exposure` returns this, sorted by value.
+
+## PDF ingestion
+
+Two insurer document formats are parsed directly, no manual conversion to
+Excel needed - both `POST /cases/{id}/benefits` and `POST /cases/{id}/claims`
+auto-detect a `.pdf` upload and dispatch to these instead of the generic
+spreadsheet parsers:
+
+- **Claims report** (`app/ingestion/claims_report.py`) - targets the DHA
+  (Dubai Health Authority) Mandated Format, a regulatory template with fixed
+  row numbering, so a row-number-keyed parser holds up across insurers
+  rather than being tied to one broker's layout. Extracts policy dates,
+  opening/closing population, the diagnosis/provider/claims-type
+  breakdowns, and the monthly-paid trend (auto-flagging a policy-inception
+  stub month as partial). Stored as `ClaimsReport`, distinct from the
+  per-claim `ClaimsRecord` rows a spreadsheet upload produces.
+- **Table of benefits** (`app/ingestion/benefits_pdf.py`) - targets insurer
+  guides shaped like Bupa Global/Sukoon's "Business Health Plan": a benefit
+  label in the page's left margin next to a bordered table with one column
+  per plan tier. Recovers each row's label by cropping the page to the
+  left-margin region at that row's vertical position (via pdfplumber's
+  `find_tables()` + row bounding boxes) - a positional technique, not
+  fragile text-matching, so it holds up as long as the same
+  label-column-next-to-bordered-table layout is used, regardless of tier
+  names or insurer. Produces the standard 10-field summary directly, for
+  every tier found, in one pass.
 
 ## Web UI
 
@@ -136,6 +166,10 @@ around instead of using `/docs`. It's a thin client over the same API below.
 - `POST /cases/{id}/score` - compute and store a scorecard
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
+- `GET /cases/{id}/benefits-summary` - every uploaded plan/tier in the standard 10-field format
+- `GET /cases/{id}/claims-report` - the latest parsed claims report
+- `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection
+- `GET /cases/{id}/diagnosis-exposure` - chronic/high-exposure-flagged diagnosis breakdown
 - `GET /admin/weights` - full version history of scoring weight sets
 - `POST /admin/recalibrate` - trigger recalibration from recorded outcomes
 
@@ -166,11 +200,12 @@ the API.
 
 ## Known limitations / next steps
 
-- **Table of benefits ingestion is generic**, not tailored to this broker's
-  specific benefit-matrix layout (network tiers like Platinum/Comprehensive,
-  percentage-based copays/deductibles). It handles a simple one-row-per-plan
-  structure well; parsing the exact matrix layout is a follow-up once we
-  see how consistent that layout is across brokers.
+- **PDF parsers target two specific, real document families** (the DHA
+  Mandated claims report, and Bupa Global/Sukoon-style tier-table benefit
+  guides) - both validated against real documents, but a differently laid
+  out insurer PDF may need its own anchor/label tuning rather than working
+  automatically. The generic spreadsheet parsers remain the fallback for
+  anything else.
 - **Zone multiplier learning needs volume**: with only a handful of bound
   cases, `/admin/recalibrate` will correctly refuse to move the zone
   multipliers. The zones only start meaningfully diverging from 1.0 once

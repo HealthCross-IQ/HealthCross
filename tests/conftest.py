@@ -39,6 +39,7 @@ def client(tmp_path):
     db.close()
 
     test_client = TestClient(app)
+    test_client.db_session_local = testing_session_local  # lets tests insert fixture rows directly
     yield test_client
 
     app.dependency_overrides.clear()

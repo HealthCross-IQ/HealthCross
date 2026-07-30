@@ -1,12 +1,14 @@
-from typing import List
+from typing import List, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.ingestion.benefits import parse_table_of_benefits
+from app.ingestion.benefits_pdf import parse_benefits_pdf, to_benefit_plan_fields
 from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
+from app.ingestion.claims_report import parse_claims_report
 from app.ingestion.plan_details import parse_plan_details
 from app.models import db_models as models
 from app.models import schemas
@@ -61,14 +63,23 @@ def upload_census(case_id: int, file: UploadFile = File(...), db: Session = Depe
 @router.post("/{case_id}/benefits", response_model=List[schemas.BenefitPlanOut])
 def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     case = _get_case_or_404(db, case_id)
+    is_pdf = file.filename.lower().endswith(".pdf")
+
     try:
-        parsed = parse_table_of_benefits(file.file, file.filename)
+        if is_pdf:
+            tier_summaries = parse_benefits_pdf(file.file, file.filename)
+            plans = [
+                models.BenefitPlan(case_id=case.id, **to_benefit_plan_fields(tier, summary))
+                for tier, summary in tier_summaries.items()
+            ]
+        else:
+            parsed = parse_table_of_benefits(file.file, file.filename)
+            plans = [models.BenefitPlan(case_id=case.id, source_format=file.filename.rsplit(".", 1)[-1].lower(), **row) for row in parsed]
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not parse table of benefits: {exc}")
-    if not parsed:
+    if not plans:
         raise HTTPException(status_code=400, detail="No benefit plans found in file")
 
-    plans = [models.BenefitPlan(case_id=case.id, **row) for row in parsed]
     db.add_all(plans)
     db.commit()
     for plan in plans:
@@ -76,9 +87,28 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
     return plans
 
 
-@router.post("/{case_id}/claims", response_model=List[schemas.ClaimsRecordOut])
+@router.post("/{case_id}/claims", response_model=Union[List[schemas.ClaimsRecordOut], schemas.ClaimsReportOut])
 def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     case = _get_case_or_404(db, case_id)
+    is_pdf = file.filename.lower().endswith(".pdf")
+
+    if is_pdf:
+        try:
+            parsed = parse_claims_report(file.file, file.filename)
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Could not parse claims report: {exc}")
+
+        # parse_claims_report also returns intermediate fields (e.g. the
+        # opening/closing gender split) that ClaimsReport doesn't store as
+        # its own columns - opening_members/closing_members already carry
+        # the totals that matter downstream.
+        report_fields = {k: v for k, v in parsed.items() if k in models.ClaimsReport.__table__.columns.keys()}
+        report = models.ClaimsReport(case_id=case.id, **report_fields)
+        db.add(report)
+        db.commit()
+        db.refresh(report)
+        return report
+
     try:
         parsed = parse_claims(file.file, file.filename)
     except Exception as exc:

@@ -47,6 +47,7 @@ class Case(Base):
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")
+    claims_reports = relationship("ClaimsReport", back_populates="case", cascade="all, delete-orphan")
     scorecards = relationship("Scorecard", back_populates="case", cascade="all, delete-orphan")
     outcome = relationship("Outcome", back_populates="case", uselist=False, cascade="all, delete-orphan")
 
@@ -91,6 +92,12 @@ class BenefitPlan(Base):
     pre_existing_covered = Column(Boolean, default=False)
     member_count = Column(Integer, nullable=True)
 
+    # Populated when parsed from an insurer's table-of-benefits PDF rather
+    # than a generic spreadsheet - see app/ingestion/benefits_pdf.py and
+    # app/scoring/rules/benefits_summary.py for the fixed 10-field format.
+    source_format = Column(String, nullable=True)  # "xlsx" / "csv" / "pdf"
+    standard_summary = Column(JSON, nullable=True)
+
     case = relationship("Case", back_populates="benefit_plans")
 
 
@@ -108,6 +115,37 @@ class ClaimsRecord(Base):
     policy_year = Column(Integer, nullable=True)
 
     case = relationship("Case", back_populates="claims_records")
+
+
+class ClaimsReport(Base):
+    """An aggregate claims-experience report (e.g. the DHA Mandated Format
+    claims report), distinct from ClaimsRecord's per-claim line items.
+
+    Feeds app/scoring/rules/claims_projection.py (burning-cost projection)
+    and app/reference/diagnosis_classification.py (exposure flagging).
+    """
+
+    __tablename__ = "claims_reports"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=False)
+    policy_number = Column(String, nullable=True)
+    policy_effective_date = Column(Date, nullable=True)
+    policy_expiry_date = Column(Date, nullable=True)
+    report_period_start = Column(Date, nullable=True)
+    report_period_end = Column(Date, nullable=True)
+    report_production_date = Column(Date, nullable=True)
+    total_paid = Column(Float, nullable=True)
+    incurred_not_reported = Column(Float, nullable=True)
+    opening_members = Column(Integer, nullable=True)
+    closing_members = Column(Integer, nullable=True)
+    diagnosis_breakdown = Column(JSON, nullable=True)
+    provider_breakdown = Column(JSON, nullable=True)
+    claims_by_type = Column(JSON, nullable=True)
+    monthly_paid = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    case = relationship("Case", back_populates="claims_reports")
 
 
 class Scorecard(Base):

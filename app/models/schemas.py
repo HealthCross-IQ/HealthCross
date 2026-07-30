@@ -65,6 +65,8 @@ class BenefitPlanOut(BaseModel):
     chronic_covered: bool
     pre_existing_covered: bool
     member_count: Optional[int] = None
+    source_format: Optional[str] = None
+    standard_summary: Optional[Dict[str, str]] = None
 
 
 class ClaimsRecordOut(BaseModel):
@@ -78,6 +80,56 @@ class ClaimsRecordOut(BaseModel):
     amount_billed: Optional[float] = None
     amount_paid: Optional[float] = None
     policy_year: Optional[int] = None
+
+
+class ClaimsReportOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    case_id: int
+    policy_number: Optional[str] = None
+    policy_effective_date: Optional[date] = None
+    policy_expiry_date: Optional[date] = None
+    report_period_start: Optional[date] = None
+    report_period_end: Optional[date] = None
+    report_production_date: Optional[date] = None
+    total_paid: Optional[float] = None
+    incurred_not_reported: Optional[float] = None
+    opening_members: Optional[int] = None
+    closing_members: Optional[int] = None
+    diagnosis_breakdown: Optional[List[Dict[str, Any]]] = None
+    provider_breakdown: Optional[List[Dict[str, Any]]] = None
+    claims_by_type: Optional[List[Dict[str, Any]]] = None
+    monthly_paid: Optional[List[Dict[str, Any]]] = None
+    created_at: datetime
+
+
+class ClaimsProjectionOut(BaseModel):
+    avg_month: float
+    annualized: float
+    with_ibnr: float
+    avg_report_members: float
+    burning_cost_per_member: float
+    projected_current_group: float
+    trended: float
+    credible: float
+    final_projected_claims: float
+    assumptions_used: Dict[str, float]
+    months_used: List[str]
+
+
+class DiagnosisExposureRow(BaseModel):
+    label: str
+    value: float
+    count: int
+    ip_value: float
+    ip_count: int
+    avg_per_claim: float
+    ip_avg_per_claim: float
+    classification: str
+    high_exposure: bool
+    note: str
+    flags: List[str]
 
 
 class ScorecardOut(BaseModel):

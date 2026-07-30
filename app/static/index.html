@@ -331,6 +331,10 @@ function renderCaseWorkspace() {
       </div>
     </div>
 
+    <div id="benefits-summary-area"></div>
+    <div id="claims-projection-area"></div>
+    <div id="diagnosis-exposure-area"></div>
+
     <div class="card">
       <h3>2. Compute risk scorecard</h3>
       <label>Estimated annual premium (optional, improves claims-experience accuracy)</label>
@@ -360,12 +364,16 @@ function renderCaseWorkspace() {
     </div>
   `;
   loadLatestScorecard();
+  loadBenefitsSummary();
+  loadClaimsProjection();
+  loadDiagnosisExposure();
 }
 
 async function uploadFile(kind) {
   const input = document.getElementById(`file-${kind}`);
   const statusEl = document.getElementById(`status-${kind}`);
   if (!input.files.length) { toast('Choose a file first', true); return; }
+  const isPdf = input.files[0].name.toLowerCase().endsWith('.pdf');
 
   const form = new FormData();
   form.append('file', input.files[0]);
@@ -373,13 +381,91 @@ async function uploadFile(kind) {
   statusEl.className = 'status-pending';
   try {
     const result = await api(`/cases/${currentCase.id}/${kind}`, { method: 'POST', body: form });
-    statusEl.textContent = `${result.length} rows parsed`;
+    if (Array.isArray(result)) {
+      statusEl.textContent = `${result.length} rows parsed`;
+      toast(`${kind} uploaded (${result.length} rows)`);
+    } else {
+      statusEl.textContent = 'Report parsed';
+      toast(`${kind} report parsed`);
+    }
     statusEl.className = 'status-ok';
-    toast(`${kind} uploaded (${result.length} rows)`);
+    if (kind === 'benefits') await loadBenefitsSummary();
+    if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadDiagnosisExposure(); }
   } catch (err) {
     statusEl.textContent = 'Failed';
     statusEl.className = 'status-err';
     toast(err.message, true);
+  }
+}
+
+async function loadBenefitsSummary() {
+  const area = document.getElementById('benefits-summary-area');
+  try {
+    const plans = await api(`/cases/${currentCase.id}/benefits-summary`);
+    area.innerHTML = plans.map(p => `
+      <div class="card">
+        <h3>${escapeHtml(p.plan_name || 'Plan')}</h3>
+        <table>
+          ${Object.entries(p.summary).map(([field, value]) => `
+            <tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>
+          `).join('')}
+        </table>
+      </div>
+    `).join('');
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadClaimsProjection() {
+  const area = document.getElementById('claims-projection-area');
+  try {
+    const p = await api(`/cases/${currentCase.id}/claims-projection`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Claims projection (burning cost)</h3>
+        <div class="hint">Months used: ${p.months_used.join(', ')}</div>
+        <table>
+          <tr><th>Average month</th><td>${p.avg_month.toLocaleString()}</td></tr>
+          <tr><th>Annualized</th><td>${p.annualized.toLocaleString()}</td></tr>
+          <tr><th>+ IBNR (${(p.assumptions_used.ibnr_pct*100).toFixed(0)}%)</th><td>${p.with_ibnr.toLocaleString()}</td></tr>
+          <tr><th>Avg report members</th><td>${p.avg_report_members}</td></tr>
+          <tr><th>Burning cost / member</th><td>${p.burning_cost_per_member.toLocaleString()}</td></tr>
+          <tr><th>Projected (current group)</th><td>${p.projected_current_group.toLocaleString()}</td></tr>
+          <tr><th>+ Inflation (${(p.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${p.trended.toLocaleString()}</td></tr>
+          <tr><th>x Credibility (${(p.assumptions_used.credibility_pct*100).toFixed(0)}%)</th><td>${p.credible.toLocaleString()}</td></tr>
+          <tr><th><b>Final projected claims</b> (÷ loading)</th><td><b>${p.final_projected_claims.toLocaleString()}</b></td></tr>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadDiagnosisExposure() {
+  const area = document.getElementById('diagnosis-exposure-area');
+  try {
+    const rows = await api(`/cases/${currentCase.id}/diagnosis-exposure`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Diagnosis exposure</h3>
+        <table>
+          <tr><th>Diagnosis</th><th>Value</th><th>Count</th><th>Classification</th><th>Flags</th></tr>
+          ${rows.map(r => `
+            <tr>
+              <td>${escapeHtml(r.label)}</td>
+              <td>${r.value.toLocaleString()}</td>
+              <td>${r.count}</td>
+              <td>${r.classification}${r.high_exposure ? ' <span class="tier-pill tier-Substandard">high exposure</span>' : ''}</td>
+              <td>${r.flags.join(', ')}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
   }
 }
 
