@@ -168,7 +168,10 @@ spreadsheet parsers:
   them with an explicit "verify against the source PDF" note, and keeps the
   full per-page OCR text (`raw_ocr_text`) for manual lookup. Expect it to
   take significantly longer than a text-based PDF (tens of seconds for a
-  10+ page scan).
+  10+ page scan). On Windows, the official installer doesn't reliably add
+  itself to PATH, so `app/ingestion/benefits_ocr.py` also checks Tesseract's
+  own default install directories automatically before giving up; an
+  atypical install location can be pointed to with a `TESSERACT_CMD` env var.
 
 ## Web UI
 
@@ -191,6 +194,7 @@ around instead of using `/docs`. It's a thin client over the same API below.
 - `POST /cases/{id}/score` - compute and store a scorecard
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
+- `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages
 - `GET /cases/{id}/benefits-summary` - every uploaded plan/tier in the standard 10-field format
 - `GET /cases/{id}/claims-report` - the latest parsed claims report
 - `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection
