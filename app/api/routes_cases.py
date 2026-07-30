@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.ingestion.benefits import parse_table_of_benefits
+from app.ingestion.benefits_ocr import is_scanned_pdf, parse_benefits_pdf_ocr
 from app.ingestion.benefits_pdf import parse_benefits_pdf, to_benefit_plan_fields
 from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
@@ -66,7 +67,18 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
     is_pdf = file.filename.lower().endswith(".pdf")
 
     try:
-        if is_pdf:
+        if is_pdf and is_scanned_pdf(file.file):
+            ocr_result = parse_benefits_pdf_ocr(file.file, file.filename)
+            plans = [
+                models.BenefitPlan(
+                    case_id=case.id,
+                    plan_name="OCR extract (verify against source)",
+                    source_format="pdf-ocr",
+                    standard_summary=ocr_result["summary"],
+                    raw_ocr_text=ocr_result["raw_ocr_text"],
+                )
+            ]
+        elif is_pdf:
             tier_summaries = parse_benefits_pdf(file.file, file.filename)
             plans = [
                 models.BenefitPlan(case_id=case.id, **to_benefit_plan_fields(tier, summary))

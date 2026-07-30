@@ -95,8 +95,14 @@ class BenefitPlan(Base):
     # Populated when parsed from an insurer's table-of-benefits PDF rather
     # than a generic spreadsheet - see app/ingestion/benefits_pdf.py and
     # app/scoring/rules/benefits_summary.py for the fixed 10-field format.
-    source_format = Column(String, nullable=True)  # "xlsx" / "csv" / "pdf"
+    source_format = Column(String, nullable=True)  # "xlsx" / "csv" / "pdf" / "pdf-ocr"
     standard_summary = Column(JSON, nullable=True)
+
+    # Populated only for scanned (image-only) PDFs parsed via OCR fallback
+    # (app/ingestion/benefits_ocr.py) - the full per-page OCR text, kept so
+    # a human can search/verify values the low-confidence OCR extraction
+    # couldn't map cleanly.
+    raw_ocr_text = Column(Text, nullable=True)
 
     case = relationship("Case", back_populates="benefit_plans")
 

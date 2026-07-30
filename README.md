@@ -126,14 +126,26 @@ Excel needed - both `POST /cases/{id}/benefits` and `POST /cases/{id}/claims`
 auto-detect a `.pdf` upload and dispatch to these instead of the generic
 spreadsheet parsers:
 
-- **Claims report** (`app/ingestion/claims_report.py`) - targets the DHA
-  (Dubai Health Authority) Mandated Format, a regulatory template with fixed
-  row numbering, so a row-number-keyed parser holds up across insurers
-  rather than being tied to one broker's layout. Extracts policy dates,
-  opening/closing population, the diagnosis/provider/claims-type
-  breakdowns, and the monthly-paid trend (auto-flagging a policy-inception
-  stub month as partial). Stored as `ClaimsReport`, distinct from the
-  per-claim `ClaimsRecord` rows a spreadsheet upload produces.
+- **Claims report** (`app/ingestion/claims_report.py`) - two known insurer
+  layouts, auto-detected by a distinguishing marker in the text, each with
+  its own parser rather than one trying to handle both:
+  - *Format 1*: the DHA (Dubai Health Authority) Mandated Format, a
+    regulatory template with fixed row numbering. Parsed from plain
+    extracted text.
+  - *Format 2*: a different insurer's own "Health Insurance Claims Record"
+    layout (different date format, different row numbers, a
+    Male/Single-female/Married-female population split instead of
+    Male/Female). This one is parsed from `find_tables()`'s bordered-table
+    structure rather than plain text - this document's text reading order
+    badly scrambles some multi-line-wrapped row labels (a label can appear
+    split before *and* after its row's numbers), while the underlying PDF
+    table lines give clean, correctly-ordered cells regardless.
+
+  Both extract policy dates, opening/closing population, the
+  diagnosis/provider breakdowns, and the monthly-paid trend (auto-flagging
+  a policy-inception stub month as partial), stored as `ClaimsReport` -
+  distinct from the per-claim `ClaimsRecord` rows a spreadsheet upload
+  produces.
 - **Table of benefits** (`app/ingestion/benefits_pdf.py`) - targets insurer
   guides shaped like Bupa Global/Sukoon's "Business Health Plan": a benefit
   label in the page's left margin next to a bordered table with one column
@@ -144,6 +156,19 @@ spreadsheet parsers:
   label-column-next-to-bordered-table layout is used, regardless of tier
   names or insurer. Produces the standard 10-field summary directly, for
   every tier found, in one pass.
+- **Scanned (image-only) table of benefits** (`app/ingestion/benefits_ocr.py`) -
+  when a PDF has no extractable text at all (a raster scan, not a real PDF
+  table), `/benefits` automatically falls back to OCR (pdfplumber renders
+  each page, `pytesseract` reads it - needs the `tesseract-ocr` system
+  package installed, not just the pip package). OCR is meaningfully less
+  reliable than the text-based parsers: real scans misread digits (the same
+  figure can come out as "29,400" on one pass and "29,440" on another) and
+  garble table structure, so this module never silently picks one answer
+  when a label has multiple nearby candidate values - it reports all of
+  them with an explicit "verify against the source PDF" note, and keeps the
+  full per-page OCR text (`raw_ocr_text`) for manual lookup. Expect it to
+  take significantly longer than a text-based PDF (tens of seconds for a
+  10+ page scan).
 
 ## Web UI
 
@@ -184,6 +209,14 @@ uvicorn app.main:app --reload
 Interactive docs at `http://127.0.0.1:8000/docs`. Data persists to a local
 SQLite file (`underwriting.db`) by default; set `DATABASE_URL` to point
 elsewhere.
+
+Scanned (image-only) table-of-benefits PDFs need the `tesseract-ocr` system
+package too - `pip install` alone won't provide it:
+```bash
+sudo apt-get install tesseract-ocr   # Debian/Ubuntu
+brew install tesseract                # macOS
+```
+Everything else works without it; only the OCR fallback needs it.
 
 ## Tests
 

@@ -67,6 +67,7 @@ class BenefitPlanOut(BaseModel):
     member_count: Optional[int] = None
     source_format: Optional[str] = None
     standard_summary: Optional[Dict[str, str]] = None
+    raw_ocr_text: Optional[str] = None
 
 
 class ClaimsRecordOut(BaseModel):
