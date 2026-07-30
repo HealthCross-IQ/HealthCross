@@ -356,10 +356,14 @@ function renderCaseWorkspace() {
       </div>
       <div class="upload-row">
         <span style="width:110px;">Benefits</span>
-        <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv">
+        <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv,.pdf">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+          <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
+        </label>
         <button onclick="uploadFile('benefits')">Upload</button>
         <span id="status-benefits" class="status-pending"></span>
       </div>
+      <div class="hint">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
       <div class="upload-row">
         <span style="width:110px;">Claims</span>
         <input type="file" id="file-claims" accept=".xlsx,.xls,.csv">
@@ -460,7 +464,9 @@ async function uploadFile(kind) {
   statusEl.textContent = 'Uploading...';
   statusEl.className = 'status-pending';
   try {
-    const result = await api(`/cases/${currentCase.id}/${kind}`, { method: 'POST', body: form });
+    const appendCheckbox = document.getElementById(`file-${kind}-append`);
+    const query = (kind === 'benefits' && appendCheckbox && appendCheckbox.checked) ? '?mode=append' : '';
+    const result = await api(`/cases/${currentCase.id}/${kind}${query}`, { method: 'POST', body: form });
     if (Array.isArray(result)) {
       const unit = kind === 'quote' ? 'categories' : 'rows';
       statusEl.textContent = `${result.length} ${unit} parsed`;

@@ -180,6 +180,15 @@ benchmarking the standing standards above deliberately avoid.
 - Only the existing-role plan feeds the risk scorecard's benefit-richness
   component - a quoted plan uploaded for comparison never changes the
   score of the case as submitted.
+- **One file per category** - some insurers ship each category's table of
+  benefits as its own separate document rather than one combined file.
+  `POST /cases/{id}/benefits?mode=append` keeps other categories' plans
+  intact and only replaces a plan sharing the uploaded file's category
+  letter, instead of the default `mode=replace` behavior (wiping every
+  existing-role plan before adding the new file's). Upload each category's
+  file in turn with `mode=append` to build up the full set. A plan with no
+  detected category (e.g. the OCR/text-scan fallbacks) can't be matched
+  this way and is just added alongside whatever's already there.
 
 **Claims projection - burning cost method** (`app/scoring/rules/claims_projection.py`) -
 `project_annual_claims()` runs the agreed formula:
@@ -354,7 +363,7 @@ below.
 - `POST /cases` - create a case (broker, company, industry, region, business_type, current_annual_premium)
 - `PATCH /cases/{id}` - update business_type/current_annual_premium after creation
 - `POST /cases/{id}/census` - upload the census (xlsx/csv)
-- `POST /cases/{id}/benefits` - upload the existing/incumbent table of benefits (xlsx/csv/pdf)
+- `POST /cases/{id}/benefits` - upload the existing/incumbent table of benefits (xlsx/csv/pdf); `?mode=append` adds one category's file without replacing the others (default `mode=replace`)
 - `POST /cases/{id}/quote` - upload a new insurer's quotation for comparison (pdf)
 - `POST /cases/{id}/claims` - upload claims history (xlsx/csv, optional)
 - `POST /cases/{id}/claims-ledger` - upload a raw per-claim-line claims ledger for an existing-business renewal (xlsx/csv)

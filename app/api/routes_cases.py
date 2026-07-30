@@ -1,6 +1,6 @@
 from typing import List, Union
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -83,7 +83,20 @@ def upload_census(case_id: int, file: UploadFile = File(...), db: Session = Depe
 
 
 @router.post("/{case_id}/benefits", response_model=List[schemas.BenefitPlanOut])
-def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_benefits(
+    case_id: int,
+    file: UploadFile = File(...),
+    mode: str = Query(
+        "replace",
+        description=(
+            "'replace' (default): this file is the WHOLE table of benefits - wipe out any "
+            "previously-uploaded existing-role plans first. 'append': this file covers only "
+            "ONE category (some insurers split each category into its own file) - keep other "
+            "categories' plans, only replacing a plan that shares this file's category letter."
+        ),
+    ),
+    db: Session = Depends(get_db),
+):
     case = _get_case_or_404(db, case_id)
     is_pdf = file.filename.lower().endswith(".pdf")
 
@@ -163,11 +176,26 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
     if not plans:
         raise HTTPException(status_code=400, detail="No benefit plans found in file")
 
-    # Replace, not accumulate - see the census upload for why. Only this
-    # case's EXISTING-role plans are replaced; a previously-uploaded quote
-    # (role="quoted", see /quote below) is untouched so the two can be
-    # compared side by side.
-    db.query(models.BenefitPlan).filter_by(case_id=case.id, role="existing").delete()
+    if mode == "append":
+        # One file per category (some insurers ship each category's table of
+        # benefits as its own separate document) - only replace a plan that
+        # shares this file's category letter, so uploading category B's file
+        # doesn't wipe out category A's plan uploaded a moment ago. A plan
+        # with no detected category can't be matched this way, so it's just
+        # added alongside whatever's already there.
+        categories_in_upload = {p.category for p in plans if p.category}
+        if categories_in_upload:
+            db.query(models.BenefitPlan).filter(
+                models.BenefitPlan.case_id == case.id,
+                models.BenefitPlan.role == "existing",
+                models.BenefitPlan.category.in_(categories_in_upload),
+            ).delete(synchronize_session=False)
+    else:
+        # Replace, not accumulate - see the census upload for why. Only this
+        # case's EXISTING-role plans are replaced; a previously-uploaded quote
+        # (role="quoted", see /quote below) is untouched so the two can be
+        # compared side by side.
+        db.query(models.BenefitPlan).filter_by(case_id=case.id, role="existing").delete()
 
     db.add_all(plans)
     db.commit()

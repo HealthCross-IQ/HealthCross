@@ -78,3 +78,92 @@ def test_benefits_upload_uses_cat_style_parser_before_text_fallback(client, monk
     assert body[0]["network_type"] == "MSH Platinum"
     assert body[0]["source_format"] == "pdf-cat-style"
     assert body[0]["standard_summary"]["annual_limit"] == "USD 1,000,000"
+
+
+def test_benefits_append_mode_keeps_other_categories_when_uploading_one_category_per_file(client, monkeypatch):
+    """Some insurers ship each category's table of benefits as its own
+    separate PDF rather than one combined document. mode=append must let a
+    second file's category be added alongside the first's, rather than the
+    default replace-everything behavior wiping category A out the moment
+    category B is uploaded.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {"SILVER - CAT A": {"category": "A", "network": "MSH Platinum", "annual_limit": 1_000_000.0}},
+    )
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("cat_a.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {"SILVER - CAT B": {"category": "B", "network": "MSH Gold", "annual_limit": 500_000.0}},
+    )
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("cat_b.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+    db = client.db_session_local()
+    existing_plans = db.query(routes_cases.models.BenefitPlan).filter_by(case_id=case_id, role="existing").all()
+    db.close()
+    assert {p.category for p in existing_plans} == {"A", "B"}
+
+
+def test_benefits_append_mode_replaces_only_the_reuploaded_category(client, monkeypatch):
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {"SILVER - CAT A": {"category": "A", "network": "MSH Platinum", "annual_limit": 1_000_000.0}},
+    )
+    client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("cat_a.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {"SILVER - CAT B": {"category": "B", "network": "MSH Gold", "annual_limit": 500_000.0}},
+    )
+    client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("cat_b.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+
+    # Corrected category A file, re-uploaded - should replace ONLY category A.
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {"SILVER - CAT A (corrected)": {"category": "A", "network": "MSH Platinum", "annual_limit": 1_200_000.0}},
+    )
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("cat_a_v2.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+
+    db = client.db_session_local()
+    existing_plans = db.query(routes_cases.models.BenefitPlan).filter_by(case_id=case_id, role="existing").all()
+    db.close()
+    plans = {p.category: p for p in existing_plans}
+    assert set(plans.keys()) == {"A", "B"}
+    assert plans["A"].plan_name == "SILVER - CAT A (corrected)"
