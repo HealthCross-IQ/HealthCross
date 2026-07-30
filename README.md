@@ -210,6 +210,15 @@ Interactive docs at `http://127.0.0.1:8000/docs`. Data persists to a local
 SQLite file (`underwriting.db`) by default; set `DATABASE_URL` to point
 elsewhere.
 
+On startup, `app/db_migrate.py` automatically adds any columns a model has
+gained since your database file was created (SQLAlchemy's `create_all()`
+only creates brand-new tables, it never alters an existing one - without
+this, updating the app while keeping your old `underwriting.db` would fail
+with "no such column" errors instead of just working). Existing case data
+is preserved; this isn't a substitute for a real migration tool on a
+multi-user/production database, but it's enough for a single-file SQLite
+dev database.
+
 Scanned (image-only) table-of-benefits PDFs need the `tesseract-ocr` system
 package too - `pip install` alone won't provide it:
 ```bash

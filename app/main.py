@@ -6,6 +6,7 @@ from fastapi.responses import FileResponse
 
 from app.api import routes_admin, routes_analysis, routes_cases, routes_feedback, routes_scoring
 from app.database import Base, SessionLocal, engine
+from app.db_migrate import auto_migrate_missing_columns
 from app.models import db_models as models
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -34,6 +35,7 @@ def _ensure_default_weight_set() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    auto_migrate_missing_columns(engine, Base)
     _ensure_default_weight_set()
     yield
 
