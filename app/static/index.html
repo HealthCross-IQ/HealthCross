@@ -870,6 +870,10 @@ async function loadLatestScorecard() {
           <tr><th>Maternity risk count</th><td>${sc.details.demographic.maternity_risk_count}</td></tr>
           <tr><th>Female spouse count</th><td>${sc.details.demographic.female_spouse_count}</td></tr>
           <tr><th>Infant count</th><td>${sc.details.demographic.infant_count}</td></tr>
+          <tr><th>Group size (employees)</th><td>${sc.details.demographic.group_size}</td></tr>
+          <tr><th>Group favorability discount</th><td>${(sc.details.demographic.group_favorability_discount*100).toFixed(1)}%</td></tr>
+          <tr><th>Small-group loading (&lt;50 employees)</th><td>${(sc.details.demographic.small_group_loading*100).toFixed(1)}%</td></tr>
+          <tr><th>Network tier score</th><td>${sc.details.network_tier_score ?? 'n/a'} <span style="color:#888">(0=cheapest network, 1=Platinum-tier)</span></td></tr>
           <tr><th>Claims loss ratio</th><td>${sc.details.claims_experience.loss_ratio ?? 'n/a'}</td></tr>
         </table>
       </div>

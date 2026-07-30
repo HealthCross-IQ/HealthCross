@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
+from app.reference.network_tiers import DEFAULT_NETWORK_TIER_SCORE, network_tier_score as _network_tier_score
 from app.scoring.rules.benefit_richness import benefit_richness_risk
 from app.scoring.rules.claims_experience import claims_experience_risk
 from app.scoring.rules.demographic import demographic_risk
@@ -14,6 +15,25 @@ class ScoringWeights:
     w_benefit_richness: float = 0.20
     w_industry: float = 0.15
     zone_multipliers: Optional[dict] = None
+    zone_maternity_multipliers: Optional[dict] = None
+    zone_network_multipliers: Optional[dict] = None
+
+
+def _case_network_tier_score(benefit_plans: List[dict]) -> float:
+    """Member-count-weighted blend of each existing-role plan's network tier
+    richness (see app/reference/network_tiers.py), so a case split across a
+    Platinum plan for most staff and a Standard plan for a few isn't scored
+    as if everyone were on one or the other.
+    """
+    weighted_total = 0.0
+    total_members = 0
+    for plan in benefit_plans:
+        weight = plan.get("member_count") or 1
+        weighted_total += _network_tier_score(plan.get("network_type")) * weight
+        total_members += weight
+    if total_members == 0:
+        return DEFAULT_NETWORK_TIER_SCORE
+    return weighted_total / total_members
 
 
 RISK_TIERS = [
@@ -44,7 +64,14 @@ def compute_scorecard(
     weights: ScoringWeights,
     estimated_annual_premium: Optional[float] = None,
 ) -> dict:
-    demo = demographic_risk(census, zone_multipliers=weights.zone_multipliers)
+    case_network_tier_score = _case_network_tier_score(benefit_plans)
+    demo = demographic_risk(
+        census,
+        zone_multipliers=weights.zone_multipliers,
+        zone_maternity_multipliers=weights.zone_maternity_multipliers,
+        zone_network_multipliers=weights.zone_network_multipliers,
+        network_tier_score=case_network_tier_score,
+    )
     benefits = benefit_richness_risk(benefit_plans)
     claims_exp = claims_experience_risk(claims, member_count=len(census), estimated_annual_premium=estimated_annual_premium)
     industry_score = industry_risk(industry)
@@ -78,12 +105,15 @@ def compute_scorecard(
             "benefit_richness": benefits,
             "claims_experience": claims_exp,
             "industry_multiplier": industry_score,
+            "network_tier_score": round(case_network_tier_score, 4),
             "weights_used": {
                 "demographic": weights.w_demographic,
                 "claims_experience": weights.w_claims_experience,
                 "benefit_richness": weights.w_benefit_richness,
                 "industry": weights.w_industry,
                 "zone_multipliers": weights.zone_multipliers,
+                "zone_maternity_multipliers": weights.zone_maternity_multipliers,
+                "zone_network_multipliers": weights.zone_network_multipliers,
             },
         },
     }

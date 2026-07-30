@@ -246,6 +246,18 @@ class ScoringWeightSet(Base):
     zone_3_europe_americas_multiplier = Column(Float, default=1.0)
     zone_4_other_multiplier = Column(Float, default=1.0)
 
+    # Learnable interaction effects: how much more/less a zone's maternity
+    # loading and a zone's exposure to expensive/broad network tiers should
+    # count, beyond the flat zone multipliers above. Same recalibration
+    # pattern - start neutral (1.0), tuned once enough outcomes accumulate.
+    zone_1_asia_maternity_multiplier = Column(Float, default=1.0)
+    zone_2_middle_east_maternity_multiplier = Column(Float, default=1.0)
+    zone_3_europe_americas_maternity_multiplier = Column(Float, default=1.0)
+
+    zone_1_asia_network_multiplier = Column(Float, default=1.0)
+    zone_2_middle_east_network_multiplier = Column(Float, default=1.0)
+    zone_3_europe_americas_network_multiplier = Column(Float, default=1.0)
+
     is_active = Column(Boolean, default=False)
     trained_sample_size = Column(Integer, default=0)
     training_metrics = Column(JSON, nullable=True)

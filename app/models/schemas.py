@@ -219,6 +219,12 @@ class WeightSetOut(BaseModel):
     zone_2_middle_east_multiplier: float
     zone_3_europe_americas_multiplier: float
     zone_4_other_multiplier: float
+    zone_1_asia_maternity_multiplier: float
+    zone_2_middle_east_maternity_multiplier: float
+    zone_3_europe_americas_maternity_multiplier: float
+    zone_1_asia_network_multiplier: float
+    zone_2_middle_east_network_multiplier: float
+    zone_3_europe_americas_network_multiplier: float
     is_active: bool
     trained_sample_size: int
     training_metrics: Optional[Dict[str, Any]] = None

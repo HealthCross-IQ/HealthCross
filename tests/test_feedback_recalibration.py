@@ -2,7 +2,13 @@ import random
 
 import pytest
 
-from app.feedback.recalibration import MIN_SAMPLE_SIZE, recalibrate_weights, recalibrate_zone_multipliers
+from app.feedback.recalibration import (
+    MIN_SAMPLE_SIZE,
+    recalibrate_weights,
+    recalibrate_zone_maternity_multipliers,
+    recalibrate_zone_multipliers,
+    recalibrate_zone_network_multipliers,
+)
 from app.reference.nationality_zones import ALL_ZONES
 
 CURRENT_WEIGHTS = {
@@ -95,3 +101,59 @@ def test_zone_recalibration_learns_a_riskier_zone():
 
     assert result["recalibrated"] is True
     assert result["multipliers"]["zone_2_middle_east"] > result["multipliers"]["zone_1_asia"]
+
+
+def test_zone_maternity_recalibration_refuses_with_too_few_samples():
+    samples = [{"zone_maternity_mix": {"zone_1_asia": 1.0}, "profitable": True} for _ in range(5)]
+    result = recalibrate_zone_maternity_multipliers(samples, CURRENT_ZONE_MULTIPLIERS)
+    assert result["recalibrated"] is False
+
+
+def test_zone_maternity_recalibration_learns_a_riskier_zones_maternity_exposure():
+    random.seed(11)
+    samples = []
+    for _ in range(200):
+        # Maternity exposure concentrated in zone_2 predicts unprofitability;
+        # the same zone's non-maternity headcount (not modeled here) would
+        # not carry the same signal - this is specifically the interaction.
+        zone_2_maternity_fraction = random.uniform(0.0, 0.6)
+        zone_maternity_mix = {
+            "zone_1_asia": 0.05,
+            "zone_2_middle_east": zone_2_maternity_fraction,
+            "zone_3_europe_americas": 0.05,
+        }
+        profitable = zone_2_maternity_fraction < 0.3
+        samples.append({"zone_maternity_mix": zone_maternity_mix, "profitable": profitable})
+
+    result = recalibrate_zone_maternity_multipliers(samples, CURRENT_ZONE_MULTIPLIERS)
+
+    assert result["recalibrated"] is True
+    assert result["multipliers"]["zone_2_middle_east"] > result["multipliers"]["zone_1_asia"]
+
+
+def test_zone_network_recalibration_refuses_with_too_few_samples():
+    samples = [{"zone_network_mix": {"zone_1_asia": 1.0}, "profitable": True} for _ in range(5)]
+    result = recalibrate_zone_network_multipliers(samples, CURRENT_ZONE_MULTIPLIERS)
+    assert result["recalibrated"] is False
+
+
+def test_zone_network_recalibration_learns_a_riskier_zone_network_combination():
+    random.seed(13)
+    samples = []
+    for _ in range(200):
+        # zone_3 members on a rich network predict unprofitability more than
+        # the same zone on a cheap network (zone_network_mix already bakes in
+        # the case's network_tier_score, so this is the zone x network signal).
+        zone_3_rich_network_fraction = random.uniform(0.0, 0.6)
+        zone_network_mix = {
+            "zone_1_asia": 0.05,
+            "zone_2_middle_east": 0.05,
+            "zone_3_europe_americas": zone_3_rich_network_fraction,
+        }
+        profitable = zone_3_rich_network_fraction < 0.3
+        samples.append({"zone_network_mix": zone_network_mix, "profitable": profitable})
+
+    result = recalibrate_zone_network_multipliers(samples, CURRENT_ZONE_MULTIPLIERS)
+
+    assert result["recalibrated"] is True
+    assert result["multipliers"]["zone_3_europe_americas"] > result["multipliers"]["zone_1_asia"]

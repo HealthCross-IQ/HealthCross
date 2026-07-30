@@ -15,6 +15,16 @@ Nationality-zone multipliers are passed in rather than hardcoded here: their
 direction/magnitude isn't asserted by policy, so they live on the active
 ScoringWeightSet and are tuned by the feedback/recalibration loop as real
 case outcomes accumulate (see app/feedback/recalibration.py).
+
+Two further interaction effects follow the exact same learned pattern rather
+than asserting a fixed judgment call:
+  - zone_maternity_multipliers: how much more (or less) a zone's maternity
+    exposure should count, on top of the flat MATERNITY_LOADING.
+  - zone_network_multipliers: how much more (or less) a zone matters when the
+    case's benefit plan sits on an expensive/broad network tier. Scaled by
+    network_tier_score (0-1, see app/reference/network_tiers.py) so a cheap
+    in-country network mutes the effect and a Platinum network amplifies it.
+Both start neutral (1.0) and are recalibrated from real outcomes.
 """
 from statistics import mean
 from typing import Dict, List, Optional
@@ -46,6 +56,14 @@ MALE_RATIO_DISCOUNT_CAP = 0.10
 MALE_RATIO_BASELINE = 0.5
 MAX_GROUP_FAVORABILITY_DISCOUNT = 0.20
 
+# A small group's claims pool is far less predictable than a large one - a
+# single bad claim swings the whole book. Below this headcount, a distinct
+# loading is layered on top of (not instead of) the size-discount above, so a
+# 5-employee group is priced up rather than merely missing out on the
+# large-group discount that a 500-employee group gets.
+SMALL_GROUP_THRESHOLD = 50
+SMALL_GROUP_LOADING_CAP = 0.15  # loading at the smallest group sizes, phasing out to 0 at the threshold
+
 
 def _age_band_multiplier(age: int) -> float:
     for low, high, multiplier in AGE_BANDS:
@@ -54,7 +72,13 @@ def _age_band_multiplier(age: int) -> float:
     return AGE_BANDS[-1][2]
 
 
-def _member_risk_multiplier(member: dict, zone_multipliers: Dict[str, float]) -> float:
+def _member_risk_multiplier(
+    member: dict,
+    zone_multipliers: Dict[str, float],
+    zone_maternity_multipliers: Optional[Dict[str, float]] = None,
+    zone_network_multipliers: Optional[Dict[str, float]] = None,
+    network_tier_score: float = 0.5,
+) -> float:
     age = member.get("age")
     gender = member.get("gender")
     marital_status = (member.get("marital_status") or "").lower()
@@ -70,14 +94,21 @@ def _member_risk_multiplier(member: dict, zone_multipliers: Dict[str, float]) ->
     elif relation == "employee" and gender == "M":
         multiplier *= MALE_EMPLOYEE_DISCOUNT
 
+    zone = member.get("nationality_zone") or ZONE_MIDDLE_EAST
+
     if gender == "F":
         if relation == "spouse":
             multiplier *= SPOUSE_FEMALE_LOADING
         if marital_status == "married" and age is not None and MATERNITY_AGE_MIN <= age <= MATERNITY_AGE_MAX:
             multiplier *= MATERNITY_LOADING
+            if zone_maternity_multipliers:
+                multiplier *= zone_maternity_multipliers.get(zone, 1.0)
 
-    zone = member.get("nationality_zone") or ZONE_MIDDLE_EAST
     multiplier *= zone_multipliers.get(zone, 1.0)
+
+    if zone_network_multipliers:
+        network_zone_multiplier = zone_network_multipliers.get(zone, 1.0)
+        multiplier *= 1 + (network_zone_multiplier - 1) * network_tier_score
 
     return multiplier
 
@@ -85,13 +116,25 @@ def _member_risk_multiplier(member: dict, zone_multipliers: Dict[str, float]) ->
 def demographic_risk(
     census: List[dict],
     zone_multipliers: Optional[Dict[str, float]] = None,
+    zone_maternity_multipliers: Optional[Dict[str, float]] = None,
+    zone_network_multipliers: Optional[Dict[str, float]] = None,
+    network_tier_score: float = 0.5,
 ) -> dict:
     if not census:
         return {"score": 1.0, "group_size": 0}
 
     zone_multipliers = zone_multipliers or {zone: 1.0 for zone in ALL_ZONES}
 
-    per_member_multipliers = [_member_risk_multiplier(m, zone_multipliers) for m in census]
+    per_member_multipliers = [
+        _member_risk_multiplier(
+            m,
+            zone_multipliers,
+            zone_maternity_multipliers=zone_maternity_multipliers,
+            zone_network_multipliers=zone_network_multipliers,
+            network_tier_score=network_tier_score,
+        )
+        for m in census
+    ]
     avg_member_risk = mean(per_member_multipliers)
 
     employees = [m for m in census if (m.get("relation") or "").lower() == "employee"]
@@ -106,7 +149,9 @@ def demographic_risk(
     )
     group_favorability_discount = min(MAX_GROUP_FAVORABILITY_DISCOUNT, size_discount + male_ratio_discount)
 
-    score = avg_member_risk * (1 - group_favorability_discount)
+    small_group_loading = SMALL_GROUP_LOADING_CAP * max(0.0, (SMALL_GROUP_THRESHOLD - group_size) / SMALL_GROUP_THRESHOLD)
+
+    score = avg_member_risk * (1 - group_favorability_discount) * (1 + small_group_loading)
 
     ages = [m["age"] for m in census if m.get("age") is not None]
     infants = sum(1 for m in census if (m.get("relation") or "").lower() == "child" and (m.get("age") or 0) <= INFANT_AGE_MAX)
@@ -124,13 +169,27 @@ def demographic_risk(
     female_spouse_count = sum(1 for m in census if (m.get("relation") or "").lower() == "spouse" and m.get("gender") == "F")
 
     zone_counts = {zone: 0 for zone in ALL_ZONES}
+    zone_maternity_counts = {zone: 0 for zone in ALL_ZONES}
     for m in census:
         # Anything not one of the current zones (missing, or a zone from
         # before the 4th zone was folded away) counts toward Middle East
         # rather than raising - see nationality_zones.py.
         zone = m.get("nationality_zone")
-        zone_counts[zone if zone in zone_counts else ZONE_MIDDLE_EAST] += 1
+        resolved_zone = zone if zone in zone_counts else ZONE_MIDDLE_EAST
+        zone_counts[resolved_zone] += 1
+        if (
+            m.get("gender") == "F"
+            and (m.get("marital_status") or "").lower() == "married"
+            and m.get("age") is not None
+            and MATERNITY_AGE_MIN <= m["age"] <= MATERNITY_AGE_MAX
+        ):
+            zone_maternity_counts[resolved_zone] += 1
     zone_mix = {zone: round(count / len(census), 4) for zone, count in zone_counts.items()}
+    # Fraction of the WHOLE census (not just maternity-risk members) that is
+    # both maternity-risk and in each zone - lets recalibration learn whether
+    # a zone's maternity exposure specifically predicts profitability,
+    # distinct from that zone's plain headcount (zone_mix above).
+    zone_maternity_mix = {zone: round(count / len(census), 4) for zone, count in zone_maternity_counts.items()}
 
     return {
         "score": round(score, 4),
@@ -139,9 +198,11 @@ def demographic_risk(
         "avg_age": round(mean(ages), 1) if ages else None,
         "male_ratio_employees": round(male_ratio, 3),
         "group_favorability_discount": round(group_favorability_discount, 4),
+        "small_group_loading": round(small_group_loading, 4),
         "infant_count": infants,
         "favorable_children_count": favorable_children,
         "maternity_risk_count": maternity_risk_count,
         "female_spouse_count": female_spouse_count,
         "nationality_zone_mix": zone_mix,
+        "zone_maternity_mix": zone_maternity_mix,
     }

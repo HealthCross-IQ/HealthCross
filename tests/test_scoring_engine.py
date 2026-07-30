@@ -74,6 +74,22 @@ def test_industry_risk_influences_score():
     assert high_risk_industry["composite_score"] > low_risk_industry["composite_score"]
 
 
+def test_zone_network_multiplier_scales_with_case_network_tier():
+    weights_loaded = ScoringWeights(zone_network_multipliers={"zone_2_middle_east": 1.5})
+    census = [
+        {"age": 30, "gender": "M", "marital_status": "single", "relation": "employee", "nationality_zone": "zone_2_middle_east"}
+    ]
+
+    cheap_plan = _plan(network_type="Essential", member_count=1)
+    rich_plan = _plan(network_type="MSH Platinum", member_count=1)
+
+    cheap_result = compute_scorecard(census, [cheap_plan], [], "technology", weights_loaded)
+    rich_result = compute_scorecard(census, [rich_plan], [], "technology", weights_loaded)
+
+    assert rich_result["details"]["network_tier_score"] > cheap_result["details"]["network_tier_score"]
+    assert rich_result["demographic_risk"] > cheap_result["demographic_risk"]
+
+
 def test_score_within_bounds_and_has_tier():
     weights = ScoringWeights()
     census = _census()

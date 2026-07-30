@@ -41,7 +41,16 @@ they were specified directly:
   effect below.
 - **Group favorability**: a larger group, and a higher male ratio among
   employees, both discount the composite score (a bigger, male-skewed group
-  is a "good account").
+  is a "good account"). This is a continuous discount, capped at 10% and
+  reached at 500 employees (`GROUP_SIZE_SCALE`).
+- **Small-group loading**: below 50 employees (`SMALL_GROUP_THRESHOLD`), a
+  distinct loading is layered on *top* of (not instead of) the discount
+  above - a small group's claims pool is far less predictable than a large
+  one, so a 5-employee group should be priced up, not just miss out on the
+  large-group discount. The loading phases linearly from 15%
+  (`SMALL_GROUP_LOADING_CAP`) at the smallest sizes down to 0% at 50
+  employees; at 50+ employees only the group-favorability discount above
+  applies.
 
 All of these constants live at the top of `demographic.py`, named and
 documented, specifically so they're easy for an underwriter to tune without
@@ -68,24 +77,63 @@ more risk or by how much. So each zone's multiplier starts neutral (1.0) on
 the `ScoringWeightSet` and is the main thing the feedback loop is meant to
 *learn* as real outcomes accumulate - see below.
 
+### Zone interaction effects (also learned, not asserted)
+
+Real-world underwriting intuition ("married Arab women on a Platinum network
+are higher risk"; "Europeans/Americans have babies later, in their 30s,
+vs. mid-20s in the Middle East") is exactly the kind of pattern this system
+is built to *confirm from outcomes* rather than bake in as a fixed rule -
+the same philosophy as the zone multipliers above, extended to two
+interaction effects:
+
+- **Zone x maternity** (`zone_*_maternity_multiplier` on `ScoringWeightSet`):
+  an extra multiplier applied only to members who already trigger the flat
+  `MATERNITY_LOADING` (married female, 18-40), scaled by their nationality
+  zone. Lets the model learn if e.g. Zone 2 (Middle East) maternity exposure
+  carries materially different risk than Zone 3 (Europe/Americas) maternity
+  exposure, rather than assuming they're equal.
+- **Zone x network tier** (`zone_*_network_multiplier` on
+  `ScoringWeightSet`): an extra multiplier applied to every member of a
+  zone, scaled by how rich/expensive the case's benefit plan network is.
+  `app/reference/network_tiers.py` maps a free-text network name (e.g.
+  "MSH Platinum", "Comprehensive+", "Essential") to a 0-1 richness score by
+  keyword match - deliberately separate from `benefit_richness.py`'s own
+  `NETWORK_MULTIPLIER`, which only recognizes the 3 canonical
+  in_country/regional/worldwide values set by the generic spreadsheet
+  parser, not real insurer marketing tier names. `compute_scorecard()`
+  blends this per-plan score, weighted by member count, into a single
+  case-level `network_tier_score` and applies it as
+  `1 + (zone_network_multiplier - 1) * network_tier_score` - so on a cheap
+  network the effect is muted toward neutral, and on a Platinum-tier
+  network it applies in full.
+
+Both sets of multipliers start neutral (1.0) and are recalibrated the same
+way as the plain zone multipliers - see below.
+
 ## The feedback / learning loop
 
 1. `POST /cases/{id}/outcome` records what actually happened to a scored
    case: was it bound, what was the final premium, and (once known) the
    actual loss ratio. A loss ratio at or below 85% is labeled "profitable".
-2. `POST /admin/recalibrate` (`app/feedback/recalibration.py`) fits two
+2. `POST /admin/recalibrate` (`app/feedback/recalibration.py`) fits four
    logistic regressions against all recorded outcomes:
    - one over the four component risk scores, to re-weight
      demographic/claims/benefits/industry importance;
    - one over each case's nationality-zone mix, to nudge the zone
-     multipliers toward whichever zones actually predict profitability.
+     multipliers toward whichever zones actually predict profitability;
+   - one over each case's zone-maternity mix (fraction of members who are
+     both maternity-risk and in each zone), to nudge the zone-maternity
+     interaction multipliers;
+   - one over each case's zone-network mix (each zone's fraction of members
+     times the case's `network_tier_score`), to nudge the zone-network
+     interaction multipliers.
 
-   Both require at least 20 outcomes with both profitable and unprofitable
-   examples, and cap how far a single run can move any parameter (15% for
-   weights, 10% for zone multipliers) so one batch of outcomes can't
-   whipsaw the scorecard. Every recalibration creates a new, versioned
-   `ScoringWeightSet` - nothing is overwritten, so you can always see (or
-   revert to) what the model looked like before.
+   All four require at least 20 outcomes with both profitable and
+   unprofitable examples, and cap how far a single run can move any
+   parameter (15% for weights, 10% for zone-family multipliers) so one
+   batch of outcomes can't whipsaw the scorecard. Every recalibration
+   creates a new, versioned `ScoringWeightSet` - nothing is overwritten, so
+   you can always see (or revert to) what the model looked like before.
 
 ## Standing analysis standards
 

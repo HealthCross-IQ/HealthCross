@@ -86,6 +86,16 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
             "zone_3_europe_americas": weight_set.zone_3_europe_americas_multiplier,
             "zone_4_other": weight_set.zone_4_other_multiplier,
         },
+        zone_maternity_multipliers={
+            "zone_1_asia": weight_set.zone_1_asia_maternity_multiplier,
+            "zone_2_middle_east": weight_set.zone_2_middle_east_maternity_multiplier,
+            "zone_3_europe_americas": weight_set.zone_3_europe_americas_maternity_multiplier,
+        },
+        zone_network_multipliers={
+            "zone_1_asia": weight_set.zone_1_asia_network_multiplier,
+            "zone_2_middle_east": weight_set.zone_2_middle_east_network_multiplier,
+            "zone_3_europe_americas": weight_set.zone_3_europe_americas_network_multiplier,
+        },
     )
 
     result = compute_scorecard(

@@ -11,6 +11,10 @@ of outcomes can't whipsaw the scorecard):
    the primary thing this system is meant to *learn* rather than assert -
    via logistic regression of each case's zone-mix fractions against the
    same profitability outcome.
+3. Two zone interaction effects, same neutral-start/learned-not-asserted
+   pattern: zone x maternity-exposure, and zone x network-tier richness
+   (e.g. "married Arab women on a Platinum network are higher risk" is a
+   hypothesis to be confirmed from outcomes, not hardcoded).
 """
 from typing import Dict, List
 
@@ -80,8 +84,7 @@ def recalibrate_weights(samples: List[dict], current_weights: Dict[str, float]) 
     }
 
 
-def recalibrate_zone_multipliers(samples: List[dict], current_multipliers: Dict[str, float]) -> dict:
-    """samples: [{zone_mix: {zone: fraction, ...}, profitable}]"""
+def _recalibrate_zone_interaction(samples: List[dict], current_multipliers: Dict[str, float], mix_key: str) -> dict:
     if len(samples) < MIN_SAMPLE_SIZE:
         return {
             "recalibrated": False,
@@ -89,7 +92,7 @@ def recalibrate_zone_multipliers(samples: List[dict], current_multipliers: Dict[
             "multipliers": current_multipliers,
         }
 
-    X = np.array([[s["zone_mix"].get(zone, 0.0) for zone in ALL_ZONES] for s in samples])
+    X = np.array([[s[mix_key].get(zone, 0.0) for zone in ALL_ZONES] for s in samples])
     y = np.array([1 if s["profitable"] else 0 for s in samples])
 
     model = _fit_profitability_model(X, y)
@@ -120,3 +123,27 @@ def recalibrate_zone_multipliers(samples: List[dict], current_multipliers: Dict[
         "multipliers": new_multipliers,
         "metrics": {"train_accuracy": round(model.score(X, y), 4), "sample_size": len(samples)},
     }
+
+
+def recalibrate_zone_multipliers(samples: List[dict], current_multipliers: Dict[str, float]) -> dict:
+    """samples: [{zone_mix: {zone: fraction, ...}, profitable}]"""
+    return _recalibrate_zone_interaction(samples, current_multipliers, "zone_mix")
+
+
+def recalibrate_zone_maternity_multipliers(samples: List[dict], current_multipliers: Dict[str, float]) -> dict:
+    """samples: [{zone_maternity_mix: {zone: fraction of members who are BOTH
+    maternity-risk and in that zone, ...}, profitable}]. Learns whether a
+    zone's maternity exposure specifically (not just its overall headcount)
+    predicts profitability - e.g. the user's observation that maternity
+    utilization patterns differ by nationality zone.
+    """
+    return _recalibrate_zone_interaction(samples, current_multipliers, "zone_maternity_mix")
+
+
+def recalibrate_zone_network_multipliers(samples: List[dict], current_multipliers: Dict[str, float]) -> dict:
+    """samples: [{zone_network_mix: {zone: fraction-of-members-in-zone times
+    the case's network_tier_score, ...}, profitable}]. Learns whether a
+    zone's presence on a rich/expensive network (e.g. MSH Platinum) predicts
+    profitability differently than the same zone on a cheap network.
+    """
+    return _recalibrate_zone_interaction(samples, current_multipliers, "zone_network_mix")
