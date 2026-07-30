@@ -317,19 +317,44 @@ spreadsheet parsers:
     vs "Annual Optical Cover") - each standard field's anchor is a list of
     known wordings, tried in order, not a single fixed string. Stored as
     `source_format="pdf-cat-style"`.
-  - **Fallback 2 - a plain text scan** - a real (non-scanned) PDF whose
+  - **Fallback 2 - the "labeled 3-column row" layout, one category per FILE**
+    (`app/ingestion/labeled_row_benefits_pdf.py`'s
+    `parse_labeled_row_benefits_pdf()`) - targets a third real document
+    family (seen on MaxHealth/MaxMed's "MAXMED Neuron &lt;TIER&gt; GROUP"
+    documents) where the whole file describes only ONE category, laid out
+    as a bordered Benefit label / Value / Clarification table under
+    full-width section-banner rows ("INPATIENT BENEFIT", "DENTAL", ...)
+    that carry no data of their own. `find_tables()`'s own rows are really
+    just the VALUE column's ruling - the label/description text often wraps
+    across more than one such row with no ruling of its own (e.g. a real
+    "Chiropractic, Ayurveda, Homeopathy, / Osteopathy & Acupuncture" label
+    split across two rows, with its "AED 3,000" limit only appearing on the
+    second) - so every word on the page is bucketed into a column/row cell
+    by its own vertical midpoint rather than trusting pdfplumber's row
+    grouping (which either drops or duplicates wrapped text right at a row
+    boundary), and a row with no value is folded forward into whichever
+    later row supplies one. The category letter isn't stated in the
+    document body at all here (only a member-count band is, under a
+    same-named but unrelated "CATEGORY" heading) - it's parsed from the
+    filename instead (e.g. `..._Category_A_1.pdf`), which is also exactly
+    why `mode=append` (see below) matters most for this format: each
+    category is a genuinely separate file with no shared parent document.
+    Returns `None` (not just an empty result) when a file isn't this layout
+    at all, so `/benefits` falls through cleanly to the next fallback.
+    Stored as `source_format="pdf-labeled-row"`.
+  - **Fallback 3 - a plain text scan** - a real (non-scanned) PDF whose
     tiers are laid out with whitespace alignment rather than actual table
     lines (seen on a real Sukoon "renewal" TOB with 4 categories) leaves
-    `find_tables()` with nothing usable under either table-based parser
-    above. `parse_benefits_pdf_text_fallback()` reuses the OCR module's
+    `find_tables()` with nothing usable under any table-based parser above.
+    `parse_benefits_pdf_text_fallback()` reuses the OCR module's
     label-anchored nearby-value scan (`build_ocr_benefit_summary`) against
     this PDF's real extracted text instead of an OCR'd image - the same
     "report every candidate value with a verify note" behavior applies,
     since a flat text stream can't reveal which of several per-category
     values belongs to which category once the table structure is lost.
-    `/benefits` tries the bordered-table parser first, then the CAT-style
-    parser, and only falls back here if both find zero tier tables,
-    storing the result as `source_format="pdf-text-fallback"`.
+    `/benefits` tries the bordered-table parser, then the CAT-style parser,
+    then the labeled-row parser, and only falls back here if all three
+    find nothing, storing the result as `source_format="pdf-text-fallback"`.
 - **Scanned (image-only) table of benefits** (`app/ingestion/benefits_ocr.py`) -
   when a PDF has no extractable text at all (a raster scan, not a real PDF
   table), `/benefits` automatically falls back to OCR (pdfplumber renders

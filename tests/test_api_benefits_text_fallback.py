@@ -13,6 +13,7 @@ def test_benefits_upload_falls_back_to_text_scan_when_no_tier_table_found(client
     monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
     monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
     monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
     monkeypatch.setattr(
         routes_cases,
         "parse_benefits_pdf_text_fallback",
