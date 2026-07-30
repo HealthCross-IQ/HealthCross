@@ -8,6 +8,7 @@ from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
 from app.scoring.rules.benefits_summary import build_standard_benefit_summary
+from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.claims_projection import project_annual_claims
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -104,6 +105,31 @@ def get_diagnosis_exposure(case_id: int, db: Session = Depends(get_db)):
         )
     rows.sort(key=lambda r: r["value"], reverse=True)
     return rows
+
+
+@router.get("/{case_id}/census-summary")
+def get_census_summary(case_id: int, db: Session = Depends(get_db)):
+    """Plain demographic breakdown of the uploaded census - age bands,
+    gender, marital status, relation, and nationality-zone mix - as counts
+    and percentages (see app/scoring/rules/census_summary.py). This is the
+    underwriter-facing "what does this group look like" view, distinct from
+    the risk-scoring engine's demographic multiplier.
+    """
+    case = _get_case_or_404(db, case_id)
+    if not case.census_records:
+        raise HTTPException(status_code=404, detail="No census uploaded for this case")
+
+    census = [
+        {
+            "age": c.age,
+            "gender": c.gender,
+            "marital_status": c.marital_status,
+            "relation": c.relation,
+            "nationality_zone": c.nationality_zone,
+        }
+        for c in case.census_records
+    ]
+    return census_demographic_summary(census)
 
 
 @router.get("/{case_id}/benefits-summary")

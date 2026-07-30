@@ -331,6 +331,7 @@ function renderCaseWorkspace() {
       </div>
     </div>
 
+    <div id="census-summary-area"></div>
     <div id="benefits-summary-area"></div>
     <div id="claims-projection-area"></div>
     <div id="diagnosis-exposure-area"></div>
@@ -364,6 +365,7 @@ function renderCaseWorkspace() {
     </div>
   `;
   loadLatestScorecard();
+  loadCensusSummary();
   loadBenefitsSummary();
   loadClaimsProjection();
   loadDiagnosisExposure();
@@ -389,12 +391,67 @@ async function uploadFile(kind) {
       toast(`${kind} report parsed`);
     }
     statusEl.className = 'status-ok';
+    if (kind === 'census') await loadCensusSummary();
     if (kind === 'benefits') await loadBenefitsSummary();
     if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadDiagnosisExposure(); }
   } catch (err) {
     statusEl.textContent = 'Failed';
     statusEl.className = 'status-err';
     toast(err.message, true);
+  }
+}
+
+function _pctTable(counts, pct) {
+  return Object.keys(counts).map(k => `
+    <tr><th>${escapeHtml(k)}</th><td>${counts[k]}</td><td>${(pct[k] * 100).toFixed(1)}%</td></tr>
+  `).join('');
+}
+
+async function loadCensusSummary() {
+  const area = document.getElementById('census-summary-area');
+  try {
+    const s = await api(`/cases/${currentCase.id}/census-summary`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Census demographic breakdown</h3>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">Total members</span><span class="value">${s.total_members}</span></div>
+          <div class="kpi"><span class="label">Average age</span><span class="value">${s.avg_age ?? '-'}</span></div>
+          <div class="kpi"><span class="label">Married female</span><span class="value">${s.married_female_count} (${(s.married_female_pct*100).toFixed(1)}%)</span></div>
+          <div class="kpi"><span class="label">Maternity risk (married F, 18-40)</span><span class="value">${s.maternity_risk_count} (${(s.maternity_risk_pct*100).toFixed(1)}%)</span></div>
+          <div class="kpi"><span class="label">Male ratio (employees)</span><span class="value">${s.male_ratio_employees != null ? (s.male_ratio_employees*100).toFixed(1)+'%' : '-'}</span></div>
+          <div class="kpi"><span class="label">Infants (&le;1yr)</span><span class="value">${s.infant_count}</span></div>
+          <div class="kpi"><span class="label">Favorable children (&gt;1yr)</span><span class="value">${s.favorable_children_count}</span></div>
+          <div class="kpi"><span class="label">Female spouses</span><span class="value">${s.female_spouse_count}</span></div>
+        </div>
+        <div class="row" style="margin-top:16px;">
+          <table>
+            <tr><th>Age band</th><th>Count</th><th>%</th></tr>
+            ${_pctTable(s.age_band_counts, s.age_band_pct)}
+          </table>
+          <table>
+            <tr><th>Gender</th><th>Count</th><th>%</th></tr>
+            ${_pctTable(s.gender_counts, s.gender_pct)}
+          </table>
+        </div>
+        <div class="row" style="margin-top:16px;">
+          <table>
+            <tr><th>Relationship</th><th>Count</th><th>%</th></tr>
+            ${_pctTable(s.relation_counts, s.relation_pct)}
+          </table>
+          <table>
+            <tr><th>Marital status</th><th>Count</th><th>%</th></tr>
+            ${_pctTable(s.marital_status_counts, s.marital_status_pct)}
+          </table>
+        </div>
+        <table style="margin-top:16px;">
+          <tr><th>Nationality zone</th><th>Count</th><th>%</th></tr>
+          ${_pctTable(s.nationality_zone_counts, s.nationality_zone_pct)}
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
   }
 }
 
