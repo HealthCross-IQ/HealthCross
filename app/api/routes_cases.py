@@ -16,7 +16,7 @@ from app.ingestion.claims import parse_claims
 from app.ingestion.claims_ledger import parse_claims_ledger
 from app.ingestion.claims_report import parse_claims_report
 from app.ingestion.plan_details import parse_plan_details
-from app.ingestion.quote_pdf import parse_quote_pdf
+from app.ingestion.quote_pdf import parse_benefit_tables_only, parse_quote_pdf
 from app.models import db_models as models
 from app.models import schemas
 
@@ -107,26 +107,54 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
                     for tier, summary in tier_summaries.items()
                 ]
             else:
-                # Real extractable text, but no bordered table recognizable
-                # as a tier table (e.g. a layout that uses whitespace
-                # alignment rather than actual table lines) - fall back to
-                # the same label-anchored nearby-value scan used for
-                # scanned/OCR'd PDFs, just against this PDF's real text
-                # instead of an OCR'd image (see
-                # app/ingestion/benefits_pdf.py's
-                # parse_benefits_pdf_text_fallback for why this is safer
-                # than a second bespoke table parser here).
+                # No Bupa/Sukoon-style bordered tier table found - try the
+                # QIC/HealthCROSS Global "Plan - CAT X" layout instead (the
+                # same one app/ingestion/quote_pdf.py handles for a NEW
+                # quote), since an existing/incumbent benefits document from
+                # that same insurer family uses this layout too, just with
+                # different row-label wording and no premium table.
                 file.file.seek(0)
-                fallback_result = parse_benefits_pdf_text_fallback(file.file, file.filename)
-                plans = [
-                    models.BenefitPlan(
-                        case_id=case.id,
-                        plan_name="Text extract (verify against source - table structure not recognized)",
-                        source_format="pdf-text-fallback",
-                        standard_summary=fallback_result["summary"],
-                        raw_ocr_text=fallback_result["raw_text"],
-                    )
-                ]
+                cat_style_plans = parse_benefit_tables_only(file.file, file.filename)
+                if cat_style_plans:
+                    plans = [
+                        models.BenefitPlan(
+                            case_id=case.id,
+                            plan_name=tier_header,
+                            category=entry.get("category"),
+                            network_type=entry.get("network"),
+                            annual_limit=entry.get("annual_limit"),
+                            maternity_limit=entry.get("maternity_limit"),
+                            maternity_covered=entry.get("maternity_limit") is not None,
+                            dental_covered=entry.get("dental_covered", False),
+                            optical_covered=entry.get("optical_covered", False),
+                            pre_existing_covered=entry.get("pre_existing_covered", False),
+                            chronic_covered=entry.get("chronic_covered", False),
+                            source_format="pdf-cat-style",
+                            standard_summary=entry.get("standard_summary"),
+                        )
+                        for tier_header, entry in cat_style_plans.items()
+                    ]
+                else:
+                    # Real extractable text, but no bordered table
+                    # recognizable as a tier table at all (e.g. a layout
+                    # that uses whitespace alignment rather than actual
+                    # table lines) - fall back to the same label-anchored
+                    # nearby-value scan used for scanned/OCR'd PDFs, just
+                    # against this PDF's real text instead of an OCR'd
+                    # image (see app/ingestion/benefits_pdf.py's
+                    # parse_benefits_pdf_text_fallback for why this is
+                    # safer than a third bespoke table parser here).
+                    file.file.seek(0)
+                    fallback_result = parse_benefits_pdf_text_fallback(file.file, file.filename)
+                    plans = [
+                        models.BenefitPlan(
+                            case_id=case.id,
+                            plan_name="Text extract (verify against source - table structure not recognized)",
+                            source_format="pdf-text-fallback",
+                            standard_summary=fallback_result["summary"],
+                            raw_ocr_text=fallback_result["raw_text"],
+                        )
+                    ]
         else:
             parsed = parse_table_of_benefits(file.file, file.filename)
             plans = [models.BenefitPlan(case_id=case.id, source_format=file.filename.rsplit(".", 1)[-1].lower(), **row) for row in parsed]

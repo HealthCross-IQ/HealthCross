@@ -12,6 +12,7 @@ def test_benefits_upload_falls_back_to_text_scan_when_no_tier_table_found(client
     """
     monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
     monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
     monkeypatch.setattr(
         routes_cases,
         "parse_benefits_pdf_text_fallback",
@@ -34,3 +35,46 @@ def test_benefits_upload_falls_back_to_text_scan_when_no_tier_table_found(client
     assert body[0]["source_format"] == "pdf-text-fallback"
     assert "multiple values found" in body[0]["standard_summary"]["annual_limit"]
     assert body[0]["raw_ocr_text"].startswith("--- page 1 ---")
+
+
+def test_benefits_upload_uses_cat_style_parser_before_text_fallback(client, monkeypatch):
+    """A real existing-benefits document from the QIC/HealthCROSS Global
+    family (label-as-first-column, "CAT <letter>" tier headers, no premium
+    table) must be parsed properly via parse_benefit_tables_only rather
+    than falling all the way through to the much less precise text scan.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefit_tables_only",
+        lambda file, filename: {
+            "SILVER - CAT A": {
+                "category": "A",
+                "network": "MSH Platinum",
+                "annual_limit": 1_000_000.0,
+                "maternity_limit": 6_800.0,
+                "dental_covered": False,
+                "optical_covered": True,
+                "pre_existing_covered": True,
+                "chronic_covered": True,
+                "standard_summary": {"annual_limit": "USD 1,000,000", "optical": "USD 300"},
+            }
+        },
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    resp = client.post(
+        f"/cases/{case_id}/benefits",
+        files={"file": ("existing_tob.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["plan_name"] == "SILVER - CAT A"
+    assert body[0]["category"] == "A"
+    assert body[0]["network_type"] == "MSH Platinum"
+    assert body[0]["source_format"] == "pdf-cat-style"
+    assert body[0]["standard_summary"]["annual_limit"] == "USD 1,000,000"
