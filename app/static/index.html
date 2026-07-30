@@ -424,6 +424,18 @@ function _pctTable(counts, pct) {
   `).join('');
 }
 
+function _pctTableWithGender(counts, pct, genderCounts) {
+  return Object.keys(counts).map(k => `
+    <tr>
+      <th>${escapeHtml(k)}</th>
+      <td>${genderCounts[k] ? genderCounts[k].M : 0}</td>
+      <td>${genderCounts[k] ? genderCounts[k].F : 0}</td>
+      <td>${counts[k]}</td>
+      <td>${(pct[k] * 100).toFixed(1)}%</td>
+    </tr>
+  `).join('');
+}
+
 async function loadCensusSummary() {
   const area = document.getElementById('census-summary-area');
   try {
@@ -461,12 +473,12 @@ async function loadCensusSummary() {
         </div>
         <div class="row" style="margin-top:16px;">
           <table>
-            <tr><th>Relationship</th><th>Count</th><th>%</th></tr>
-            ${_pctTable(s.relation_counts, s.relation_pct)}
+            <tr><th>Relationship</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+            ${_pctTableWithGender(s.relation_counts, s.relation_pct, s.relation_gender_counts)}
           </table>
           <table>
-            <tr><th>Marital status</th><th>Count</th><th>%</th></tr>
-            ${_pctTable(s.marital_status_counts, s.marital_status_pct)}
+            <tr><th>Marital status</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+            ${_pctTableWithGender(s.marital_status_counts, s.marital_status_pct, s.marital_status_gender_counts)}
           </table>
         </div>
         <table style="margin-top:16px;">
