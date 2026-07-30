@@ -141,12 +141,13 @@ These are the fixed defaults for reviewing a submission - every case is
 analyzed on its own terms and not benchmarked against other cases.
 
 **Table of benefits summary** (`app/scoring/rules/benefits_summary.py`) - any
-plan, from any insurer, gets summarized in the same fixed 10-field layout:
+plan, from any insurer, gets summarized in the same fixed 11-field layout:
 Area of Cover, Annual Limit, Deductible, Pre-existing & Chronic Limit,
 Maternity Limit, Dental, Optical, Coinsurance, Alternative/Complementary
-Treatment, Pharmacy Limit & Coinsurance. A field the source document doesn't
-specify is shown as "Not specified" rather than silently dropped.
-`GET /cases/{id}/benefits-summary` renders this for every uploaded plan/tier.
+Treatment, Pharmacy Limit & Coinsurance, Health Screening/Wellness Package.
+A field the source document doesn't specify is shown as "Not specified"
+rather than silently dropped. `GET /cases/{id}/benefits-summary` renders
+this for every uploaded plan/tier.
 
 **Quote vs. existing-plan comparison** - a case can hold both the existing/
 incumbent table of benefits (uploaded via `/benefits`) and a new insurer's
@@ -161,11 +162,13 @@ benchmarking the standing standards above deliberately avoid.
   series of tables where the benefit label is the table's own first
   column and the remaining columns are one per quoted category.
 - `app/scoring/rules/benefits_comparison.py` compares the two plans'
-  standard 10-field summaries, plus network. A numeric direction
+  standard 11-field summaries, plus network. A numeric direction
   (Improved/Reduced/Same, with a % change) is only given when both sides
   parse as a currency amount - USD converts to AED at the fixed 3.6725
   peg. Anything that doesn't parse this way (including network, which is
-  never a currency amount) is flagged "Review" rather than guessed.
+  never a currency amount) is flagged "Review" rather than guessed. In the
+  UI, the quoted side of this comparison is labeled "HealthCross Quote"
+  rather than the generic "Quoted".
 - `GET /cases/{id}/premium-by-category` - members, network, gross premium,
   and premium/member for each quoted category, plus a blended total.
 - `GET /cases/{id}/benefits-comparison` - the existing vs. quoted plans,
@@ -322,7 +325,7 @@ spreadsheet parsers:
   `find_tables()` + row bounding boxes) - a positional technique, not
   fragile text-matching, so it holds up as long as the same
   label-column-next-to-bordered-table layout is used, regardless of tier
-  names or insurer. Produces the standard 10-field summary directly, for
+  names or insurer. Produces the standard 11-field summary directly, for
   every tier found, in one pass.
   - **Fallback 1 - the QIC/HealthCROSS Global "Plan - CAT X" layout**
     (`app/ingestion/quote_pdf.py`'s `parse_benefit_tables_only()`) - the
@@ -391,6 +394,20 @@ spreadsheet parsers:
   itself to PATH, so `app/ingestion/benefits_ocr.py` also checks Tesseract's
   own default install directories automatically before giving up; an
   atypical install location can be pointed to with a `TESSERACT_CMD` env var.
+  Each standard field's nearby-value scan only recognized a currency amount
+  or a bare Covered/Not Covered flag - a field whose real value is
+  descriptive free text (e.g. area of cover's "Worldwide Exc (USA)") found
+  nothing at all and always showed "Not specified", and a co-insurance-style
+  value combining a rate with a capped amount (e.g. "20% up to a maximum of
+  AED 50/-") only ever surfaced the bare AED figure, dropping the rate. Both
+  are fixed: a free-text fallback captures the nearby value verbatim
+  (collapsing an exact immediate repeat, since two plan columns sharing the
+  same value OCRs as that phrase twice back-to-back), and a percentage-plus-
+  money pattern is tried before the plain money pattern so the rate isn't
+  discarded. `deductible` also didn't have its own anchor at all - it was
+  silently absent from every OCR'd document regardless of wording, and
+  reusing the label wording as the `coinsurance` anchor's own duplicate
+  entry now populates it too.
 
 ## Web UI
 
@@ -419,7 +436,7 @@ below.
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
 - `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away, plus the top 5 nationalities within each zone
-- `GET /cases/{id}/benefits-summary` - every uploaded existing/incumbent plan/tier in the standard 10-field format
+- `GET /cases/{id}/benefits-summary` - every uploaded existing/incumbent plan/tier in the standard 11-field format
 - `GET /cases/{id}/premium-by-category` - the uploaded quote's per-category members, network, gross premium, and premium/member, plus a blended total
 - `GET /cases/{id}/benefits-comparison` - existing plan(s) vs. quoted plan(s), compared field by field
 - `GET /cases/{id}/claims-report` - the latest parsed claims report

@@ -70,3 +70,41 @@ def test_build_summary_flags_ambiguity_for_multiple_values():
 def test_build_summary_skips_fields_with_no_match():
     summary = build_ocr_benefit_summary(["Nothing relevant on this page at all."])
     assert summary == {}
+
+
+def test_deductible_captures_percentage_and_capped_amount_together():
+    # Real Sukoon TOB wording: a co-insurance rate with a flat AED cap is
+    # one combined value ("20% up to a maximum of AED 50/-"), not just the
+    # bare AED figure on its own.
+    text = "Consultation Deductible/Coinsurance 20% up to a maximum of AED 50/- 20% up to a maximum of AED 50/- Outpatient procedures Nil"
+    summary = build_ocr_benefit_summary([text])
+    assert summary["deductible"] == "20% up to a maximum of AED 50/-"
+    assert summary["coinsurance"] == "20% up to a maximum of AED 50/-"
+
+
+def test_deductible_excludes_the_maternity_specific_duplicate_wording():
+    # The maternity section repeats near-identical wording ("Outpatient
+    # Ante/Post Natal Consultation Deductible / Coinsurance") for a
+    # different benefit - it must not contaminate the general deductible.
+    text = (
+        "Consultation Deductible/Coinsurance 20% up to a maximum of AED 50/- Outpatient procedures Nil."
+        + (" filler" * 40)
+        + " Outpatient Ante/Post Natal Consultation Deductible / Coinsurance Nil"
+    )
+    summary = build_ocr_benefit_summary([text])
+    assert summary["deductible"] == "20% up to a maximum of AED 50/-"
+
+
+def test_health_screening_wellness_package_is_recognized():
+    text = "Health Check/Wellness Package AED 1,000 AED 1,000 Health Check/Wellness Co-payment Nil"
+    summary = build_ocr_benefit_summary([text])
+    assert summary["health_screening_wellness"] == "AED 1,000"
+
+
+def test_area_of_cover_recognizes_free_text_territory_value():
+    # "Worldwide Exc (USA)" is neither a currency amount nor Covered/Not
+    # Covered - the two plan columns repeating the same value back-to-back
+    # must collapse to a single copy, not the OCR'd duplicate.
+    text = "Basic Territory for Elective & Emergency treatment Worldwide Exc (USA) Worldwide Exc (USA) Extended Territory for Emergency treatment only"
+    summary = build_ocr_benefit_summary([text])
+    assert summary["area_of_cover"] == "Worldwide Exc (USA)"

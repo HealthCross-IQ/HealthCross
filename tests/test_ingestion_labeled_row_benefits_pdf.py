@@ -61,6 +61,7 @@ def test_parses_real_maxmed_neuron_document(path, expected_category, expected_ne
     assert summary["dental"] == "AED 3,500"
     assert summary["optical"] == "AED 1,000"
     assert summary["alternative_or_complementary_treatment"] == "AED 3,000"
+    assert summary["health_screening_wellness"] == "AED 1,000"
 
 
 def test_returns_none_for_a_document_without_the_table_of_benefits_header(monkeypatch):

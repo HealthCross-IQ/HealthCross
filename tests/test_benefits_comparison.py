@@ -43,3 +43,10 @@ def test_compare_benefit_summaries_covers_every_standard_field():
     assert result["annual_limit"]["direction"] == "reduced"
     assert result["dental"]["direction"] == "reduced"
     assert result["area_of_cover"]["direction"] == "review"  # neither side supplied
+
+
+def test_compare_benefit_summaries_includes_health_screening_wellness():
+    existing = {"health_screening_wellness": "AED 1,000"}
+    quoted = {"health_screening_wellness": "AED 1,500"}
+    result = compare_benefit_summaries(existing, quoted)
+    assert result["health_screening_wellness"]["direction"] == "improved"

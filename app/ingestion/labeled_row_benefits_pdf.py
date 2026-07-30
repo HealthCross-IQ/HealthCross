@@ -48,6 +48,7 @@ _FIELD_LABEL_ANCHORS: Dict[str, List[str]] = {
     "coinsurance": ["out patient services co-payment", "in patient services co-payment"],
     "alternative_or_complementary_treatment": ["chiropractic", "alternative medicine co-payment", "alternative treatment"],
     "pharmacy_limit_and_coinsurance": ["pharmaceuticals/drugs sublimit", "prescribed drugs & dressings - annual limit"],
+    "health_screening_wellness": ["health check/wellness package", "health check wellness package", "wellness package"],
 }
 
 _CATEGORY_IN_FILENAME_RE = re.compile(r"category[\s_-]*([a-z])(?![a-z])", re.IGNORECASE)

@@ -34,6 +34,7 @@ _FIELD_LABEL_ANCHORS = {
     "coinsurance": "available network in the",
     "alternative_or_complementary_treatment": "therapists, complementary medicine",
     "pharmacy_limit_and_coinsurance": "prescribed medicines",
+    "health_screening_wellness": "wellness",
 }
 
 _TIER_HEADER_ALIASES = {

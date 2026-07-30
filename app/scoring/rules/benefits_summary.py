@@ -1,9 +1,10 @@
 """Standard table-of-benefits summary format.
 
-Fixed 10-field layout requested for every plan review, regardless of
+Fixed 11-field layout requested for every plan review, regardless of
 insurer or plan tier: Area of Cover, Annual Limit, Deductible, Pre-existing
 & Chronic Limit, Maternity Limit, Dental, Optical, Coinsurance,
-Alternative/Complementary Treatment, Pharmacy Limit & Coinsurance.
+Alternative/Complementary Treatment, Pharmacy Limit & Coinsurance, Health
+Screening/Wellness Package.
 """
 from typing import Any, Dict
 
@@ -18,6 +19,7 @@ STANDARD_FIELDS = [
     "coinsurance",
     "alternative_or_complementary_treatment",
     "pharmacy_limit_and_coinsurance",
+    "health_screening_wellness",
 ]
 
 FIELD_LABELS = {
@@ -31,6 +33,7 @@ FIELD_LABELS = {
     "coinsurance": "Coinsurance",
     "alternative_or_complementary_treatment": "Alternative/Complementary Treatment",
     "pharmacy_limit_and_coinsurance": "Pharmacy Limit & Coinsurance",
+    "health_screening_wellness": "Health Screening/Wellness Package",
 }
 
 NOT_SPECIFIED = "Not specified in source document"

@@ -22,7 +22,7 @@ Always spot-check numbers this module produces against the source document.
 import os
 import re
 import shutil
-from typing import Any, BinaryIO, Dict, List
+from typing import Any, BinaryIO, Dict, List, Optional
 
 import pdfplumber
 import pytesseract
@@ -53,18 +53,35 @@ _configure_tesseract_cmd()
 # label -> regex to search for in the flattened OCR text of the whole document
 _FIELD_LABEL_PATTERNS = {
     "annual_limit": r"Indemnity Limit",
-    "area_of_cover": r"Basic Territory for Elective",
+    "area_of_cover": r"Basic Territory for Elective\s*&\s*Emergency treatment",
+    # Negative lookbehind excludes the maternity-specific "Outpatient
+    # Ante/Post Natal Consultation Deductible / Coinsurance" row, which
+    # shares this same wording for a different (and usually differently
+    # valued) benefit elsewhere in the document.
+    "deductible": r"(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
     "pre_existing_chronic_limit": r"Pre-existing conditions",
     "maternity_limit": r"Normal Delivery",
     "dental": r"Dental Benefit",
     "optical": r"Optical Benefit",
-    "coinsurance": r"Outpatient Co-Insurance|Consultation Deductible\s*/?\s*Coinsurance",
+    "coinsurance": r"Outpatient Co-Insurance|(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
     "alternative_or_complementary_treatment": r"Alternative Medicine Co-Insurance|Enhanced Alternative Medicine",
     "pharmacy_limit_and_coinsurance": r"Prescribed Pharmaceuticals",
+    "health_screening_wellness": r"Health Check\s*/?\s*Wellness Package|Wellness Package|Health Screening",
 }
 
-_MONEY_RE = re.compile(r"(?:AED\s*)?[\d]{1,3}(?:,\d{3})+(?:/-)?")
+# The original pattern only matched amounts with at least one comma group
+# (e.g. "5,520,000/-"), silently missing smaller AED amounts with no comma
+# at all (e.g. "AED 50/-") - the first alternative below covers those too,
+# as long as "AED" is present to distinguish a real amount from a stray
+# small number; the second alternative keeps the original comma-grouped
+# match for amounts that appear with no "AED" prefix at all.
+_MONEY_RE = re.compile(r"AED\s*[\d]{1,3}(?:,\d{3})*(?:/-)?|[\d]{1,3}(?:,\d{3})+(?:/-)?")
+# A co-insurance/deductible value is often "20% up to a maximum of AED
+# 50/-" rather than a bare amount - tried first so the rate isn't dropped
+# in favor of just the capped AED figure.
+_PCT_MONEY_RE = re.compile(r"\d{1,3}%[^%\d]{0,40}?(?:" + _MONEY_RE.pattern + r")")
 _COVERED_RE = re.compile(r"\bNot Covered\b|\bCovered\b", re.IGNORECASE)
+_WORD_RE = re.compile(r"\S+")
 
 
 def is_scanned_pdf(file: BinaryIO) -> bool:
@@ -89,10 +106,33 @@ def ocr_pdf_pages(file: BinaryIO, resolution: int = 300) -> List[str]:
     return pages_text
 
 
+def _nearby_text_value(window_text: str, max_words: int = 8) -> Optional[str]:
+    """Fallback for a nearby value that's neither a currency amount nor a
+    Covered/Not Covered flag - e.g. area of cover's "Worldwide Exc (USA)".
+    Two side-by-side plan columns sharing the same value (common when a
+    benefit doesn't differ between tiers) OCRs as that phrase repeated
+    twice back-to-back, so this collapses an exact immediate repeat down
+    to a single copy rather than reporting the duplicate.
+    """
+    words = _WORD_RE.findall(window_text)[:max_words]
+    if not words:
+        return None
+    for split in range(1, len(words)):
+        first_half = " ".join(words[:split])
+        second_half = " ".join(words[split : split * 2])
+        if second_half and first_half == second_half:
+            return first_half
+    return " ".join(words)
+
+
 def _nearby_values(flat_text: str, label_pattern: str, window: int = 200) -> List[str]:
     values: List[str] = []
     for match in re.finditer(label_pattern, flat_text, re.IGNORECASE):
         window_text = flat_text[match.end() : match.end() + window]
+        pct_money = _PCT_MONEY_RE.findall(window_text)
+        if pct_money:
+            values.extend(m.strip() for m in pct_money)
+            continue
         money = _MONEY_RE.findall(window_text)
         if money:
             values.extend(m.strip() for m in money)
@@ -100,6 +140,10 @@ def _nearby_values(flat_text: str, label_pattern: str, window: int = 200) -> Lis
         covered = _COVERED_RE.search(window_text)
         if covered:
             values.append(covered.group(0))
+            continue
+        text_value = _nearby_text_value(window_text)
+        if text_value:
+            values.append(text_value)
 
     seen = set()
     unique = []

@@ -644,12 +644,12 @@ async function loadBenefitsComparison() {
         <div class="hint">
           Existing: ${escapeHtml(c.existing_plan_name || '-')}${c.existing_category ? ' (Cat ' + escapeHtml(c.existing_category) + ')' : ''}
           &nbsp;vs&nbsp;
-          Quoted: ${escapeHtml(c.quoted_plan_name || '-')}${c.quoted_category ? ' (Cat ' + escapeHtml(c.quoted_category) + ')' : ''}
+          HealthCross Quote: ${escapeHtml(c.quoted_plan_name || '-')}${c.quoted_category ? ' (Cat ' + escapeHtml(c.quoted_category) + ')' : ''}
           ${c.quoted_gross_premium != null ? ` (AED ${c.quoted_gross_premium.toLocaleString()}${c.quoted_member_count ? ' / ' + c.quoted_member_count + ' members' : ''})` : ''}
         </div>
         ${c.existing_plan_reused ? `<div class="hint" style="color:var(--warn);">Note: this case's existing plan wasn't split by category (e.g. a scanned/OCR'd document) - the same existing figures shown above are being compared against this quoted category too, not a distinct Category 2/B entry.</div>` : ''}
         <table>
-          <tr><th>Field</th><th>Existing</th><th>Quoted</th><th>Direction</th></tr>
+          <tr><th>Field</th><th>Existing</th><th>HealthCross Quote</th><th>Direction</th></tr>
           ${Object.entries(c.fields).map(([field, cmp]) => `
             <tr>
               <td>${escapeHtml(field.replace(/_/g, ' '))}</td>

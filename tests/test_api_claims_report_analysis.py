@@ -3,6 +3,7 @@ import io
 import pandas as pd
 
 from app.models import db_models as models
+from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
 
 def _xlsx_bytes(df: pd.DataFrame) -> bytes:
@@ -128,7 +129,7 @@ def test_diagnosis_exposure_flags_cancer_as_chronic_and_high_exposure(client):
     assert rows[0]["label"] == "NEOPLASMS"
 
 
-def test_benefits_summary_uses_standard_ten_fields(client):
+def test_benefits_summary_uses_standard_fields(client):
     resp = client.post(
         "/cases",
         json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"},
@@ -159,15 +160,4 @@ def test_benefits_summary_uses_standard_ten_fields(client):
     assert resp.status_code == 200
     body = resp.json()
     assert len(body) == 1
-    assert set(body[0]["summary"].keys()) == {
-        "area_of_cover",
-        "annual_limit",
-        "deductible",
-        "pre_existing_chronic_limit",
-        "maternity_limit",
-        "dental",
-        "optical",
-        "coinsurance",
-        "alternative_or_complementary_treatment",
-        "pharmacy_limit_and_coinsurance",
-    }
+    assert set(body[0]["summary"].keys()) == set(STANDARD_FIELDS)

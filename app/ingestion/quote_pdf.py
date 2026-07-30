@@ -41,9 +41,10 @@ _FIELD_LABEL_ANCHORS = {
     # and both contain this shorter form.
     "alternative_or_complementary_treatment": ["alternative treatment"],
     "pharmacy_limit_and_coinsurance": ["prescribed drugs & dressings - annual limit"],
+    "health_screening_wellness": ["health check/wellness package", "health check wellness package", "wellness package", "health screening"],
 }
 
-# Not one of the 10 standard fields, but worth capturing alongside them -
+# Not one of the 11 standard fields, but worth capturing alongside them -
 # stored as BenefitPlan.network_type rather than in standard_summary.
 _NETWORK_LABEL_ANCHOR = "medical network"
 
