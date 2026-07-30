@@ -41,14 +41,14 @@ _FIELD_LABEL_ANCHORS = {
     # and both contain this shorter form.
     "alternative_or_complementary_treatment": ["alternative treatment"],
     "pharmacy_limit_and_coinsurance": ["prescribed drugs & dressings - annual limit"],
-    "health_screening_wellness": ["health check/wellness package", "health check wellness package", "wellness package", "health screening"],
+    "health_screening_wellness": ["routine health examination", "health check/wellness package", "health check wellness package", "wellness package", "health screening"],
 }
 
 # Not one of the 11 standard fields, but worth capturing alongside them -
 # stored as BenefitPlan.network_type rather than in standard_summary.
 _NETWORK_LABEL_ANCHOR = "medical network"
 
-_CAT_TOKEN_RE = re.compile(r"cat\s*([a-z0-9]+)", re.IGNORECASE)
+_CAT_TOKEN_RE = re.compile(r"\bcat\s+([a-z0-9]{1,3})\b", re.IGNORECASE)
 _MONEY_RE = re.compile(r"[\d]{1,3}(?:,\d{3})*(?:\.\d+)?")
 _USD_RE = re.compile(r"USD\s*([\d,]+)", re.IGNORECASE)
 _NOT_COVERED_RE = re.compile(r"\bnot covered\b", re.IGNORECASE)

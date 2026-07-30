@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.scoring.rules.claims_ledger_analysis import (
     category_burning_cost,
     full_months_only,
@@ -11,7 +13,8 @@ from app.scoring.rules.claims_ledger_analysis import (
 
 
 def _entry(patient_id, final_amount, claim_id=None, diagnosis_code=None, diagnosis_description=None,
-           ip_op_maternity="OP", date_of_treatment=None, provider_name=None, medical_category=None):
+           ip_op_maternity="OP", date_of_treatment=None, provider_name=None, medical_category=None,
+           policy_start_date=None, policy_end_date=None):
     return {
         "patient_id": patient_id,
         "claim_id": claim_id or f"{patient_id}-{final_amount}",
@@ -22,6 +25,8 @@ def _entry(patient_id, final_amount, claim_id=None, diagnosis_code=None, diagnos
         "date_of_treatment": date_of_treatment,
         "provider_name": provider_name,
         "medical_category": medical_category,
+        "policy_start_date": policy_start_date,
+        "policy_end_date": policy_end_date,
     }
 
 
@@ -72,10 +77,45 @@ def test_category_burning_cost_only_uses_full_months_and_matches_overall_formula
     assert inpatient["trended_claims"] == round(2400.0 * 1.075, 2)
     assert inpatient["projected_annual_claims"] == round(2400.0 * 1.075 / (1 - 0.28), 2)
     assert inpatient["member_count"] == 1
+    assert inpatient["claim_count"] == 2  # P1's two claims, C1 and C2 (distinct claim_ids)
+    assert inpatient["avg_claims_per_member"] == inpatient["projected_annual_claims"]
 
     outpatient = by_category["Outpatient"]
     assert outpatient["avg_month"] == 100.0
     assert outpatient["member_count"] == 1
+    assert outpatient["claim_count"] == 1
+
+    # Both categories' pct_of_total_claims should sum to ~100%.
+    total_pct = sum(r["pct_of_total_claims"] for r in rows)
+    assert round(total_pct, 1) == 100.0
+
+
+def test_category_burning_cost_prorates_members_by_their_own_coverage_period():
+    # The analysis period spans 2 full months (Nov-Dec, 61 days). P1 is
+    # covered the whole period; P2 joined on Dec 1 and is only covered for
+    # December (31 of 61 days), so should count as roughly half a member,
+    # not a full one, per the user's own spec ("6 of 12 months = 0.5").
+    entries = [
+        _entry(
+            "P1", 100, medical_category="Inpatient", date_of_treatment=date(2025, 11, 5),
+            policy_start_date=date(2025, 1, 1), policy_end_date=date(2025, 12, 31),
+        ),
+        _entry(
+            "P2", 200, medical_category="Inpatient", date_of_treatment=date(2025, 12, 5),
+            policy_start_date=date(2025, 12, 1), policy_end_date=date(2026, 6, 30),
+        ),
+    ]
+    full_month_keys = [(2025, 11), (2025, 12)]
+
+    rows = category_burning_cost(entries, full_month_keys, inflation_pct=0.075, loading_pct=0.28)
+    inpatient = next(r for r in rows if r["category"] == "Inpatient")
+
+    # P1 covers the full Nov 1 - Dec 31 window (1.0); P2 only joined Dec 1,
+    # covering 31 of the window's 61 days (~0.51) - so total member_count
+    # should land close to 1.5, clearly less than a naive unique-patient
+    # count of 2.
+    assert 1.0 < inpatient["member_count"] < 2.0
+    assert inpatient["member_count"] == pytest.approx(1.51, abs=0.05)
 
 
 def test_top_diagnoses_classified_chronic_vs_non_chronic():

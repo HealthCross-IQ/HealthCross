@@ -4,7 +4,7 @@
 # _extract_category_premium_table/_extract_benefit_rows produce from that
 # real document, captured here so the pure logic is testable without
 # committing the source PDF.
-from app.ingestion.quote_pdf import _build_category_results, _find_matching_label
+from app.ingestion.quote_pdf import _build_category_results, _CAT_TOKEN_RE, _find_matching_label
 
 CATEGORIES = [
     {"category": "A", "member_count": 54, "plan_name": "Gold", "network": "MSH Platinum", "gross_premium": 918950.0},
@@ -25,6 +25,7 @@ ROWS = {
     },
     "prescribed drugs & dressings - annual limit": {"Gold - CAT A": "Annual Limit", "Gold - CAT B": "Annual Limit"},
     "prescribed drugs & dressings - copay": {"Gold - CAT A": "NIL", "Gold - CAT B": "NIL"},
+    "routine health examination": {"Gold - CAT A": "USD 250", "Gold - CAT B": "USD 250"},
 }
 
 
@@ -56,6 +57,7 @@ def test_build_category_results_matches_real_palazzo_quote_figures():
     assert cat_b["annual_limit"] == 750_000.0
     assert cat_b["optical_covered"] is False
     assert cat_b["standard_summary"]["optical"] == "Not Covered"
+    assert cat_a["standard_summary"]["health_screening_wellness"] == "USD 250"
 
 
 def test_prescribed_drugs_annual_limit_not_confused_with_copay_row():
@@ -64,3 +66,16 @@ def test_prescribed_drugs_annual_limit_not_confused_with_copay_row():
     # anchor is the full "...- annual limit" string, so it must not pick
     # up the copay row's "NIL" value instead.
     assert results[0]["standard_summary"]["pharmacy_limit_and_coinsurance"] == "Annual Limit"
+
+
+def test_cat_token_regex_matches_real_category_headers():
+    assert _CAT_TOKEN_RE.search("SILVER - CAT A").group(1).upper() == "A"
+    assert _CAT_TOKEN_RE.search("Gold - CAT B").group(1).upper() == "B"
+
+
+def test_cat_token_regex_does_not_false_positive_on_the_word_categories():
+    # Real bug: a premium summary table's own "Total Premium (All
+    # Categories)" header was being misread as a spurious tier named "CAT
+    # EGORIES", producing a bogus extra category with no real data.
+    assert _CAT_TOKEN_RE.search("Total Premium (All Categories)") is None
+    assert _CAT_TOKEN_RE.search("Category-wise breakdown") is None

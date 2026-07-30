@@ -760,19 +760,23 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
 
     const categoryBlock = a.category_burning_cost && a.category_burning_cost.length ? `
       <table style="margin-top:16px;">
-        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Burning cost (annualized)</th><th>Quoted premium</th><th>Projected loss ratio</th></tr>
+        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Claims count</th><th>Burning cost (annualized)</th><th>Avg claims/member</th><th>% of total</th><th>Quoted premium</th><th>Projected loss ratio</th></tr>
         ${a.category_burning_cost.map(c => `
           <tr>
             <td>${escapeHtml(c.category)}</td>
             <td>${c.product ? escapeHtml(c.product) : '-'}</td>
             <td>${c.network ? escapeHtml(c.network) : '-'}</td>
             <td>${c.member_count}</td>
+            <td>${c.claim_count}</td>
             <td>${c.projected_annual_claims.toLocaleString()}</td>
+            <td>${c.avg_claims_per_member != null ? c.avg_claims_per_member.toLocaleString() : '-'}</td>
+            <td>${c.pct_of_total_claims != null ? c.pct_of_total_claims.toFixed(1) + '%' : '-'}</td>
             <td>${c.quoted_premium != null ? c.quoted_premium.toLocaleString() : '-'}</td>
             <td>${c.projected_loss_ratio != null ? (c.projected_loss_ratio*100).toFixed(1) + '%' : '-'}</td>
           </tr>
         `).join('')}
       </table>
+      <div class="hint">Members are prorated by each member's own coverage period within the analysis window (e.g. a member covered 6 of 12 months counts as 0.5), not a flat headcount.</div>
       ${!a.quote_available_for_comparison ? '<div class="hint">Upload a quote (see Quote above) to compare category burning cost against a quoted premium.</div>' : ''}
     ` : '';
 

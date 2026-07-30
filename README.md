@@ -281,7 +281,15 @@ estimate.
   against the *current*, not quoted, premium). A category with no matching
   quoted plan still shows its burning cost, just without the comparison
   columns - `quote_available_for_comparison` on the response says whether
-  a quote exists for this case at all.
+  a quote exists for this case at all. Each category row also reports
+  `claim_count` (distinct claim IDs), `avg_claims_per_member` (burning cost
+  ÷ members), and `pct_of_total_claims` (this category's share of the
+  total burning cost across all categories). Members are counted uniquely
+  by patient ID AND prorated by each member's own `policy_start_date`/
+  `policy_end_date` against the analysis period - a member covered for
+  only 6 of the analysis window's 12 months counts as 0.5 members, not 1,
+  since a mid-term joiner or leaver shouldn't be weighted the same as a
+  full-term member in the per-member average.
 
 **Renewal rating** (`app/scoring/rules/renewal_rating.py`,
 `GET /cases/{id}/renewal-rating`) - the actual renewal-increase

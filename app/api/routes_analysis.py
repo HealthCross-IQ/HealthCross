@@ -292,6 +292,8 @@ def _ledger_entry_dicts(entries: List[models.ClaimsLedgerEntry]) -> List[dict]:
             "date_of_treatment": e.date_of_treatment,
             "provider_name": e.provider_name,
             "medical_category": e.medical_category,
+            "policy_start_date": e.policy_start_date,
+            "policy_end_date": e.policy_end_date,
         }
         for e in entries
     ]

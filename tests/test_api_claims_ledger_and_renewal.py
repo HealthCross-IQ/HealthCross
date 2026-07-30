@@ -156,6 +156,10 @@ def test_claims_ledger_analysis_category_burning_cost_without_quote(client):
     assert category_row["avg_month"] == 2000.0
     assert category_row["product"] is None
     assert category_row["projected_loss_ratio"] is None
+    assert category_row["claim_count"] == 2  # C1, C2 - C3 excluded as the trailing partial month
+    assert category_row["member_count"] == 1.0  # only P1 has claims within the full-months window
+    assert category_row["avg_claims_per_member"] == category_row["projected_annual_claims"]
+    assert category_row["pct_of_total_claims"] == 100.0  # only category present
 
 
 def test_claims_ledger_analysis_category_burning_cost_matches_quoted_premium(client):

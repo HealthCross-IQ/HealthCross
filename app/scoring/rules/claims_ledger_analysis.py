@@ -8,13 +8,51 @@ toward these totals unless the caller filters otherwise - "Outstanding"
 represents claims already incurred but not yet finalized, not a
 speculative estimate, so excluding it would understate true incurred cost.
 """
+import calendar
 from collections import defaultdict
-from typing import List, Optional
+from datetime import date as _date
+from typing import List, Optional, Tuple
 
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
 from app.reference.icd10_chapters import icd10_chapter
 
 TOP_N_DEFAULT = 10
+
+
+def _analysis_period_bounds(full_month_keys: List[tuple]) -> Tuple[Optional[_date], Optional[_date]]:
+    """First day of the earliest full month to the last day of the latest
+    full month - the window member coverage is prorated against.
+    """
+    if not full_month_keys:
+        return None, None
+    sorted_keys = sorted(full_month_keys)
+    start_year, start_month = sorted_keys[0]
+    end_year, end_month = sorted_keys[-1]
+    period_start = _date(start_year, start_month, 1)
+    last_day = calendar.monthrange(end_year, end_month)[1]
+    period_end = _date(end_year, end_month, last_day)
+    return period_start, period_end
+
+
+def _member_coverage_fraction(
+    policy_start: Optional[_date],
+    policy_end: Optional[_date],
+    period_start: _date,
+    period_end: _date,
+) -> float:
+    """A member covered for only part of the analysis period (a joiner or
+    leaver mid-term) should count as a fraction of a member, not a full
+    one - e.g. covered 6 of 12 months is 0.5, not 1.
+    """
+    effective_start = max(policy_start, period_start) if policy_start else period_start
+    effective_end = min(policy_end, period_end) if policy_end else period_end
+    if effective_end < effective_start:
+        return 0.0
+    total_days = (period_end - period_start).days + 1
+    if total_days <= 0:
+        return 1.0
+    covered_days = (effective_end - effective_start).days + 1
+    return max(0.0, min(1.0, covered_days / total_days))
 
 
 def top_patients_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT) -> List[dict]:
@@ -141,10 +179,19 @@ def category_burning_cost(
     "full" (see full_months_only()) from the WHOLE ledger, not recomputed
     per category - so every category is measured over the identical time
     window rather than each independently deciding its own edge exclusions.
+
+    Members are counted uniquely (never double-counted across their own
+    multiple claim lines) AND prorated by their own policy_start_date/
+    policy_end_date against the analysis period - a member covered for
+    only 6 of 12 months counts as 0.5 members, not 1, since a joiner or
+    leaver mid-term shouldn't dilute the per-member average the same way a
+    full-term member does.
     """
     full_month_set = set(full_month_keys)
+    period_start, period_end = _analysis_period_bounds(full_month_keys)
     by_category: dict = defaultdict(lambda: defaultdict(float))
-    patients_by_category: dict = defaultdict(set)
+    claims_by_category: dict = defaultdict(set)
+    patient_dates_by_category: dict = defaultdict(dict)
 
     for e in entries:
         category = e.get("medical_category") or "Uncategorized"
@@ -152,8 +199,17 @@ def category_burning_cost(
         if not d or (d.year, d.month) not in full_month_set:
             continue
         by_category[category][(d.year, d.month)] += e.get("final_amount") or 0.0
-        if e.get("patient_id"):
-            patients_by_category[category].add(e["patient_id"])
+        if e.get("claim_id"):
+            claims_by_category[category].add(e["claim_id"])
+        patient_id = e.get("patient_id")
+        if patient_id:
+            patient_dates = patient_dates_by_category[category].setdefault(
+                patient_id, {"start": e.get("policy_start_date"), "end": e.get("policy_end_date")}
+            )
+            if e.get("policy_start_date") and (not patient_dates["start"] or e["policy_start_date"] < patient_dates["start"]):
+                patient_dates["start"] = e["policy_start_date"]
+            if e.get("policy_end_date") and (not patient_dates["end"] or e["policy_end_date"] > patient_dates["end"]):
+                patient_dates["end"] = e["policy_end_date"]
 
     rows = []
     for category, monthly_totals in by_category.items():
@@ -161,16 +217,34 @@ def category_burning_cost(
         annualized = avg_month * 12
         trended = annualized * (1 + inflation_pct)
         projected_annual_claims = trended / (1 - loading_pct)
+
+        if period_start and period_end:
+            member_count = sum(
+                _member_coverage_fraction(dates["start"], dates["end"], period_start, period_end)
+                for dates in patient_dates_by_category[category].values()
+            )
+        else:
+            member_count = float(len(patient_dates_by_category[category]))
+
         rows.append(
             {
                 "category": category,
-                "member_count": len(patients_by_category[category]),
+                "member_count": round(member_count, 2),
+                "claim_count": len(claims_by_category[category]),
                 "avg_month": round(avg_month, 2),
                 "annualized_incurred_claims": round(annualized, 2),
                 "trended_claims": round(trended, 2),
                 "projected_annual_claims": round(projected_annual_claims, 2),
+                "avg_claims_per_member": (
+                    round(projected_annual_claims / member_count, 2) if member_count else None
+                ),
             }
         )
+
+    total_claims = sum(r["projected_annual_claims"] for r in rows)
+    for row in rows:
+        row["pct_of_total_claims"] = round(row["projected_annual_claims"] / total_claims * 100, 2) if total_claims else None
+
     rows.sort(key=lambda r: r["trended_claims"], reverse=True)
     return rows
 
