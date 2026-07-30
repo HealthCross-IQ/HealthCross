@@ -51,14 +51,22 @@ def census_demographic_summary(census: List[dict]) -> dict:
         gender_counts[m.get("gender") if m.get("gender") in ("M", "F") else "Other"] += 1
 
     marital_status_counts: dict = {}
+    marital_status_gender_counts: dict = {}
     for m in census:
         status = (m.get("marital_status") or "Unknown").title()
         marital_status_counts[status] = marital_status_counts.get(status, 0) + 1
+        marital_status_gender_counts.setdefault(status, {"M": 0, "F": 0})
+        if m.get("gender") in ("M", "F"):
+            marital_status_gender_counts[status][m["gender"]] += 1
 
     relation_counts: dict = {}
+    relation_gender_counts: dict = {}
     for m in census:
         relation = (m.get("relation") or "Other").title()
         relation_counts[relation] = relation_counts.get(relation, 0) + 1
+        relation_gender_counts.setdefault(relation, {"M": 0, "F": 0})
+        if m.get("gender") in ("M", "F"):
+            relation_gender_counts[relation][m["gender"]] += 1
 
     zone_counts = {zone: 0 for zone in ALL_ZONES}
     for m in census:
@@ -97,8 +105,10 @@ def census_demographic_summary(census: List[dict]) -> dict:
         "gender_pct": {g: _pct(c, total) for g, c in gender_counts.items()},
         "marital_status_counts": marital_status_counts,
         "marital_status_pct": {s: _pct(c, total) for s, c in marital_status_counts.items()},
+        "marital_status_gender_counts": marital_status_gender_counts,
         "relation_counts": relation_counts,
         "relation_pct": {r: _pct(c, total) for r, c in relation_counts.items()},
+        "relation_gender_counts": relation_gender_counts,
         "nationality_zone_counts": zone_counts,
         "nationality_zone_pct": {z: _pct(c, total) for z, c in zone_counts.items()},
         "married_female_count": married_female_count,

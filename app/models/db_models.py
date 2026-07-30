@@ -104,6 +104,15 @@ class BenefitPlan(Base):
     # couldn't map cleanly.
     raw_ocr_text = Column(Text, nullable=True)
 
+    # "existing" (the incumbent plan, uploaded via /benefits) or "quoted" (a
+    # new insurer's proposal for the same case, uploaded via /quote) - lets
+    # both live on the same case at once so they can be compared, without
+    # either upload deleting the other's rows. See app/ingestion/quote_pdf.py
+    # and app/scoring/rules/benefits_comparison.py.
+    role = Column(String, nullable=False, default="existing")
+    category = Column(String, nullable=True)  # broker/insurer category label, e.g. "A" / "B"
+    gross_premium = Column(Float, nullable=True)
+
     case = relationship("Case", back_populates="benefit_plans")
 
 

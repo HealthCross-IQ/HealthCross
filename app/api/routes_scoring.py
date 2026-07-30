@@ -32,6 +32,9 @@ def _census_dicts(case: models.Case) -> List[dict]:
 
 
 def _benefit_dicts(case: models.Case) -> List[dict]:
+    # Only the existing/incumbent plan feeds the scorecard - a quoted
+    # plan uploaded via /quote for comparison purposes shouldn't move the
+    # score of the case as submitted.
     return [
         {
             "annual_limit": b.annual_limit,
@@ -47,6 +50,7 @@ def _benefit_dicts(case: models.Case) -> List[dict]:
             "member_count": b.member_count,
         }
         for b in case.benefit_plans
+        if b.role == "existing"
     ]
 
 

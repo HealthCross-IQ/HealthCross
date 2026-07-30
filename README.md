@@ -94,6 +94,31 @@ Treatment, Pharmacy Limit & Coinsurance. A field the source document doesn't
 specify is shown as "Not specified" rather than silently dropped.
 `GET /cases/{id}/benefits-summary` renders this for every uploaded plan/tier.
 
+**Quote vs. existing-plan comparison** - a case can hold both the existing/
+incumbent table of benefits (uploaded via `/benefits`) and a new insurer's
+quotation (uploaded via `/quote`) at the same time, tagged internally as
+`role="existing"` / `role="quoted"` on the same `BenefitPlan` table so
+neither upload deletes the other. This is a same-case comparison (the new
+quote against what this specific client already has), not the cross-case
+benchmarking the standing standards above deliberately avoid.
+- `app/ingestion/quote_pdf.py` targets the QIC/HealthCROSS Global
+  "Full Category Premium Calculation" quote layout: a category premium
+  table (Category / Members / Plan / Network / Gross Premium) plus a
+  series of tables where the benefit label is the table's own first
+  column and the remaining columns are one per quoted category.
+- `app/scoring/rules/benefits_comparison.py` compares the two plans'
+  standard 10-field summaries. A numeric direction (Improved/Reduced/Same,
+  with a % change) is only given when both sides parse as a currency
+  amount - USD converts to AED at the fixed 3.6725 peg. Anything that
+  doesn't parse this way is flagged "Review" rather than guessed.
+- `GET /cases/{id}/premium-by-category` - members, network, gross premium,
+  and premium/member for each quoted category, plus a blended total.
+- `GET /cases/{id}/benefits-comparison` - the existing vs. quoted plans,
+  paired by position, compared field by field.
+- Only the existing-role plan feeds the risk scorecard's benefit-richness
+  component - a quoted plan uploaded for comparison never changes the
+  score of the case as submitted.
+
 **Claims projection - burning cost method** (`app/scoring/rules/claims_projection.py`) -
 `project_annual_claims()` runs the agreed formula:
 1. Average the first 6 *full* months of paid claims (excluding any partial
@@ -178,15 +203,17 @@ spreadsheet parsers:
 Opening the server's root URL (`http://127.0.0.1:8000/`) serves a small
 self-contained single-page UI (`app/static/index.html` - no build step, no
 JS framework, no external requests): create a case, upload census/benefits/
-claims files, compute the scorecard, and record an outcome, all by clicking
-around instead of using `/docs`. It's a thin client over the same API below.
+claims/quote files, compute the scorecard, and record an outcome, all by
+clicking around instead of using `/docs`. It's a thin client over the same
+API below.
 
 ## API
 
 - `GET /cases` - list all cases
 - `POST /cases` - create a case (broker, company, industry, region)
 - `POST /cases/{id}/census` - upload the census (xlsx/csv)
-- `POST /cases/{id}/benefits` - upload the table of benefits (xlsx/csv)
+- `POST /cases/{id}/benefits` - upload the existing/incumbent table of benefits (xlsx/csv/pdf)
+- `POST /cases/{id}/quote` - upload a new insurer's quotation for comparison (pdf)
 - `POST /cases/{id}/claims` - upload claims history (xlsx/csv, optional)
 - `POST /cases/{id}/plan-details` - upload the broker's "CLIENT & PLAN
   details" sheet to populate broker/industry/existing-insurer/target-premium
@@ -194,8 +221,10 @@ around instead of using `/docs`. It's a thin client over the same API below.
 - `POST /cases/{id}/score` - compute and store a scorecard
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
-- `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages
-- `GET /cases/{id}/benefits-summary` - every uploaded plan/tier in the standard 10-field format
+- `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away
+- `GET /cases/{id}/benefits-summary` - every uploaded existing/incumbent plan/tier in the standard 10-field format
+- `GET /cases/{id}/premium-by-category` - the uploaded quote's per-category members, network, gross premium, and premium/member, plus a blended total
+- `GET /cases/{id}/benefits-comparison` - existing plan(s) vs. quoted plan(s), compared field by field
 - `GET /cases/{id}/claims-report` - the latest parsed claims report
 - `GET /cases/{id}/claims-projection` - the burning-cost annual claims projection
 - `GET /cases/{id}/diagnosis-exposure` - chronic/high-exposure-flagged diagnosis breakdown

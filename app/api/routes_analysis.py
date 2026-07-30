@@ -7,7 +7,8 @@ from app.database import get_db
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
-from app.scoring.rules.benefits_summary import build_standard_benefit_summary
+from app.scoring.rules.benefits_comparison import compare_benefit_summaries
+from app.scoring.rules.benefits_summary import STANDARD_FIELDS, build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 
@@ -152,23 +153,102 @@ def get_census_summary(case_id: int, db: Session = Depends(get_db)):
     return census_demographic_summary(census)
 
 
+def _benefit_summary(plan: models.BenefitPlan) -> dict:
+    source = plan.standard_summary or {
+        "annual_limit": f"USD {plan.annual_limit:,.0f}" if plan.annual_limit else None,
+        "maternity_limit": f"USD {plan.maternity_limit:,.0f}" if plan.maternity_limit else None,
+        "dental": "Covered" if plan.dental_covered else "Not covered",
+        "optical": "Covered" if plan.optical_covered else "Not covered",
+        "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
+    }
+    return build_standard_benefit_summary(source)
+
+
 @router.get("/{case_id}/benefits-summary")
 def get_benefits_summary(case_id: int, db: Session = Depends(get_db)):
-    """Renders every uploaded benefit plan/tier for this case in the fixed
-    10-field standard format (see app/scoring/rules/benefits_summary.py).
+    """Renders every uploaded EXISTING/incumbent benefit plan/tier for this
+    case in the fixed 10-field standard format (see
+    app/scoring/rules/benefits_summary.py). A quoted plan uploaded via
+    /quote is not included here - see /benefits-comparison.
     """
     case = _get_case_or_404(db, case_id)
-    if not case.benefit_plans:
+    existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
+    if not existing_plans:
         raise HTTPException(status_code=404, detail="No table of benefits uploaded for this case")
 
-    summaries = []
-    for plan in case.benefit_plans:
-        source = plan.standard_summary or {
-            "annual_limit": f"USD {plan.annual_limit:,.0f}" if plan.annual_limit else None,
-            "maternity_limit": f"USD {plan.maternity_limit:,.0f}" if plan.maternity_limit else None,
-            "dental": "Covered" if plan.dental_covered else "Not covered",
-            "optical": "Covered" if plan.optical_covered else "Not covered",
-            "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
-        }
-        summaries.append({"plan_name": plan.plan_name, "summary": build_standard_benefit_summary(source)})
-    return summaries
+    return [{"plan_name": plan.plan_name, "summary": _benefit_summary(plan)} for plan in existing_plans]
+
+
+@router.get("/{case_id}/premium-by-category")
+def get_premium_by_category(case_id: int, db: Session = Depends(get_db)):
+    """Per-category premium breakdown for the latest uploaded quote (see
+    POST /cases/{id}/quote) - members, network, gross premium, and premium
+    per member for each category, plus a blended total across categories.
+    """
+    case = _get_case_or_404(db, case_id)
+    quoted_plans = [p for p in case.benefit_plans if p.role == "quoted"]
+    if not quoted_plans:
+        raise HTTPException(status_code=404, detail="No quote uploaded for this case")
+
+    categories = []
+    for plan in quoted_plans:
+        premium_per_member = (
+            round(plan.gross_premium / plan.member_count, 2) if plan.gross_premium and plan.member_count else None
+        )
+        categories.append(
+            {
+                "category": plan.category,
+                "plan_name": plan.plan_name,
+                "network": plan.network_type,
+                "member_count": plan.member_count,
+                "gross_premium": plan.gross_premium,
+                "premium_per_member": premium_per_member,
+            }
+        )
+
+    total_members = sum(c["member_count"] or 0 for c in categories)
+    total_premium = sum(c["gross_premium"] or 0 for c in categories)
+    blended_premium_per_member = round(total_premium / total_members, 2) if total_members else None
+
+    return {
+        "categories": categories,
+        "total_members": total_members,
+        "total_gross_premium": total_premium,
+        "blended_premium_per_member": blended_premium_per_member,
+    }
+
+
+@router.get("/{case_id}/benefits-comparison")
+def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
+    """Field-by-field comparison of the existing/incumbent plan(s) against
+    the quoted plan(s) for this case (see
+    app/scoring/rules/benefits_comparison.py). Existing and quoted plans
+    are paired up by position (1st existing vs 1st quoted, etc.) since
+    neither side's category naming is guaranteed to line up - the plan
+    names of both sides are always returned so a human can confirm the
+    pairing makes sense.
+    """
+    case = _get_case_or_404(db, case_id)
+    existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
+    quoted_plans = [p for p in case.benefit_plans if p.role == "quoted"]
+    if not existing_plans:
+        raise HTTPException(status_code=404, detail="No existing table of benefits uploaded for this case")
+    if not quoted_plans:
+        raise HTTPException(status_code=404, detail="No quote uploaded for this case")
+
+    comparisons = []
+    for i in range(max(len(existing_plans), len(quoted_plans))):
+        existing_plan = existing_plans[i] if i < len(existing_plans) else None
+        quoted_plan = quoted_plans[i] if i < len(quoted_plans) else None
+        existing_summary = _benefit_summary(existing_plan) if existing_plan else {field: None for field in STANDARD_FIELDS}
+        quoted_summary = _benefit_summary(quoted_plan) if quoted_plan else {field: None for field in STANDARD_FIELDS}
+        comparisons.append(
+            {
+                "existing_plan_name": existing_plan.plan_name if existing_plan else None,
+                "quoted_plan_name": quoted_plan.plan_name if quoted_plan else None,
+                "quoted_gross_premium": quoted_plan.gross_premium if quoted_plan else None,
+                "quoted_member_count": quoted_plan.member_count if quoted_plan else None,
+                "fields": compare_benefit_summaries(existing_summary, quoted_summary),
+            }
+        )
+    return comparisons

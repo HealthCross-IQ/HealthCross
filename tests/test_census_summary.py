@@ -53,10 +53,24 @@ def test_relation_and_gender_breakdown():
     ]
     summary = census_demographic_summary(census)
     assert summary["relation_counts"] == {"Employee": 2, "Spouse": 1, "Child": 1}
+    assert summary["relation_gender_counts"]["Employee"] == {"M": 1, "F": 1}
+    assert summary["relation_gender_counts"]["Spouse"] == {"M": 0, "F": 1}
     assert summary["gender_counts"] == {"M": 2, "F": 2, "Other": 0}
     assert summary["employee_count"] == 2
     assert summary["male_employees"] == 1
     assert summary["male_ratio_employees"] == 0.5
+
+
+def test_marital_status_gender_breakdown_reveals_data_gaps_by_gender():
+    census = [
+        _member(30, "F", marital_status="married"),
+        _member(30, "M", marital_status=None),
+        _member(28, "M", marital_status=None),
+    ]
+    summary = census_demographic_summary(census)
+    assert summary["marital_status_counts"] == {"Married": 1, "Unknown": 2}
+    assert summary["marital_status_gender_counts"]["Married"] == {"M": 0, "F": 1}
+    assert summary["marital_status_gender_counts"]["Unknown"] == {"M": 2, "F": 0}
 
 
 def test_infant_vs_favorable_children():

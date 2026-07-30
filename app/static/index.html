@@ -171,6 +171,10 @@
   .tier-Standard { background: var(--surface-2); color: var(--ink-2); }
   .tier-Substandard { background: var(--warn-bg); color: var(--warn); }
   .tier-DeclineRefer { background: var(--bad-bg); color: var(--bad); }
+  .dir-improved { background: var(--good-bg); color: var(--good); }
+  .dir-reduced { background: var(--bad-bg); color: var(--bad); }
+  .dir-same { background: var(--surface-2); color: var(--ink-2); }
+  .dir-review { background: var(--warn-bg); color: var(--warn); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
@@ -329,10 +333,19 @@ function renderCaseWorkspace() {
         <button onclick="uploadFile('claims')">Upload</button>
         <span id="status-claims" class="status-pending"></span>
       </div>
+      <div class="upload-row">
+        <span style="width:110px;">Quote</span>
+        <input type="file" id="file-quote" accept=".pdf">
+        <button onclick="uploadFile('quote')">Upload</button>
+        <span id="status-quote" class="status-pending"></span>
+      </div>
+      <div class="hint">Quote: a new insurer's proposal for this case, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
     </div>
 
     <div id="census-summary-area"></div>
     <div id="benefits-summary-area"></div>
+    <div id="premium-by-category-area"></div>
+    <div id="benefits-comparison-area"></div>
     <div id="claims-projection-area"></div>
     <div id="diagnosis-exposure-area"></div>
 
@@ -367,6 +380,8 @@ function renderCaseWorkspace() {
   loadLatestScorecard();
   loadCensusSummary();
   loadBenefitsSummary();
+  loadPremiumByCategory();
+  loadBenefitsComparison();
   loadClaimsProjection();
   loadDiagnosisExposure();
 }
@@ -384,15 +399,17 @@ async function uploadFile(kind) {
   try {
     const result = await api(`/cases/${currentCase.id}/${kind}`, { method: 'POST', body: form });
     if (Array.isArray(result)) {
-      statusEl.textContent = `${result.length} rows parsed`;
-      toast(`${kind} uploaded (${result.length} rows)`);
+      const unit = kind === 'quote' ? 'categories' : 'rows';
+      statusEl.textContent = `${result.length} ${unit} parsed`;
+      toast(`${kind} uploaded (${result.length} ${unit})`);
     } else {
       statusEl.textContent = 'Report parsed';
       toast(`${kind} report parsed`);
     }
     statusEl.className = 'status-ok';
     if (kind === 'census') await loadCensusSummary();
-    if (kind === 'benefits') await loadBenefitsSummary();
+    if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
+    if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadDiagnosisExposure(); }
   } catch (err) {
     statusEl.textContent = 'Failed';
@@ -473,6 +490,74 @@ async function loadBenefitsSummary() {
         <table>
           ${Object.entries(p.summary).map(([field, value]) => `
             <tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>
+          `).join('')}
+        </table>
+      </div>
+    `).join('');
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadPremiumByCategory() {
+  const area = document.getElementById('premium-by-category-area');
+  try {
+    const p = await api(`/cases/${currentCase.id}/premium-by-category`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Premium per category</h3>
+        <table>
+          <tr><th>Category</th><th>Plan</th><th>Network</th><th>Members</th><th>Gross premium</th><th>Premium / member</th></tr>
+          ${p.categories.map(c => `
+            <tr>
+              <td>${escapeHtml(c.category || '-')}</td>
+              <td>${escapeHtml(c.plan_name || '-')}</td>
+              <td>${escapeHtml(c.network || '-')}</td>
+              <td>${c.member_count ?? '-'}</td>
+              <td>${c.gross_premium != null ? c.gross_premium.toLocaleString() : '-'}</td>
+              <td>${c.premium_per_member != null ? c.premium_per_member.toLocaleString() : '-'}</td>
+            </tr>
+          `).join('')}
+          <tr>
+            <th>Blended total</th><th></th><th></th>
+            <th>${p.total_members}</th>
+            <th>${p.total_gross_premium.toLocaleString()}</th>
+            <th>${p.blended_premium_per_member != null ? p.blended_premium_per_member.toLocaleString() : '-'}</th>
+          </tr>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+function _directionChip(direction, pctChange) {
+  const labels = { improved: 'Improved', reduced: 'Reduced', same: 'Same', review: 'Review' };
+  const pct = pctChange != null ? ` ${pctChange > 0 ? '+' : ''}${pctChange}%` : '';
+  return `<span class="tier-pill dir-${direction}">${labels[direction] || direction}${pct}</span>`;
+}
+
+async function loadBenefitsComparison() {
+  const area = document.getElementById('benefits-comparison-area');
+  try {
+    const comparisons = await api(`/cases/${currentCase.id}/benefits-comparison`);
+    area.innerHTML = comparisons.map(c => `
+      <div class="card">
+        <h3>Benefits comparison</h3>
+        <div class="hint">
+          Existing: ${escapeHtml(c.existing_plan_name || '-')} &nbsp;vs&nbsp; Quoted: ${escapeHtml(c.quoted_plan_name || '-')}
+          ${c.quoted_gross_premium != null ? ` (AED ${c.quoted_gross_premium.toLocaleString()}${c.quoted_member_count ? ' / ' + c.quoted_member_count + ' members' : ''})` : ''}
+        </div>
+        <table>
+          <tr><th>Field</th><th>Existing</th><th>Quoted</th><th>Direction</th></tr>
+          ${Object.entries(c.fields).map(([field, cmp]) => `
+            <tr>
+              <td>${escapeHtml(field.replace(/_/g, ' '))}</td>
+              <td>${escapeHtml(cmp.existing ?? '-')}</td>
+              <td>${escapeHtml(cmp.quoted ?? '-')}</td>
+              <td>${_directionChip(cmp.direction, cmp.pct_change)}</td>
+            </tr>
           `).join('')}
         </table>
       </div>

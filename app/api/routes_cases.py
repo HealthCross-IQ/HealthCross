@@ -11,6 +11,7 @@ from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
 from app.ingestion.claims_report import parse_claims_report
 from app.ingestion.plan_details import parse_plan_details
+from app.ingestion.quote_pdf import parse_quote_pdf
 from app.models import db_models as models
 from app.models import schemas
 
@@ -97,8 +98,61 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
     if not plans:
         raise HTTPException(status_code=400, detail="No benefit plans found in file")
 
-    # Replace, not accumulate - see the census upload for why.
-    db.query(models.BenefitPlan).filter_by(case_id=case.id).delete()
+    # Replace, not accumulate - see the census upload for why. Only this
+    # case's EXISTING-role plans are replaced; a previously-uploaded quote
+    # (role="quoted", see /quote below) is untouched so the two can be
+    # compared side by side.
+    db.query(models.BenefitPlan).filter_by(case_id=case.id, role="existing").delete()
+
+    db.add_all(plans)
+    db.commit()
+    for plan in plans:
+        db.refresh(plan)
+    return plans
+
+
+@router.post("/{case_id}/quote", response_model=List[schemas.BenefitPlanOut])
+def upload_quote(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Uploads a NEW insurer's quotation for this case (category premiums +
+    table of benefits) so it can be compared against the existing plan
+    uploaded via /benefits - see GET /premium-by-category and
+    GET /benefits-comparison. Currently targets the QIC/HealthCROSS Global
+    "Full Category Premium Calculation" quote layout
+    (app/ingestion/quote_pdf.py).
+    """
+    case = _get_case_or_404(db, case_id)
+    try:
+        parsed = parse_quote_pdf(file.file, file.filename)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse quote: {exc}")
+    if not parsed:
+        raise HTTPException(status_code=400, detail="No quoted categories found in file")
+
+    plans = [
+        models.BenefitPlan(
+            case_id=case.id,
+            role="quoted",
+            source_format="pdf-quote",
+            plan_name=f"{entry.get('plan_name') or 'Quoted'} - CAT {entry['category']}" if entry.get("category") else entry.get("plan_name"),
+            category=entry.get("category"),
+            network_type=entry.get("network"),
+            member_count=entry.get("member_count"),
+            gross_premium=entry.get("gross_premium"),
+            annual_limit=entry.get("annual_limit"),
+            maternity_limit=entry.get("maternity_limit"),
+            maternity_covered=entry.get("maternity_limit") is not None,
+            dental_covered=entry.get("dental_covered", False),
+            optical_covered=entry.get("optical_covered", False),
+            pre_existing_covered=entry.get("pre_existing_covered", False),
+            chronic_covered=entry.get("chronic_covered", False),
+            standard_summary=entry.get("standard_summary"),
+        )
+        for entry in parsed
+    ]
+
+    # Replace, not accumulate - only this case's quoted-role plans; the
+    # existing-role plans from /benefits are untouched.
+    db.query(models.BenefitPlan).filter_by(case_id=case.id, role="quoted").delete()
 
     db.add_all(plans)
     db.commit()
