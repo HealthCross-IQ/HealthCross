@@ -53,6 +53,11 @@ def upload_census(case_id: int, file: UploadFile = File(...), db: Session = Depe
     if not parsed:
         raise HTTPException(status_code=400, detail="No census rows found in file")
 
+    # A re-upload replaces the case's census entirely rather than piling on
+    # top of a previous one - otherwise re-uploading the same file (e.g.
+    # after fixing a typo) silently multiplies the member count.
+    db.query(models.CensusRecord).filter_by(case_id=case.id).delete()
+
     records = [models.CensusRecord(case_id=case.id, **row) for row in parsed]
     db.add_all(records)
     db.commit()
@@ -92,6 +97,9 @@ def upload_benefits(case_id: int, file: UploadFile = File(...), db: Session = De
     if not plans:
         raise HTTPException(status_code=400, detail="No benefit plans found in file")
 
+    # Replace, not accumulate - see the census upload for why.
+    db.query(models.BenefitPlan).filter_by(case_id=case.id).delete()
+
     db.add_all(plans)
     db.commit()
     for plan in plans:
@@ -115,6 +123,8 @@ def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depe
         # its own columns - opening_members/closing_members already carry
         # the totals that matter downstream.
         report_fields = {k: v for k, v in parsed.items() if k in models.ClaimsReport.__table__.columns.keys()}
+        # Replace, not accumulate - see the census upload for why.
+        db.query(models.ClaimsReport).filter_by(case_id=case.id).delete()
         report = models.ClaimsReport(case_id=case.id, **report_fields)
         db.add(report)
         db.commit()
@@ -125,6 +135,9 @@ def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depe
         parsed = parse_claims(file.file, file.filename)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not parse claims file: {exc}")
+
+    # Replace, not accumulate - see the census upload for why.
+    db.query(models.ClaimsRecord).filter_by(case_id=case.id).delete()
 
     records = [models.ClaimsRecord(case_id=case.id, **row) for row in parsed]
     db.add_all(records)
