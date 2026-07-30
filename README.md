@@ -113,14 +113,22 @@ benchmarking the standing standards above deliberately avoid.
   series of tables where the benefit label is the table's own first
   column and the remaining columns are one per quoted category.
 - `app/scoring/rules/benefits_comparison.py` compares the two plans'
-  standard 10-field summaries. A numeric direction (Improved/Reduced/Same,
-  with a % change) is only given when both sides parse as a currency
-  amount - USD converts to AED at the fixed 3.6725 peg. Anything that
-  doesn't parse this way is flagged "Review" rather than guessed.
+  standard 10-field summaries, plus network. A numeric direction
+  (Improved/Reduced/Same, with a % change) is only given when both sides
+  parse as a currency amount - USD converts to AED at the fixed 3.6725
+  peg. Anything that doesn't parse this way (including network, which is
+  never a currency amount) is flagged "Review" rather than guessed.
 - `GET /cases/{id}/premium-by-category` - members, network, gross premium,
   and premium/member for each quoted category, plus a blended total.
 - `GET /cases/{id}/benefits-comparison` - the existing vs. quoted plans,
-  paired by position, compared field by field.
+  paired by position (1st existing vs 1st quoted category, etc.), compared
+  field by field. If one side has fewer plans than the other - most
+  commonly a scanned/OCR'd existing plan, which only ever produces ONE
+  combined entry regardless of how many categories the source document
+  actually has - the shorter side's last plan is reused for the extra
+  categories rather than comparing against nothing, and
+  `existing_plan_reused` flags this so it's never silently misread as a
+  distinct Category 2/B entry.
 - Only the existing-role plan feeds the risk scorecard's benefit-richness
   component - a quoted plan uploaded for comparison never changes the
   score of the case as submitted.

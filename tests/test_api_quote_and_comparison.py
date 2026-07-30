@@ -121,6 +121,53 @@ def test_benefits_comparison_404_without_both_sides(client):
     assert resp.status_code == 404
 
 
+def test_benefits_comparison_compares_network(client):
+    case_id = _create_case(client)
+    _insert_existing_plan(client, case_id, network_type="Premium")
+    _insert_quoted_plan(client, case_id)
+
+    resp = client.get(f"/cases/{case_id}/benefits-comparison")
+    body = resp.json()
+    assert body[0]["fields"]["network"]["existing"] == "Premium"
+    assert body[0]["fields"]["network"]["quoted"] == "MSH Platinum"
+
+
+def test_benefits_comparison_reuses_single_existing_plan_across_multiple_quoted_categories(client):
+    # A scanned/OCR'd existing plan only ever produces ONE combined entry
+    # (see app/ingestion/benefits_ocr.py) regardless of how many categories
+    # the source document has - it must still get compared against EVERY
+    # quoted category, not just the first, with existing_plan_reused
+    # flagging the reuse so the UI can make that visible.
+    case_id = _create_case(client)
+    _insert_existing_plan(client, case_id, plan_name="OCR extract (verify against source)")
+    _insert_quoted_plan(client, case_id, category="A", plan_name="Gold - CAT A")
+    _insert_quoted_plan(client, case_id, category="B", plan_name="Gold - CAT B", standard_summary={
+        "area_of_cover": "Worldwide Excluding USA",
+        "annual_limit": "USD 750,000",
+        "deductible": "Not specified in source document",
+        "pre_existing_chronic_limit": "Covered up to Policy Limit",
+        "maternity_limit": "USD 6,800",
+        "dental": "USD 1,000",
+        "optical": "Not Covered",
+        "coinsurance": "20% MAX AED 50",
+        "alternative_or_complementary_treatment": "USD 1,000",
+        "pharmacy_limit_and_coinsurance": "Annual Limit",
+    })
+
+    resp = client.get(f"/cases/{case_id}/benefits-comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    assert body[0]["existing_plan_reused"] is False
+    assert body[1]["existing_plan_reused"] is True
+    assert body[1]["quoted_plan_name"] == "Gold - CAT B"
+    assert body[1]["existing_plan_name"] == "OCR extract (verify against source)"
+    # The reused existing plan's own figures must still be compared, not
+    # a placeholder - CAT B's optical is "Not Covered" vs the existing
+    # plan's AED 1,564, so this must be a real, non-null comparison.
+    assert body[1]["fields"]["optical"]["existing"] == "AED 1,564"
+
+
 def test_reuploading_benefits_does_not_delete_quoted_plans(client):
     import io
 

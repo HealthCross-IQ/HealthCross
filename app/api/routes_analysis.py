@@ -7,8 +7,8 @@ from app.database import get_db
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
-from app.scoring.rules.benefits_comparison import compare_benefit_summaries
-from app.scoring.rules.benefits_summary import STANDARD_FIELDS, build_standard_benefit_summary
+from app.scoring.rules.benefits_comparison import compare_benefit_summaries, compare_benefit_value
+from app.scoring.rules.benefits_summary import build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 
@@ -223,11 +223,19 @@ def get_premium_by_category(case_id: int, db: Session = Depends(get_db)):
 def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
     """Field-by-field comparison of the existing/incumbent plan(s) against
     the quoted plan(s) for this case (see
-    app/scoring/rules/benefits_comparison.py). Existing and quoted plans
-    are paired up by position (1st existing vs 1st quoted, etc.) since
-    neither side's category naming is guaranteed to line up - the plan
-    names of both sides are always returned so a human can confirm the
-    pairing makes sense.
+    app/scoring/rules/benefits_comparison.py).
+
+    Pairing: existing and quoted plans line up by position (1st existing
+    vs 1st quoted category, 2nd vs 2nd, etc.), since neither side's
+    category naming is guaranteed to match (e.g. the existing plan's
+    "Category 1"/"Category 2" vs a quote's "CAT A"/"CAT B"). If one side
+    has fewer plans than the other - most commonly a scanned/OCR'd
+    existing plan, which only ever produces ONE combined entry regardless
+    of how many categories the source document actually has (see
+    app/ingestion/benefits_ocr.py) - the shorter side's LAST plan is
+    reused for the extra categories rather than comparing against nothing.
+    `existing_plan_reused` flags this so the UI can make clear the same
+    existing figures are being shown against more than one quoted category.
     """
     case = _get_case_or_404(db, case_id)
     existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
@@ -239,17 +247,24 @@ def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
 
     comparisons = []
     for i in range(max(len(existing_plans), len(quoted_plans))):
-        existing_plan = existing_plans[i] if i < len(existing_plans) else None
-        quoted_plan = quoted_plans[i] if i < len(quoted_plans) else None
-        existing_summary = _benefit_summary(existing_plan) if existing_plan else {field: None for field in STANDARD_FIELDS}
-        quoted_summary = _benefit_summary(quoted_plan) if quoted_plan else {field: None for field in STANDARD_FIELDS}
+        existing_plan = existing_plans[i] if i < len(existing_plans) else existing_plans[-1]
+        quoted_plan = quoted_plans[i] if i < len(quoted_plans) else quoted_plans[-1]
+        existing_summary = _benefit_summary(existing_plan)
+        quoted_summary = _benefit_summary(quoted_plan)
+
+        fields = compare_benefit_summaries(existing_summary, quoted_summary)
+        fields["network"] = compare_benefit_value(existing_plan.network_type, quoted_plan.network_type)
+
         comparisons.append(
             {
-                "existing_plan_name": existing_plan.plan_name if existing_plan else None,
-                "quoted_plan_name": quoted_plan.plan_name if quoted_plan else None,
-                "quoted_gross_premium": quoted_plan.gross_premium if quoted_plan else None,
-                "quoted_member_count": quoted_plan.member_count if quoted_plan else None,
-                "fields": compare_benefit_summaries(existing_summary, quoted_summary),
+                "existing_plan_name": existing_plan.plan_name,
+                "existing_category": existing_plan.category,
+                "quoted_plan_name": quoted_plan.plan_name,
+                "quoted_category": quoted_plan.category,
+                "quoted_gross_premium": quoted_plan.gross_premium,
+                "quoted_member_count": quoted_plan.member_count,
+                "existing_plan_reused": len(existing_plans) < len(quoted_plans) and i >= len(existing_plans),
+                "fields": fields,
             }
         )
     return comparisons
