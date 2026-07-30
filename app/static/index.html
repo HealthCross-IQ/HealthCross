@@ -1,0 +1,456 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HealthCross Underwriting Intelligence</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f7f7f5;
+    --surface: #ffffff;
+    --surface-2: #f0efec;
+    --border: rgba(11,11,11,0.10);
+    --ink: #17181a;
+    --ink-2: #5a5c60;
+    --ink-muted: #8b8d91;
+    --accent: #2a5db0;
+    --accent-ink: #ffffff;
+    --good: #0ca30c;
+    --good-bg: #0ca30c1a;
+    --warn: #b7791a;
+    --warn-bg: #fab2191f;
+    --bad: #b8322f;
+    --bad-bg: #d03b3b1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1012;
+      --surface: #1a1b1e;
+      --surface-2: #232427;
+      --border: rgba(255,255,255,0.10);
+      --ink: #f2f2f0;
+      --ink-2: #c3c2b7;
+      --ink-muted: #8b8d91;
+      --accent: #6fa1e8;
+      --accent-ink: #0f1012;
+      --good-bg: #0ca30c26;
+      --warn-bg: #fab21926;
+      --bad-bg: #d03b3b26;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.45;
+  }
+  header {
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
+  header span { color: var(--ink-muted); font-size: 13px; }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    min-height: calc(100vh - 57px);
+  }
+  @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+
+  aside {
+    border-right: 1px solid var(--border);
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  aside h2 {
+    font-size: 11.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--ink-muted);
+    margin: 0;
+  }
+  .case-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+  .case-item {
+    text-align: left;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    padding: 8px 10px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .case-item:hover { background: var(--surface-2); }
+  .case-item.active { background: var(--surface-2); border-color: var(--border); }
+  .case-item .company { font-weight: 600; display: block; }
+  .case-item .meta { color: var(--ink-muted); font-size: 11.5px; }
+
+  button, .btn {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 8px 14px;
+    font-size: 13.5px;
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary {
+    background: var(--accent);
+    color: var(--accent-ink);
+    border-color: transparent;
+    font-weight: 600;
+  }
+  button.primary:hover { filter: brightness(1.08); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  main { padding: 24px; max-width: 880px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 18px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card .hint { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 14px; }
+
+  label { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 4px; }
+  input[type=text], input[type=number] {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1; min-width: 160px; }
+
+  .upload-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+  .upload-row input[type=file] { flex: 1; font-size: 12.5px; }
+  .status-ok { color: var(--good); font-size: 12.5px; }
+  .status-err { color: var(--bad); font-size: 12.5px; }
+  .status-pending { color: var(--ink-muted); font-size: 12.5px; }
+
+  .kpi-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+    gap: 10px;
+    margin-bottom: 16px;
+  }
+  .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 16px;
+  }
+  .kpi .label { font-size: 11.5px; color: var(--ink-muted); display: block; }
+  .kpi .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .tier-pill {
+    display: inline-flex;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .tier-Preferred { background: var(--good-bg); color: var(--good); }
+  .tier-Standard { background: var(--surface-2); color: var(--ink-2); }
+  .tier-Substandard { background: var(--warn-bg); color: var(--warn); }
+  .tier-DeclineRefer { background: var(--bad-bg); color: var(--bad); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+  table th { color: var(--ink-muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; }
+
+  .empty-state { color: var(--ink-muted); font-size: 13px; padding: 20px 0; text-align: center; }
+  #toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    display: none;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HealthCross</h1>
+  <span>Underwriting Intelligence</span>
+</header>
+
+<div class="layout">
+  <aside>
+    <button class="primary" onclick="showNewCaseForm()">+ New Case</button>
+    <h2>Cases</h2>
+    <div class="case-list" id="caseList"></div>
+  </aside>
+
+  <main id="main"></main>
+</div>
+
+<div id="toast"></div>
+
+<script>
+const API = '';
+let currentCase = null;
+
+function toast(message, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.style.borderColor = isError ? 'var(--bad)' : 'var(--border)';
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
+}
+
+async function api(path, options) {
+  const res = await fetch(API + path, options);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || (`Request failed (${res.status})`));
+  }
+  return res.json();
+}
+
+async function loadCases() {
+  const cases = await api('/cases');
+  const list = document.getElementById('caseList');
+  if (cases.length === 0) {
+    list.innerHTML = '<div class="empty-state" style="padding:8px 0;">No cases yet</div>';
+    return;
+  }
+  list.innerHTML = cases.map(c => `
+    <button class="case-item ${currentCase && currentCase.id === c.id ? 'active' : ''}" onclick="selectCase(${c.id})">
+      <span class="company">${escapeHtml(c.company_name)}</span>
+      <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
+    </button>
+  `).join('');
+}
+
+function escapeHtml(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+function showNewCaseForm() {
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>New case</h3>
+      <div class="hint">Create a case, then attach the census, table of benefits, and (optionally) claims.</div>
+      <form onsubmit="createCase(event)">
+        <div class="row">
+          <div><label>Broker name</label><input type="text" name="broker_name" required></div>
+          <div><label>Company name</label><input type="text" name="company_name" required></div>
+        </div>
+        <div class="row">
+          <div><label>Industry</label><input type="text" name="industry" required placeholder="e.g. trading, manufacturing"></div>
+          <div><label>Region</label><input type="text" name="region" placeholder="e.g. Dubai"></div>
+          <div><label>Declared employee count</label><input type="number" name="employee_count_declared"></div>
+        </div>
+        <div style="margin-top:16px;"><button class="primary" type="submit">Create case</button></div>
+      </form>
+    </div>
+  `;
+  loadCases();
+}
+
+async function createCase(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const payload = {
+    broker_name: form.get('broker_name'),
+    company_name: form.get('company_name'),
+    industry: form.get('industry'),
+    region: form.get('region') || null,
+    employee_count_declared: form.get('employee_count_declared') ? Number(form.get('employee_count_declared')) : null,
+  };
+  try {
+    const created = await api('/cases', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    toast(`Case #${created.id} created`);
+    await loadCases();
+    selectCase(created.id);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function selectCase(id) {
+  currentCase = await api(`/cases/${id}`);
+  await loadCases();
+  renderCaseWorkspace();
+}
+
+function renderCaseWorkspace() {
+  const c = currentCase;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>${escapeHtml(c.company_name)} <span style="color:var(--ink-muted); font-weight:400;">#${c.id}</span></h3>
+      <div class="hint">${escapeHtml(c.broker_name)} &middot; ${escapeHtml(c.industry)} &middot; ${escapeHtml(c.region || '-')} &middot; status: ${c.status}</div>
+    </div>
+
+    <div class="card">
+      <h3>1. Upload files</h3>
+      <div class="hint">Census is required to score. Table of benefits is required. Claims are optional.</div>
+
+      <div class="upload-row">
+        <span style="width:110px;">Census</span>
+        <input type="file" id="file-census" accept=".xlsx,.xls,.csv">
+        <button onclick="uploadFile('census')">Upload</button>
+        <span id="status-census" class="status-pending"></span>
+      </div>
+      <div class="upload-row">
+        <span style="width:110px;">Benefits</span>
+        <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv">
+        <button onclick="uploadFile('benefits')">Upload</button>
+        <span id="status-benefits" class="status-pending"></span>
+      </div>
+      <div class="upload-row">
+        <span style="width:110px;">Claims</span>
+        <input type="file" id="file-claims" accept=".xlsx,.xls,.csv">
+        <button onclick="uploadFile('claims')">Upload</button>
+        <span id="status-claims" class="status-pending"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>2. Compute risk scorecard</h3>
+      <label>Estimated annual premium (optional, improves claims-experience accuracy)</label>
+      <input type="number" id="estimated-premium" placeholder="e.g. 30000">
+      <div style="margin-top:12px;"><button class="primary" onclick="computeScore()">Compute scorecard</button></div>
+    </div>
+
+    <div id="scorecard-area"></div>
+
+    <div class="card">
+      <h3>3. Record outcome</h3>
+      <div class="hint">Once the case is bound (or declined), record what happened here — this feeds the recalibration loop.</div>
+      <form onsubmit="recordOutcome(event)">
+        <div class="row">
+          <div>
+            <label>Outcome</label>
+            <select name="bound" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
+              <option value="true">Bound</option>
+              <option value="false">Declined</option>
+            </select>
+          </div>
+          <div><label>Final premium</label><input type="number" name="final_premium"></div>
+          <div><label>Actual loss ratio (e.g. 0.75)</label><input type="number" step="0.01" name="actual_loss_ratio"></div>
+        </div>
+        <div style="margin-top:12px;"><button type="submit">Save outcome</button></div>
+      </form>
+    </div>
+  `;
+  loadLatestScorecard();
+}
+
+async function uploadFile(kind) {
+  const input = document.getElementById(`file-${kind}`);
+  const statusEl = document.getElementById(`status-${kind}`);
+  if (!input.files.length) { toast('Choose a file first', true); return; }
+
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  statusEl.textContent = 'Uploading...';
+  statusEl.className = 'status-pending';
+  try {
+    const result = await api(`/cases/${currentCase.id}/${kind}`, { method: 'POST', body: form });
+    statusEl.textContent = `${result.length} rows parsed`;
+    statusEl.className = 'status-ok';
+    toast(`${kind} uploaded (${result.length} rows)`);
+  } catch (err) {
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'status-err';
+    toast(err.message, true);
+  }
+}
+
+async function computeScore() {
+  const premiumInput = document.getElementById('estimated-premium').value;
+  try {
+    const payload = { estimated_annual_premium: premiumInput ? Number(premiumInput) : null };
+    await api(`/cases/${currentCase.id}/score`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    toast('Scorecard computed');
+    await loadLatestScorecard();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function loadLatestScorecard() {
+  const area = document.getElementById('scorecard-area');
+  try {
+    const sc = await api(`/cases/${currentCase.id}/scorecard`);
+    const tierClass = 'tier-' + sc.risk_tier.replace(/[^A-Za-z]/g, '');
+    area.innerHTML = `
+      <div class="card">
+        <h3>Risk scorecard <span class="tier-pill ${tierClass}">${sc.risk_tier}</span></h3>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">Composite score</span><span class="value">${sc.composite_score}</span></div>
+          <div class="kpi"><span class="label">Suggested loading</span><span class="value">${sc.suggested_loading_pct}%</span></div>
+          <div class="kpi"><span class="label">Demographic</span><span class="value">${sc.demographic_risk}&times;</span></div>
+          <div class="kpi"><span class="label">Claims exp.</span><span class="value">${sc.claims_experience_risk}&times;</span></div>
+          <div class="kpi"><span class="label">Benefit richness</span><span class="value">${sc.benefit_richness_risk}&times;</span></div>
+          <div class="kpi"><span class="label">Industry</span><span class="value">${sc.industry_risk}&times;</span></div>
+        </div>
+        <table>
+          <tr><th>Avg age</th><td>${sc.details.demographic.avg_age ?? '-'}</td></tr>
+          <tr><th>Male ratio (employees)</th><td>${(sc.details.demographic.male_ratio_employees*100).toFixed(1)}%</td></tr>
+          <tr><th>Maternity risk count</th><td>${sc.details.demographic.maternity_risk_count}</td></tr>
+          <tr><th>Female spouse count</th><td>${sc.details.demographic.female_spouse_count}</td></tr>
+          <tr><th>Infant count</th><td>${sc.details.demographic.infant_count}</td></tr>
+          <tr><th>Claims loss ratio</th><td>${sc.details.claims_experience.loss_ratio ?? 'n/a'}</td></tr>
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function recordOutcome(event) {
+  event.preventDefault();
+  const form = new FormData(event.target);
+  const payload = {
+    bound: form.get('bound') === 'true',
+    final_premium: form.get('final_premium') ? Number(form.get('final_premium')) : null,
+    actual_loss_ratio: form.get('actual_loss_ratio') ? Number(form.get('actual_loss_ratio')) : null,
+  };
+  try {
+    await api(`/cases/${currentCase.id}/outcome`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    toast('Outcome recorded');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+showNewCaseForm();
+</script>
+</body>
+</html>

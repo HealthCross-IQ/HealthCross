@@ -115,8 +115,17 @@ and kidney/genitourinary conditions regardless of current claim volume.
 30,000 as a probable large/shock claim, and below AED 1,000 as a likely
 day-case-miscoded-as-in-patient data artifact.
 
+## Web UI
+
+Opening the server's root URL (`http://127.0.0.1:8000/`) serves a small
+self-contained single-page UI (`app/static/index.html` - no build step, no
+JS framework, no external requests): create a case, upload census/benefits/
+claims files, compute the scorecard, and record an outcome, all by clicking
+around instead of using `/docs`. It's a thin client over the same API below.
+
 ## API
 
+- `GET /cases` - list all cases
 - `POST /cases` - create a case (broker, company, industry, region)
 - `POST /cases/{id}/census` - upload the census (xlsx/csv)
 - `POST /cases/{id}/benefits` - upload the table of benefits (xlsx/csv)

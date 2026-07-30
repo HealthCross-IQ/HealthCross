@@ -1,10 +1,14 @@
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
+from fastapi.responses import FileResponse
 
 from app.api import routes_admin, routes_cases, routes_feedback, routes_scoring
 from app.database import Base, SessionLocal, engine
 from app.models import db_models as models
+
+STATIC_DIR = Path(__file__).parent / "static"
 
 
 def _ensure_default_weight_set() -> None:
@@ -45,3 +49,8 @@ app.include_router(routes_admin.router)
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/", include_in_schema=False)
+def serve_ui():
+    return FileResponse(STATIC_DIR / "index.html")

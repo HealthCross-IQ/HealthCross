@@ -30,6 +30,11 @@ def create_case(payload: schemas.CaseCreate, db: Session = Depends(get_db)):
     return case
 
 
+@router.get("", response_model=List[schemas.CaseOut])
+def list_cases(db: Session = Depends(get_db)):
+    return db.query(models.Case).order_by(models.Case.submitted_at.desc()).all()
+
+
 @router.get("/{case_id}", response_model=schemas.CaseOut)
 def get_case(case_id: int, db: Session = Depends(get_db)):
     return _get_case_or_404(db, case_id)
