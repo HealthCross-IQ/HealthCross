@@ -33,13 +33,17 @@ def census_demographic_summary(census: List[dict]) -> dict:
     ages = [m["age"] for m in census if m.get("age") is not None]
 
     age_band_counts = {_age_band_label(low, high): 0 for low, high, _ in AGE_BANDS}
+    age_band_gender_counts = {_age_band_label(low, high): {"M": 0, "F": 0} for low, high, _ in AGE_BANDS}
     for m in census:
         age = m.get("age")
         if age is None:
             continue
         for low, high, _ in AGE_BANDS:
             if low <= age <= high:
-                age_band_counts[_age_band_label(low, high)] += 1
+                band = _age_band_label(low, high)
+                age_band_counts[band] += 1
+                if m.get("gender") in ("M", "F"):
+                    age_band_gender_counts[band][m["gender"]] += 1
                 break
 
     gender_counts = {"M": 0, "F": 0, "Other": 0}
@@ -88,6 +92,7 @@ def census_demographic_summary(census: List[dict]) -> dict:
         "avg_age": round(mean(ages), 1) if ages else None,
         "age_band_counts": age_band_counts,
         "age_band_pct": {band: _pct(count, total) for band, count in age_band_counts.items()},
+        "age_band_gender_counts": age_band_gender_counts,
         "gender_counts": gender_counts,
         "gender_pct": {g: _pct(c, total) for g, c in gender_counts.items()},
         "marital_status_counts": marital_status_counts,

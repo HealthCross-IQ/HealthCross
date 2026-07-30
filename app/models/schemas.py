@@ -109,6 +109,8 @@ class ClaimsProjectionOut(BaseModel):
     avg_month: float
     annualized: float
     with_ibnr: float
+    opening_members: int
+    closing_members: int
     avg_report_members: float
     burning_cost_per_member: float
     projected_current_group: float

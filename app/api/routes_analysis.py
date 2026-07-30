@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -9,7 +9,7 @@ from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
 from app.scoring.rules.benefits_summary import build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
-from app.scoring.rules.claims_projection import project_annual_claims
+from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
 
@@ -40,10 +40,21 @@ def get_claims_report(case_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/{case_id}/claims-projection", response_model=schemas.ClaimsProjectionOut)
-def get_claims_projection(case_id: int, db: Session = Depends(get_db)):
+def get_claims_projection(
+    case_id: int,
+    db: Session = Depends(get_db),
+    credibility_pct: Optional[float] = None,
+    inflation_pct: Optional[float] = None,
+    ibnr_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+):
     """Runs the standing burning-cost formula (see
     app/scoring/rules/claims_projection.py) against this case's latest
-    claims report and current census member count.
+    claims report and current census member count. Credibility (and the
+    other assumptions) can be overridden per call via query params since
+    credibility in particular is negotiated per insurer/case rather than
+    fixed - the defaults on ClaimsProjectionAssumptions still apply when
+    a param is omitted.
     """
     case = _get_case_or_404(db, case_id)
     report = _latest_claims_report(db, case_id)
@@ -65,11 +76,20 @@ def get_claims_projection(case_id: int, db: Session = Depends(get_db)):
     if not report.opening_members or not report.closing_members:
         raise HTTPException(status_code=400, detail="Claims report is missing opening/closing member counts")
 
+    defaults = ClaimsProjectionAssumptions()
+    assumptions = ClaimsProjectionAssumptions(
+        credibility_pct=credibility_pct if credibility_pct is not None else defaults.credibility_pct,
+        inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
+        ibnr_pct=ibnr_pct if ibnr_pct is not None else defaults.ibnr_pct,
+        loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+    )
+
     result = project_annual_claims(
         six_month_paid_claims=six_months,
         opening_members=report.opening_members,
         closing_members=report.closing_members,
         current_census_members=census_count,
+        assumptions=assumptions,
     )
     result["months_used"] = month_labels
     return result

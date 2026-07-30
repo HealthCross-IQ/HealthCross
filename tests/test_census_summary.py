@@ -27,6 +27,8 @@ def test_age_band_counts_and_pct():
     assert summary["total_members"] == 5
     assert summary["age_band_counts"] == {"0-17": 1, "18-40": 1, "41-59": 1, "60-69": 1, "70-99": 1}
     assert summary["age_band_pct"]["0-17"] == 0.2
+    assert summary["age_band_gender_counts"]["0-17"] == {"M": 1, "F": 0}
+    assert summary["age_band_gender_counts"]["18-40"] == {"M": 0, "F": 1}
 
 
 def test_married_female_and_maternity_risk_counts():

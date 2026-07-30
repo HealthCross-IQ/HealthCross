@@ -20,6 +20,8 @@ def test_project_annual_claims_matches_legrand_worked_example():
     assert result["avg_month"] == pytest.approx(234989.33, abs=1)
     assert result["annualized"] == pytest.approx(2819872, abs=1)
     assert result["with_ibnr"] == pytest.approx(3101859, abs=1)
+    assert result["opening_members"] == 161
+    assert result["closing_members"] == 227
     assert result["avg_report_members"] == 194.0
     assert result["burning_cost_per_member"] == pytest.approx(15988.96, abs=1)
     assert result["projected_current_group"] == pytest.approx(3389661, abs=10)

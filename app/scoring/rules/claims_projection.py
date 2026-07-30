@@ -74,6 +74,8 @@ def project_annual_claims(
         "avg_month": round(avg_month, 2),
         "annualized": round(annualized, 2),
         "with_ibnr": round(with_ibnr, 2),
+        "opening_members": opening_members,
+        "closing_members": closing_members,
         "avg_report_members": avg_report_members,
         "burning_cost_per_member": round(burning_cost_per_member, 2),
         "projected_current_group": round(projected_current_group, 2),

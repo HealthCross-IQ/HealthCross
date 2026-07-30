@@ -426,8 +426,16 @@ async function loadCensusSummary() {
         </div>
         <div class="row" style="margin-top:16px;">
           <table>
-            <tr><th>Age band</th><th>Count</th><th>%</th></tr>
-            ${_pctTable(s.age_band_counts, s.age_band_pct)}
+            <tr><th>Age band</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+            ${Object.keys(s.age_band_counts).map(band => `
+              <tr>
+                <th>${escapeHtml(band)}</th>
+                <td>${s.age_band_gender_counts[band].M}</td>
+                <td>${s.age_band_gender_counts[band].F}</td>
+                <td>${s.age_band_counts[band]}</td>
+                <td>${(s.age_band_pct[band] * 100).toFixed(1)}%</td>
+              </tr>
+            `).join('')}
           </table>
           <table>
             <tr><th>Gender</th><th>Count</th><th>%</th></tr>
@@ -474,10 +482,11 @@ async function loadBenefitsSummary() {
   }
 }
 
-async function loadClaimsProjection() {
+async function loadClaimsProjection(credibilityOverride) {
   const area = document.getElementById('claims-projection-area');
   try {
-    const p = await api(`/cases/${currentCase.id}/claims-projection`);
+    const params = credibilityOverride != null ? `?credibility_pct=${credibilityOverride}` : '';
+    const p = await api(`/cases/${currentCase.id}/claims-projection${params}`);
     area.innerHTML = `
       <div class="card">
         <h3>Claims projection (burning cost)</h3>
@@ -486,6 +495,8 @@ async function loadClaimsProjection() {
           <tr><th>Average month</th><td>${p.avg_month.toLocaleString()}</td></tr>
           <tr><th>Annualized</th><td>${p.annualized.toLocaleString()}</td></tr>
           <tr><th>+ IBNR (${(p.assumptions_used.ibnr_pct*100).toFixed(0)}%)</th><td>${p.with_ibnr.toLocaleString()}</td></tr>
+          <tr><th>Opening members</th><td>${p.opening_members}</td></tr>
+          <tr><th>Closing members</th><td>${p.closing_members}</td></tr>
           <tr><th>Avg report members</th><td>${p.avg_report_members}</td></tr>
           <tr><th>Burning cost / member</th><td>${p.burning_cost_per_member.toLocaleString()}</td></tr>
           <tr><th>Projected (current group)</th><td>${p.projected_current_group.toLocaleString()}</td></tr>
@@ -493,11 +504,25 @@ async function loadClaimsProjection() {
           <tr><th>x Credibility (${(p.assumptions_used.credibility_pct*100).toFixed(0)}%)</th><td>${p.credible.toLocaleString()}</td></tr>
           <tr><th><b>Final projected claims</b> (÷ loading)</th><td><b>${p.final_projected_claims.toLocaleString()}</b></td></tr>
         </table>
+        <div class="row" style="margin-top:12px; align-items:flex-end;">
+          <div>
+            <label>Credibility % (varies by insurer)</label>
+            <input type="number" id="credibility-override" min="0" max="100" step="1" value="${(p.assumptions_used.credibility_pct*100).toFixed(0)}">
+          </div>
+          <button onclick="recomputeClaimsProjection()">Recompute</button>
+        </div>
       </div>
     `;
   } catch (err) {
     area.innerHTML = '';
   }
+}
+
+async function recomputeClaimsProjection() {
+  const input = document.getElementById('credibility-override');
+  const pct = Number(input.value);
+  if (Number.isNaN(pct) || pct < 0 || pct > 100) { toast('Enter a credibility % between 0 and 100', true); return; }
+  await loadClaimsProjection(pct / 100);
 }
 
 async function loadDiagnosisExposure() {

@@ -92,6 +92,19 @@ def test_claims_projection_matches_the_hand_worked_example(client):
 
     assert body["months_used"] == ["Oct 2025", "Nov 2025", "Dec 2025", "Jan 2026", "Feb 2026", "Mar 2026"]
     assert round(body["final_projected_claims"]) == 4554856
+    assert body["opening_members"] == 161
+    assert body["closing_members"] == 227
+
+
+def test_claims_projection_credibility_override_via_query_param(client):
+    case_id = _create_case_with_census(client, member_count=212)
+    _insert_claims_report(client, case_id)
+
+    default_resp = client.get(f"/cases/{case_id}/claims-projection")
+    lower_credibility_resp = client.get(f"/cases/{case_id}/claims-projection", params={"credibility_pct": 0.5})
+
+    assert lower_credibility_resp.json()["assumptions_used"]["credibility_pct"] == 0.5
+    assert lower_credibility_resp.json()["final_projected_claims"] < default_resp.json()["final_projected_claims"]
 
 
 def test_diagnosis_exposure_flags_cancer_as_chronic_and_high_exposure(client):
