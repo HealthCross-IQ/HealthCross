@@ -481,9 +481,15 @@ Opening the server's root URL (`http://127.0.0.1:8000/`) serves a small
 self-contained single-page UI (`app/static/index.html` - no build step, no
 JS framework, no external requests): create a case (choosing new vs.
 existing business), upload census/benefits/claims/quote/claims-ledger
-files, compute the scorecard, and record an outcome, all by clicking
-around instead of using `/docs`. It's a thin client over the same API
-below.
+files, and record an outcome, all by clicking around instead of using
+`/docs`. It's a thin client over the same API below.
+
+The risk scorecard computes itself automatically - `autoComputeScore()` fires
+after every census/benefits/claims/claims-ledger upload (`POST
+/cases/{id}/score`), so it's always current with no manual step, and stays
+quiet (no error toast) on the expected 400s until both a census and a table
+of benefits are uploaded. The Scorecard tab's button is only for a manual
+recompute, e.g. after typing in an estimated annual premium.
 
 The case workspace is organized into four tabs (Census / Benefits / Claims /
 Scorecard) below an always-visible case-details and file-upload area, rather
@@ -510,7 +516,7 @@ uploads accept drag-and-drop onto their row in addition to the file picker.
 - `POST /cases/{id}/plan-details` - upload the broker's "CLIENT & PLAN
   details" sheet to populate broker/industry/existing-insurer/target-premium
   metadata on the case
-- `POST /cases/{id}/score` - compute and store a scorecard
+- `POST /cases/{id}/score` - compute and store a scorecard (the web UI calls this automatically after every census/benefits/claims/claims-ledger upload)
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
 - `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away, plus the top 5 nationalities within each zone
