@@ -514,10 +514,8 @@ async function selectCase(id) {
 let refPlans = [];
 let comparisonColumnCount = 2;
 
-async function showInternationalComparison() {
-  currentCase = null;
-  await loadCases();
-  document.getElementById('main').innerHTML = `
+function comparisonPanelHtml() {
+  return `
     <div class="card">
       <h3>International insurer comparison</h3>
       <div class="hint">Upload each insurer's table of benefits once into this shared library, tagged with an insurer name and plan/tier label. A Bupa-style file with multiple tiers creates one library entry per tier automatically.</div>
@@ -547,6 +545,12 @@ async function showInternationalComparison() {
     </div>
     <div id="ref-comparison-area"></div>
   `;
+}
+
+async function showInternationalComparison() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = comparisonPanelHtml();
   await loadReferencePlans();
   renderComparisonColumnPickers();
 }
@@ -666,6 +670,7 @@ const TABS = [
   { id: 'census', label: 'Census' },
   { id: 'benefits', label: 'Benefits' },
   { id: 'claims', label: 'Claims' },
+  { id: 'comparison', label: 'Comparison' },
   { id: 'scorecard', label: 'Scorecard' },
 ];
 
@@ -765,6 +770,10 @@ function renderCaseWorkspace() {
       <div id="renewal-rating-area"></div>
     </div>
 
+    <div class="tab-panel" data-tab="comparison">
+      ${comparisonPanelHtml()}
+    </div>
+
     <div class="tab-panel" data-tab="scorecard">
       <div class="card">
         <h3>Compute risk scorecard</h3>
@@ -804,6 +813,8 @@ function renderCaseWorkspace() {
   loadDiagnosisExposure();
   loadClaimsLedgerAnalysis();
   loadRenewalRating();
+  loadReferencePlans();
+  renderComparisonColumnPickers();
 }
 
 async function saveCaseDetails() {

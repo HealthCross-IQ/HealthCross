@@ -19,7 +19,7 @@ from typing import BinaryIO, Dict, List, Optional
 import pdfplumber
 import pytesseract
 
-_HEADER_ROW_WORDS = {"benefit", "benefits", "benefit limit", "clarifications", "clarification", "limits"}
+_HEADER_ROW_WORDS = {"benefit", "benefits", "benefit limit", "clarifications", "clarification", "limits", "plan"}
 
 # A quote-style PDF (MSH's, in particular) carries a per-member premium
 # schedule and an executive-summary/quotation-terms block ahead of the
@@ -52,15 +52,47 @@ def _looks_garbled(sample_text: str) -> bool:
     return len(_COMMON_WORD_RE.findall(sample_text)) < 3
 
 
-def _ocr_bbox(page: "pdfplumber.page.Page", bbox) -> str:
+def _clamp_bbox(page: "pdfplumber.page.Page", bbox):
     x0, top, x1, bottom = bbox
     x0, top = max(x0, 0), max(top, 0)
     x1, bottom = min(x1, page.width), min(bottom, page.height)
     if x1 <= x0 or bottom <= top:
+        return None
+    return (x0, top, x1, bottom)
+
+
+def _ocr_bbox(page: "pdfplumber.page.Page", bbox) -> str:
+    clamped = _clamp_bbox(page, bbox)
+    if clamped is None:
         return ""
-    cropped = page.within_bbox((x0, top, x1, bottom))
+    cropped = page.within_bbox(clamped)
     image = cropped.to_image(resolution=200).original
     return _clean(pytesseract.image_to_string(image))
+
+
+def _text_bbox(page: "pdfplumber.page.Page", bbox) -> str:
+    clamped = _clamp_bbox(page, bbox)
+    if clamped is None:
+        return ""
+    return _clean(page.within_bbox(clamped).extract_text())
+
+
+def _label_and_note_from_geometry(page: "pdfplumber.page.Page", table_bbox, row_top: float, row_bottom: float, value_x0: float, value_x1: float):
+    """Recovers the label/note text either side of a row's one ruled value
+    cell. Native text extraction is tried first since it's fast and most
+    documents' label/note columns extract fine even when they aren't
+    ruled as their own cells - OCR only kicks in for the (rarer) documents
+    where that specific text truly isn't extractable (see module docstring).
+    """
+    # `within_bbox` only keeps characters fully inside the box, so a
+    # region flush against the table's own edge clips the first/last
+    # glyph of the label and note text - pad both sides by a few points.
+    margin = 3
+    label_bbox = (table_bbox[0] - margin, row_top, value_x0, row_bottom)
+    label = _text_bbox(page, label_bbox) or _ocr_bbox(page, label_bbox)
+    note_bbox = (value_x1, row_top, table_bbox[2] + margin, row_bottom)
+    note = _text_bbox(page, note_bbox) or _ocr_bbox(page, note_bbox)
+    return label, note
 
 
 def _rows_via_geometry_ocr(pdf: "pdfplumber.PDF") -> List[Dict[str, str]]:
@@ -128,7 +160,7 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
     """
     rows: List[Dict[str, str]] = []
     current_section = ""
-    candidate_rows_seen = 0
+    header_plan_value: Optional[str] = None
 
     with pdfplumber.open(file) as pdf:
         sample_text = " ".join((page.extract_text() or "") for page in pdf.pages[:3])
@@ -140,39 +172,63 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                 data = table.extract()
                 if not data:
                     continue
+                table_rows = table.rows
                 for row_index in range(len(data)):
                     raw_cells = [_clean(c) for c in data[row_index]]
-                    non_empty = [c for c in raw_cells if c]
-                    if not non_empty:
+                    non_empty_idx = [i for i, c in enumerate(raw_cells) if c]
+                    if not non_empty_idx:
                         continue
-                    candidate_rows_seen += 1
-                    if len(non_empty) == 1:
-                        # A lone cell with no value alongside it is a
-                        # section banner, not a benefit row on its own -
-                        # UNLESS the populated cell sits in a later column
-                        # (the label column came back blank), which means
-                        # this is really a value-only row, not a banner.
-                        if raw_cells[0]:
-                            current_section = non_empty[0]
+                    if len(non_empty_idx) == 1 and non_empty_idx[0] == 0:
+                        # A lone cell in the label column with nothing
+                        # alongside it is a section banner, not a benefit
+                        # row on its own.
+                        current_section = raw_cells[0]
+                        continue
+                    if len(non_empty_idx) == 1:
+                        # The label/note columns aren't ruled as their own
+                        # cells in this row (some documents only rule the
+                        # value column) - recover them from the geometry
+                        # either side of the one cell that IS ruled, rather
+                        # than discarding a real benefit row as if it had
+                        # no label.
+                        if row_index >= len(table_rows):
                             continue
-                    label, value = raw_cells[0], raw_cells[1] if len(raw_cells) > 1 else ""
-                    if not label or not value:
-                        continue
+                        value_idx = non_empty_idx[0]
+                        cells = table_rows[row_index].cells
+                        value_cell = cells[value_idx] if value_idx < len(cells) else None
+                        if value_cell is None:
+                            continue
+                        row_top, row_bottom = table_rows[row_index].bbox[1], table_rows[row_index].bbox[3]
+                        label, note = _label_and_note_from_geometry(
+                            page, table.bbox, row_top, row_bottom, value_cell[0], value_cell[2]
+                        )
+                        value = raw_cells[value_idx]
+                        if "(cid:" in value:
+                            # A handful of glyphs in this font have no
+                            # Unicode mapping - pdfplumber falls back to
+                            # printing the raw font code instead. OCR the
+                            # same cell to recover the actual text.
+                            value = _ocr_bbox(page, (value_cell[0], row_top, value_cell[2], row_bottom))
+                        if not label:
+                            continue
+                    else:
+                        label, value = raw_cells[0], raw_cells[1] if len(raw_cells) > 1 else ""
+                        if not label or not value:
+                            continue
+                        note = " ".join(c for c in raw_cells[2:] if c)
+
                     if label.lower() in _HEADER_ROW_WORDS or value.lower() in _HEADER_ROW_WORDS:
+                        if label.lower() in _HEADER_ROW_WORDS and value and header_plan_value is None:
+                            # Capture the plan-name column header itself so
+                            # documents that repeat a mini "section | plan
+                            # name" header on every page can be told apart
+                            # from a real benefit row further down.
+                            header_plan_value = value
+                        continue
+                    if header_plan_value is not None and value == header_plan_value:
                         continue
                     if _is_non_benefit_section(current_section):
                         continue
-                    note = " ".join(c for c in raw_cells[2:] if c)
                     rows.append({"section": current_section, "label": label, "value": value, "note": note})
-
-        # Some documents have a benefit-label column rendered in a font
-        # pdfplumber can't turn into text at all (blank, not garbled) while
-        # the value/clarification columns extract fine - native parsing
-        # then finds real benefit rows but with no usable label, and (worse)
-        # miscounts many of them as section banners. If almost nothing came
-        # out despite there being real candidate rows, the label column is
-        # unreadable and geometry OCR is the only way to recover it.
-        if not rows and candidate_rows_seen > 5:
-            return _rows_via_geometry_ocr(pdf)
 
     return rows
