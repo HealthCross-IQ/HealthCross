@@ -97,6 +97,23 @@ def parse_benefits_pdf(file: BinaryIO, filename: str) -> Dict[str, Dict[str, str
     return _build_tier_summaries(rows)
 
 
+def extract_all_rows_by_tier(file: BinaryIO, filename: str) -> Dict[str, List[Dict[str, str]]]:
+    """Returns {tier_name: [{"label", "value"}]} for EVERY benefit row found,
+    not just the standard 11-field summary - used by the detailed
+    international benefits comparison, which wants every row verbatim.
+    """
+    with pdfplumber.open(file) as pdf:
+        rows = _extract_benefit_rows(pdf)
+
+    tiers = sorted({tier for values in rows.values() for tier in values.keys()})
+    by_tier: Dict[str, List[Dict[str, str]]] = {tier: [] for tier in tiers}
+    for label, tier_values in rows.items():
+        for tier, value in tier_values.items():
+            if value:
+                by_tier[tier].append({"label": label.title(), "value": value})
+    return by_tier
+
+
 def parse_benefits_pdf_text_fallback(file: BinaryIO, filename: str) -> Dict[str, Any]:
     """Fallback for a table-of-benefits PDF that has real extractable text
     (so it isn't a scan needing OCR) but whose tables aren't recoverable by

@@ -4,7 +4,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
 
-from app.api import routes_admin, routes_analysis, routes_cases, routes_feedback, routes_scoring
+from app.api import routes_admin, routes_analysis, routes_cases, routes_feedback, routes_reference_plans, routes_scoring
 from app.database import Base, SessionLocal, engine
 from app.db_migrate import auto_migrate_missing_columns
 from app.models import db_models as models
@@ -47,6 +47,7 @@ app.include_router(routes_scoring.router)
 app.include_router(routes_feedback.router)
 app.include_router(routes_admin.router)
 app.include_router(routes_analysis.router)
+app.include_router(routes_reference_plans.router)
 
 
 @app.get("/health")

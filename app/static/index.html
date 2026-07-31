@@ -267,6 +267,7 @@
 <div class="layout">
   <aside>
     <button class="primary" onclick="showNewCaseForm()">+ New Case</button>
+    <button onclick="showInternationalComparison()">International comparison</button>
     <h2>Cases</h2>
     <div class="case-list" id="caseList"></div>
   </aside>
@@ -506,6 +507,157 @@ async function selectCase(id) {
   currentCase = await api(`/cases/${id}`);
   await loadCases();
   renderCaseWorkspace();
+}
+
+/* ---------------- international comparison (reference library) ---------------- */
+
+let refPlans = [];
+let comparisonColumnCount = 2;
+
+async function showInternationalComparison() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>International insurer comparison</h3>
+      <div class="hint">Upload each insurer's table of benefits once into this shared library, tagged with an insurer name and plan/tier label. A Bupa-style file with multiple tiers creates one library entry per tier automatically.</div>
+      <div class="row" style="align-items:flex-end;">
+        <div><label>Insurer name</label><input type="text" id="ref-insurer-name" placeholder="e.g. Cigna Global Care, Bupa, Allianz, MSH, Max Health"></div>
+        <div><label>Plan / tier label</label><input type="text" id="ref-plan-label" placeholder="optional for Bupa/Maxmed-style files"></div>
+      </div>
+      <div class="dropzone" id="dropzone-ref-plan" style="margin-top:8px;">
+        <span class="kind-label">TOB file</span>
+        <input type="file" id="file-ref-plan" accept=".pdf">
+        <button onclick="uploadReferencePlan()">Upload</button>
+        <span id="status-ref-plan" class="status-pending"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Reference library</h3>
+      <div id="ref-plan-list"></div>
+    </div>
+    <div class="card">
+      <h3>Compare</h3>
+      <div class="hint">Pick any combination of uploaded plans to view side by side - dynamic, so nothing is hardcoded to one insurer's tier.</div>
+      <div id="ref-compare-columns" class="row"></div>
+      <div style="margin-top:12px;">
+        <button onclick="addComparisonColumn()">+ Add column</button>
+        <button class="primary" onclick="runReferenceComparison()">Compare</button>
+      </div>
+    </div>
+    <div id="ref-comparison-area"></div>
+  `;
+  await loadReferencePlans();
+  renderComparisonColumnPickers();
+}
+
+async function loadReferencePlans() {
+  refPlans = await api('/reference-plans');
+  const area = document.getElementById('ref-plan-list');
+  if (!area) return;
+  area.innerHTML = refPlans.length ? `
+    <table>
+      <tr><th>Insurer</th><th>Plan / tier</th><th>Source file</th><th>Rows</th><th></th></tr>
+      ${refPlans.map(p => `
+        <tr>
+          <td>${escapeHtml(p.insurer_name)}</td>
+          <td>${escapeHtml(p.plan_label)}</td>
+          <td>${escapeHtml(p.source_filename || '-')}</td>
+          <td>${p.row_count}</td>
+          <td><button onclick="deleteReferencePlan(${p.id})">Remove</button></td>
+        </tr>
+      `).join('')}
+    </table>
+  ` : '<div class="hint">No reference plans uploaded yet.</div>';
+}
+
+async function uploadReferencePlan() {
+  const insurerName = document.getElementById('ref-insurer-name').value.trim();
+  const planLabel = document.getElementById('ref-plan-label').value.trim();
+  const input = document.getElementById('file-ref-plan');
+  const statusEl = document.getElementById('status-ref-plan');
+  if (!insurerName) { toast('Enter an insurer name first', true); return; }
+  if (!input.files.length) { toast('Choose a file first', true); return; }
+
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  statusEl.textContent = 'Uploading (Cigna-style scrambled-text PDFs can take ~1 minute via OCR)...';
+  statusEl.className = 'status-pending';
+  try {
+    const params = new URLSearchParams({ insurer_name: insurerName });
+    if (planLabel) params.set('plan_label', planLabel);
+    const result = await api(`/reference-plans?${params.toString()}`, { method: 'POST', body: form });
+    statusEl.textContent = `${result.length} plan(s) added`;
+    statusEl.className = 'status-ok';
+    toast(`Added ${result.map(p => p.plan_label).join(', ')}`);
+    await loadReferencePlans();
+    renderComparisonColumnPickers();
+  } catch (err) {
+    statusEl.textContent = 'Failed';
+    statusEl.className = 'status-err';
+    toast(err.message, true);
+  }
+}
+
+async function deleteReferencePlan(id) {
+  await api(`/reference-plans/${id}`, { method: 'DELETE' });
+  toast('Removed');
+  await loadReferencePlans();
+  renderComparisonColumnPickers();
+}
+
+function renderComparisonColumnPickers() {
+  const area = document.getElementById('ref-compare-columns');
+  if (!area) return;
+  const options = refPlans.map(p => `<option value="${p.id}">${escapeHtml(p.insurer_name)} - ${escapeHtml(p.plan_label)}</option>`).join('');
+  const existing = Array.from(area.querySelectorAll('select')).map(s => s.value);
+  area.innerHTML = Array.from({ length: comparisonColumnCount }).map((_, i) => `
+    <div>
+      <label>Column ${i + 1}</label>
+      <select id="ref-compare-col-${i}"><option value="">-</option>${options}</select>
+    </div>
+  `).join('');
+  existing.forEach((val, i) => {
+    const sel = document.getElementById(`ref-compare-col-${i}`);
+    if (sel && val) sel.value = val;
+  });
+}
+
+function addComparisonColumn() {
+  if (comparisonColumnCount >= 6) { toast('Maximum 6 columns', true); return; }
+  comparisonColumnCount += 1;
+  renderComparisonColumnPickers();
+}
+
+async function runReferenceComparison() {
+  const ids = Array.from({ length: comparisonColumnCount })
+    .map((_, i) => document.getElementById(`ref-compare-col-${i}`).value)
+    .filter(v => v);
+  if (ids.length < 1) { toast('Pick at least one plan to compare', true); return; }
+
+  const area = document.getElementById('ref-comparison-area');
+  try {
+    const result = await api(`/reference-plans/compare?ids=${ids.join(',')}`);
+    area.innerHTML = `
+      <div class="card">
+        <h3>Detailed comparison</h3>
+        ${result.sections.map(section => `
+          <h4>${escapeHtml(section.section || 'General')}</h4>
+          <table>
+            <tr><th>Benefit</th>${result.plans.map(p => `<th>${escapeHtml(p.insurer_name)}<br>${escapeHtml(p.plan_label)}</th>`).join('')}</tr>
+            ${section.rows.map(row => `
+              <tr>
+                <td>${escapeHtml(row.label)}</td>
+                ${result.plans.map(p => `<td>${escapeHtml(row.values[p.id] ?? '—')}</td>`).join('')}
+              </tr>
+            `).join('')}
+          </table>
+        `).join('')}
+      </div>
+    `;
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 /* ---------------- workspace / tabs ---------------- */

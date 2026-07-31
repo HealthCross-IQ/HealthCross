@@ -294,3 +294,28 @@ class Outcome(Base):
 
     case = relationship("Case", back_populates="outcome")
     scorecard = relationship("Scorecard")
+
+
+class ReferenceBenefitPlan(Base):
+    """One insurer/tier's table of benefits, uploaded once into a shared
+    reference library rather than attached to any particular case - powers
+    the detailed international (and later local) insurer comparison, where
+    a broker picks any combination of previously-uploaded plans to view
+    side by side. Distinct from `BenefitPlan`, which is always a specific
+    case's existing or quoted plan.
+
+    `benefit_rows` keeps every row verbatim, as extracted, rather than
+    forcing each insurer's own wording onto the standard 11-field summary -
+    a real comparison across e.g. Cigna/Bupa/Allianz/MSH needs each
+    insurer's actual benefit lines, including ones the others don't have.
+    """
+
+    __tablename__ = "reference_benefit_plans"
+
+    id = Column(Integer, primary_key=True)
+    insurer_name = Column(String, nullable=False)
+    plan_label = Column(String, nullable=False)
+    source_filename = Column(String, nullable=True)
+    # [{"section": "In-patient", "label": "Hospital accommodation", "value": "Full Refund"}, ...]
+    benefit_rows = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)

@@ -246,6 +246,33 @@ class RecalibrationResult(BaseModel):
     metrics: Optional[Dict[str, Any]] = None
 
 
+class ReferenceBenefitPlanOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    insurer_name: str
+    plan_label: str
+    source_filename: Optional[str] = None
+    benefit_rows: List[Dict[str, Any]]
+    created_at: datetime
+
+
+class ReferenceBenefitPlanSummary(BaseModel):
+    """Lightweight listing row - omits `benefit_rows` since a library
+    listing only needs to let the user pick plans by name, not show every
+    row up front.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    insurer_name: str
+    plan_label: str
+    source_filename: Optional[str] = None
+    row_count: int
+    created_at: datetime
+
+
 class PlanDetailsOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -203,6 +203,26 @@ def _first_number(text: str) -> Optional[float]:
         return None
 
 
+def extract_all_rows(file: BinaryIO, filename: str) -> Optional[Dict[str, Any]]:
+    """Returns {"plan_name", "category", "rows": [{"label", "value"}]} for
+    EVERY benefit row found (not just the standard 11-field summary) - used
+    by the detailed international benefits comparison. Returns None if this
+    file isn't this document family at all, same as
+    `parse_labeled_row_benefits_pdf` below.
+    """
+    with pdfplumber.open(file) as pdf:
+        header = _header_fields(pdf)
+        if header is None:
+            return None
+        rows = _extract_rows(pdf)
+
+    return {
+        "plan_name": header.get("plan_name") or "Base Plan",
+        "category": _category_from_filename(filename),
+        "rows": [{"label": r["label"], "value": r["value"]} for r in rows],
+    }
+
+
 def parse_labeled_row_benefits_pdf(file: BinaryIO, filename: str) -> Optional[Dict[str, Any]]:
     """Returns None if this file doesn't look like this document family (no
     "TABLE OF BENEFITS" header block recognized) so callers can fall through
