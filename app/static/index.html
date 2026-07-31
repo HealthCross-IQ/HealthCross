@@ -1073,11 +1073,17 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
         </div>
         ${monthlyChart}
         <table style="margin-top:16px;">
-          <tr><th>Month</th><th>Final claims amount</th></tr>
+          <tr><th>Month</th><th>Final claims amount</th><th>Exposed risk population (ERP)</th><th>Cost per ERP member</th></tr>
           ${a.monthly_final_amount.map(m => `
-            <tr><td>${m.year}-${String(m.month).padStart(2,'0')}</td><td>${m.final_amount.toLocaleString()}</td></tr>
+            <tr>
+              <td>${m.year}-${String(m.month).padStart(2,'0')}</td>
+              <td>${m.final_amount.toLocaleString()}</td>
+              <td>${m.erp != null ? m.erp.toLocaleString() : '-'}</td>
+              <td>${m.cost_per_erp_member != null ? m.cost_per_erp_member.toLocaleString() : '-'}</td>
+            </tr>
           `).join('')}
         </table>
+        ${a.monthly_final_amount.every(m => m.erp == null) ? '<div class="hint">Upload a census with policy start/end and member start/end dates to see Exposed Risk Population and cost per ERP member here.</div>' : ''}
         ${expectedBlock}
         ${categoryBlock}
       </div>

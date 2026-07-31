@@ -80,6 +80,15 @@ class CensusRecord(Base):
     nationality_zone = Column(String, nullable=True)
     dependents_count = Column(Integer, default=0)
     join_date = Column(Date, nullable=True)
+    # The scheme's own fixed policy term (same for every row - e.g. a
+    # broker's "Eff Date"/"Exp Date" columns), vs. this individual
+    # member's own endorsement dates onto the scheme, which can fall
+    # short of it if they joined late or left early - see
+    # app/scoring/rules/exposed_risk_population.py.
+    policy_start_date = Column(Date, nullable=True)
+    policy_end_date = Column(Date, nullable=True)
+    member_start_date = Column(Date, nullable=True)
+    member_end_date = Column(Date, nullable=True)
 
     case = relationship("Case", back_populates="census_records")
 

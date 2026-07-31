@@ -50,6 +50,10 @@ class CensusRecordOut(BaseModel):
     nationality_zone: Optional[str] = None
     dependents_count: int
     join_date: Optional[date] = None
+    policy_start_date: Optional[date] = None
+    policy_end_date: Optional[date] = None
+    member_start_date: Optional[date] = None
+    member_end_date: Optional[date] = None
 
 
 class BenefitPlanOut(BaseModel):

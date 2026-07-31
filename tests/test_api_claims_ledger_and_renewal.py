@@ -129,6 +129,39 @@ def test_claims_ledger_analysis_member_status_active_vs_deleted(client):
     assert statuses == {"P1": "Active", "P2": "Deleted"}
 
 
+def test_claims_ledger_analysis_merges_monthly_erp_from_census(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.CensusRecord(
+                case_id=case_id, employee_ref="E1",
+                policy_start_date=date(2025, 10, 1), policy_end_date=date(2025, 11, 30),
+                member_start_date=date(2025, 10, 1), member_end_date=date(2025, 11, 30),
+            ),
+            models.CensusRecord(
+                case_id=case_id, employee_ref="E2",
+                policy_start_date=date(2025, 10, 1), policy_end_date=date(2025, 11, 30),
+                member_start_date=date(2025, 11, 1), member_end_date=date(2025, 11, 30),
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    _insert_ledger_entries(client, case_id, {(2025, 10): 1000, (2025, 11): 2000, (2025, 12): 1500})
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    monthly = {(m["year"], m["month"]): m for m in resp.json()["monthly_final_amount"]}
+    # October: only E1 covered (full month) -> ERP 1.0
+    assert monthly[(2025, 10)]["erp"] == 1.0
+    assert monthly[(2025, 10)]["cost_per_erp_member"] == 1000.0
+    # November: E1 full month (1.0) + E2 full month (1.0) -> ERP 2.0
+    assert monthly[(2025, 11)]["erp"] == 2.0
+    assert monthly[(2025, 11)]["cost_per_erp_member"] == 1000.0
+
+
 def test_claims_ledger_analysis_returns_top_providers(client):
     case_id = _create_case(client)
     db = client.db_session_local()

@@ -269,7 +269,11 @@ estimate.
   months - the first month is dropped if the policy didn't start on the
   1st, and the last month present is always dropped as a trailing partial
   (a ledger export is "as of" some date mid-month, not a guaranteed-complete
-  month).
+  month). Each month is also merged with that month's **Exposed Risk
+  Population (ERP)** and a resulting **cost per ERP member**, when the
+  case's census carries the necessary dates (see below) - the real
+  actuarial per-member-per-month burning cost, rather than the raw
+  monthly total alone.
 - An `expected_annual_premium`: the average full month annualized (x12),
   trended for inflation, then grossed up for the commission/OPEX loading
   via `/ (1 - loading)` - the same convention as the burning-cost method,
@@ -307,6 +311,27 @@ calculation: actual loss ratio (the ledger's annualized incurred claims
 over `current_annual_premium`), trended for inflation, then grossed up for
 the loading, same gross-up convention throughout. Requires both a claims
 ledger upload and `current_annual_premium` set on the case.
+
+**Monthly Exposed Risk Population (ERP)**
+(`app/scoring/rules/exposed_risk_population.py`, `GET /cases/{id}/monthly-erp`,
+and merged into `GET /cases/{id}/claims-ledger-analysis`'s month-wise claims
+table) - the actuarial way of counting "how many members were really
+covered" in a given calendar month, instead of a flat headcount snapshot.
+A real census carries two distinct pairs of dates per member: the
+scheme's own fixed `policy_start_date`/`policy_end_date` (the same on
+every row - e.g. a broker's "Eff Date"/"Exp Date" columns) and each
+individual member's own `member_start_date`/`member_end_date` (a broker's
+"EndoDate (Member Start/End Date)" columns), which falls short of the
+scheme's if they joined late or left early. For each calendar month in the
+scheme's term, every member contributes the fraction of that month they
+were actually covered (`covered_days / days_in_month`) rather than a flat
+1, summed across the whole census to give that month's ERP - the correct
+denominator for a per-member-per-month burning cost figure (`final claims
+amount / ERP`) instead of dividing by a static census count that ignores
+mid-term joiners and leavers. Requires the census upload to carry
+`policy_start_date`/`policy_end_date` (several aliases recognized, e.g.
+"Eff Date"/"Exp Date") - silently omitted from the claims-ledger-analysis
+table (not an error) when the census doesn't have them.
 
 ## PDF ingestion
 
@@ -466,6 +491,7 @@ uploads accept drag-and-drop onto their row in addition to the file picker.
 - `GET /cases/{id}/scorecard` / `/scorecards` - latest / full history
 - `POST /cases/{id}/outcome` - record what actually happened
 - `GET /cases/{id}/census-summary` - demographic breakdown of the uploaded census (age bands, gender, marital status, relation, nationality-zone mix, married-female/maternity-risk/infant counts) as counts and percentages, with a Male/Female split on top of the age-band/relation/marital-status counts so a gender-skewed data gap (e.g. marital status only recorded for one gender on the source census) is visible rather than blended away, plus the top 5 nationalities within each zone
+- `GET /cases/{id}/monthly-erp` - Monthly Exposed Risk Population for every calendar month of the scheme's policy term (existing business)
 - `GET /cases/{id}/benefits-summary` - every uploaded existing/incumbent plan/tier in the standard 11-field format
 - `GET /cases/{id}/premium-by-category` - the uploaded quote's per-category members, network, gross premium, and premium/member, plus a blended total
 - `GET /cases/{id}/benefits-comparison` - existing plan(s) vs. quoted plan(s), compared field by field

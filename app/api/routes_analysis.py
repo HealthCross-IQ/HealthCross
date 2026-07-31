@@ -20,6 +20,7 @@ from app.scoring.rules.claims_ledger_analysis import (
     top_providers_by_final_amount,
 )
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
+from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
 from app.scoring.rules.renewal_rating import RenewalRatingAssumptions, calculate_renewal_rating
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -162,6 +163,38 @@ def get_census_summary(case_id: int, db: Session = Depends(get_db)):
         for c in case.census_records
     ]
     return census_demographic_summary(census)
+
+
+@router.get("/{case_id}/monthly-erp")
+def get_monthly_erp(case_id: int, db: Session = Depends(get_db)):
+    """Monthly Exposed Risk Population (see
+    app/scoring/rules/exposed_risk_population.py) - the actuarial
+    per-member-per-month exposure figure for each calendar month of the
+    scheme's policy term, accounting for members who joined late or left
+    early rather than a flat headcount. Requires the uploaded census to
+    carry policy_start_date/policy_end_date (the scheme's fixed term).
+    """
+    case = _get_case_or_404(db, case_id)
+    if not case.census_records:
+        raise HTTPException(status_code=404, detail="No census uploaded for this case")
+
+    policy_starts = {c.policy_start_date for c in case.census_records if c.policy_start_date}
+    policy_ends = {c.policy_end_date for c in case.census_records if c.policy_end_date}
+    if not policy_starts or not policy_ends:
+        raise HTTPException(
+            status_code=400,
+            detail="Census has no policy_start_date/policy_end_date (scheme term) to compute monthly ERP against",
+        )
+
+    census = [
+        {"member_start_date": c.member_start_date, "member_end_date": c.member_end_date}
+        for c in case.census_records
+    ]
+    return {
+        "policy_start_date": min(policy_starts),
+        "policy_end_date": max(policy_ends),
+        "monthly_erp": monthly_exposed_risk_population(census, min(policy_starts), max(policy_ends)),
+    }
 
 
 def _benefit_summary(plan: models.BenefitPlan) -> dict:
@@ -371,11 +404,35 @@ def get_claims_ledger_analysis(
         raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
 
     entry_dicts = _ledger_entry_dicts(entries)
+    monthly = monthly_final_amount(entry_dicts)
+
+    # Monthly Exposed Risk Population (see
+    # app/scoring/rules/exposed_risk_population.py) merged in alongside the
+    # month-wise claims trend, when the census carries the scheme's
+    # policy_start_date/policy_end_date and members' own enrollment dates -
+    # gives the real actuarial claims-per-exposed-member-per-month figure
+    # instead of just the raw monthly total.
+    policy_starts = {c.policy_start_date for c in case.census_records if c.policy_start_date}
+    policy_ends = {c.policy_end_date for c in case.census_records if c.policy_end_date}
+    if case.census_records and policy_starts and policy_ends:
+        census = [
+            {"member_start_date": c.member_start_date, "member_end_date": c.member_end_date}
+            for c in case.census_records
+        ]
+        erp_by_month = {
+            (r["year"], r["month"]): r["erp"]
+            for r in monthly_exposed_risk_population(census, min(policy_starts), max(policy_ends))
+        }
+        for row in monthly:
+            erp = erp_by_month.get((row["year"], row["month"]))
+            row["erp"] = erp
+            row["cost_per_erp_member"] = round(row["final_amount"] / erp, 2) if erp else None
+
     result = {
         "top_patients": top_patients_by_final_amount(entry_dicts),
         "top_diagnoses": top_diagnoses_by_final_amount(entry_dicts),
         "top_providers": top_providers_by_final_amount(entry_dicts),
-        "monthly_final_amount": monthly_final_amount(entry_dicts),
+        "monthly_final_amount": monthly,
     }
 
     full_months = _full_months_from_ledger(entries)

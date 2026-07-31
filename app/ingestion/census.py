@@ -23,6 +23,13 @@ CENSUS_ALIASES: Dict[str, List[str]] = {
     "nationality": ["nationality", "country"],
     "dependents_count": ["dependents", "no of dependents", "number of dependents", "dependants"],
     "join_date": ["date joined", "join date", "hire date", "employment date"],
+    # The scheme's own fixed policy term (same value on every row) vs. each
+    # member's own endorsement dates onto the scheme - see
+    # app/scoring/rules/exposed_risk_population.py.
+    "policy_start_date": ["eff date", "effective date", "policy start date"],
+    "policy_end_date": ["exp date", "expiry date", "policy end date"],
+    "member_start_date": ["endodate (member start date)", "member start date"],
+    "member_end_date": ["endodate (member end date)", "member end date"],
 }
 
 _EMPLOYEE_RELATIONS = {"employee", "principal", "main member", "member", "self"}
@@ -88,6 +95,12 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
         nationality = row.get("nationality")
         nationality = str(nationality).strip() if pd.notna(nationality) else None
 
+        def _date_col(col_name):
+            if col_name not in df.columns:
+                return None
+            parsed = pd.to_datetime(row.get(col_name), errors="coerce")
+            return parsed.date() if pd.notna(parsed) else None
+
         records.append(
             {
                 "employee_ref": str(row.get("employee_ref")) if pd.notna(row.get("employee_ref")) else None,
@@ -102,6 +115,10 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
                 "nationality_zone": classify_zone(nationality) if nationality else None,
                 "dependents_count": dependents,
                 "join_date": join_date,
+                "policy_start_date": _date_col("policy_start_date"),
+                "policy_end_date": _date_col("policy_end_date"),
+                "member_start_date": _date_col("member_start_date"),
+                "member_end_date": _date_col("member_end_date"),
             }
         )
     return records
