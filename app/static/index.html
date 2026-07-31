@@ -936,7 +936,7 @@ async function loadBenefitsComparison() {
     const comparisons = await api(`/cases/${currentCase.id}/benefits-comparison`);
     area.innerHTML = comparisons.map(c => `
       <div class="card">
-        <h3>Benefits comparison</h3>
+        <h3>Summary</h3>
         <div class="hint">
           Existing: ${escapeHtml(c.existing_plan_name || '-')}${c.existing_category ? ' (Cat ' + escapeHtml(c.existing_category) + ')' : ''}
           &nbsp;vs&nbsp;
