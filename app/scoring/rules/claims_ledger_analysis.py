@@ -56,7 +56,17 @@ def _member_coverage_fraction(
 
 
 def top_patients_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT) -> List[dict]:
-    totals: dict = defaultdict(lambda: {"final_amount": 0.0, "claim_count": 0, "claim_ids": set()})
+    """member_status is "Active" when a patient's own policy_end_date
+    matches the scheme's overall policy_end_date (the latest end date seen
+    anywhere in the ledger - the members who stayed the full term all
+    share it), "Deleted" when their own end date falls before it (they
+    left the scheme early), or "Unknown" when there's no policy_end_date
+    data to compare at all.
+    """
+    scheme_end_date = max(
+        (e["policy_end_date"] for e in entries if e.get("policy_end_date")), default=None
+    )
+    totals: dict = defaultdict(lambda: {"final_amount": 0.0, "claim_count": 0, "claim_ids": set(), "policy_end_date": None})
     for e in entries:
         patient_id = e.get("patient_id")
         if not patient_id:
@@ -65,9 +75,21 @@ def top_patients_by_final_amount(entries: List[dict], top_n: int = TOP_N_DEFAULT
         bucket["final_amount"] += e.get("final_amount") or 0.0
         if e.get("claim_id"):
             bucket["claim_ids"].add(e["claim_id"])
+        if e.get("policy_end_date") and (not bucket["policy_end_date"] or e["policy_end_date"] > bucket["policy_end_date"]):
+            bucket["policy_end_date"] = e["policy_end_date"]
+
+    def _member_status(patient_end_date):
+        if not scheme_end_date or not patient_end_date:
+            return "Unknown"
+        return "Active" if patient_end_date >= scheme_end_date else "Deleted"
 
     rows = [
-        {"patient_id": patient_id, "final_amount": round(v["final_amount"], 2), "claim_count": len(v["claim_ids"])}
+        {
+            "patient_id": patient_id,
+            "final_amount": round(v["final_amount"], 2),
+            "claim_count": len(v["claim_ids"]),
+            "member_status": _member_status(v["policy_end_date"]),
+        }
         for patient_id, v in totals.items()
     ]
     rows.sort(key=lambda r: r["final_amount"], reverse=True)

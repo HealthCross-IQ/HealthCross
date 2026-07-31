@@ -38,8 +38,27 @@ def test_top_patients_ranked_by_total_final_amount():
         _entry("P3", 100, claim_id="C4"),
     ]
     top = top_patients_by_final_amount(entries, top_n=2)
-    assert top[0] == {"patient_id": "P2", "final_amount": 2000.0, "claim_count": 1}
-    assert top[1] == {"patient_id": "P1", "final_amount": 1500.0, "claim_count": 2}
+    assert top[0] == {"patient_id": "P2", "final_amount": 2000.0, "claim_count": 1, "member_status": "Unknown"}
+    assert top[1] == {"patient_id": "P1", "final_amount": 1500.0, "claim_count": 2, "member_status": "Unknown"}
+
+
+def test_top_patients_member_status_active_vs_deleted():
+    # P1 stayed the whole scheme term (their own end date matches the
+    # scheme's latest observed end date); P2 left early (an earlier end
+    # date than that) - should read Active vs Deleted respectively.
+    entries = [
+        _entry("P1", 1000, claim_id="C1", policy_end_date=date(2025, 12, 31)),
+        _entry("P2", 2000, claim_id="C2", policy_end_date=date(2025, 6, 30)),
+    ]
+    top = top_patients_by_final_amount(entries)
+    statuses = {r["patient_id"]: r["member_status"] for r in top}
+    assert statuses == {"P1": "Active", "P2": "Deleted"}
+
+
+def test_top_patients_member_status_unknown_without_policy_end_dates():
+    entries = [_entry("P1", 1000, claim_id="C1")]
+    top = top_patients_by_final_amount(entries)
+    assert top[0]["member_status"] == "Unknown"
 
 
 def test_top_providers_ranked_by_total_final_amount():

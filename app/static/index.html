@@ -879,6 +879,11 @@ async function loadPremiumByCategory() {
   }
 }
 
+function _memberStatusChip(status) {
+  const classes = { Active: 'tier-Preferred', Deleted: 'tier-DeclineRefer', Unknown: 'tier-Standard' };
+  return `<span class="tier-pill ${classes[status] || 'tier-Standard'}">${escapeHtml(status)}</span>`;
+}
+
 function _directionChip(direction, pctChange) {
   const labels = { improved: 'Improved', reduced: 'Reduced', same: 'Same', review: 'Review' };
   const pct = pctChange != null ? ` ${pctChange > 0 ? '+' : ''}${pctChange}%` : '';
@@ -1043,9 +1048,9 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
         <h3>Claims ledger analysis (existing business)</h3>
         <div class="row">
           <table>
-            <tr><th>Patient</th><th>Final claims amount</th><th>Claim count</th></tr>
+            <tr><th>Patient</th><th>Final claims amount</th><th>Claim count</th><th>Status</th></tr>
             ${a.top_patients.map(p => `
-              <tr><td>${escapeHtml(p.patient_id)}</td><td>${p.final_amount.toLocaleString()}</td><td>${p.claim_count}</td></tr>
+              <tr><td>${escapeHtml(p.patient_id)}</td><td>${p.final_amount.toLocaleString()}</td><td>${p.claim_count}</td><td>${_memberStatusChip(p.member_status)}</td></tr>
             `).join('')}
           </table>
           <table>

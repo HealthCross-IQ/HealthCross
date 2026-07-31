@@ -245,8 +245,15 @@ estimate.
 
 `app/scoring/rules/claims_ledger_analysis.py` computes:
 - Top 10 patients, top 10 diagnoses, and top 10 medical providers by final
-  claims amount (`GET /cases/{id}/claims-ledger-analysis`). Diagnoses are
-  classified chronic/non-chronic via their ICD-10 chapter
+  claims amount (`GET /cases/{id}/claims-ledger-analysis`). Each top patient
+  also gets a `member_status` of "Active" or "Deleted": a patient's own
+  `policy_end_date` (taking the latest one across their own claim lines) is
+  compared against the scheme's overall end date (the latest
+  `policy_end_date` seen anywhere in the ledger - the members who stayed
+  the full term all share it) - a match means still active, an earlier
+  date means they left the scheme before term end. "Unknown" when there's
+  no `policy_end_date` data to compare at all. Diagnoses are classified
+  chronic/non-chronic via their ICD-10 chapter
   (`app/reference/icd10_chapters.py` maps a raw code like "J454" to the
   same broad chapter labels `diagnosis_classification.py` already uses,
   extended to cover chapters a DHA report's own pre-aggregated groupings
