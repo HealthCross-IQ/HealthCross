@@ -2,14 +2,19 @@
 (app/api/routes_reference_plans.py) - upload once, compare any combination
 dynamically. Uses the repo's existing real Maxmed fixture PDFs (already
 used by test_api_benefits_labeled_row.py) to exercise the labeled-row
-branch of the upload fallback chain end-to-end; the Bupa/Cigna/Allianz/MSH
-branches were verified manually against real client documents that aren't
-committed here (real employee PII, and Cigna's needs a slow OCR fallback -
-see app/ingestion/international_tob.py's module docstring).
+branch of the upload fallback chain end-to-end; the Bupa/Cigna/Allianz/MSH/
+Sukoon branches were verified manually against real client documents that
+aren't committed here (real employee/client PII, and Cigna's needs a slow
+OCR fallback - see app/ingestion/international_tob.py's module docstring).
 """
 from pathlib import Path
 
-from app.ingestion.international_tob import _is_non_benefit_section, _looks_garbled
+from app.ingestion.international_tob import (
+    _contained_in,
+    _is_non_benefit_section,
+    _looks_garbled,
+    _looks_like_tier_name,
+)
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLD_CATEGORY_A = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Gold_Group_Category_A.pdf"
@@ -31,6 +36,31 @@ def test_is_non_benefit_section_flags_premium_and_quotation_sections():
     assert _is_non_benefit_section("PREMIUM CALCULATION") is True
     assert _is_non_benefit_section("MEDICAL INSURANCE - QUOTATION SUMMARY AND TERMS") is True
     assert _is_non_benefit_section("HEALTHCARE BENEFITS") is False
+
+
+def test_looks_like_tier_name_flags_category_and_plan_values():
+    # Some insurers (e.g. Sukoon's local-market TOB) restate the plan/tier
+    # name as a mini-header at the top of every section within one big
+    # table, not just once in a document-wide header row - these need to
+    # be recognized as banners rather than real benefit values.
+    assert _looks_like_tier_name("Category 1") is True
+    assert _looks_like_tier_name("Plan 2") is True
+    assert _looks_like_tier_name("Tier A") is True
+    assert _looks_like_tier_name("Covered") is False
+    assert _looks_like_tier_name("1,000,000/-") is False
+
+
+def test_contained_in_detects_nested_table_fragments():
+    # A document whose automatic table detection finds a real table plus
+    # redundant smaller sub-regions nested inside it (the same wrapped
+    # cell text re-detected as its own tiny table).
+    outer = (50, 100, 500, 700)
+    inner = (60, 150, 300, 200)
+    assert _contained_in(inner, outer) is True
+    assert _contained_in(outer, inner) is False
+
+    overlapping_not_contained = (400, 650, 600, 750)
+    assert _contained_in(overlapping_not_contained, outer) is False
 
 
 def test_upload_labeled_row_pdf_creates_one_reference_plan(client):

@@ -1,17 +1,22 @@
 """Generic "Benefit label | Value [| Clarification]" bordered-table parser
-for international insurers' table-of-benefits PDFs (Cigna's "Global Care
-Flexible", Allianz/Orient's "Dubai Summit" series, MSH International's
-quote-style TOB) - feeds the detailed international benefits comparison,
-which needs every benefit row verbatim rather than the standard 11-field
-summary the existing-vs-quoted Summary comparison uses.
+for insurers' table-of-benefits PDFs - both international (Cigna's "Global
+Care Flexible"/"SmartCare", Allianz/Orient's "Dubai Summit" series, MSH
+International's quote-style TOB) and local-market (Sukoon's, in
+particular) - feeds the detailed benefits comparison, which needs every
+benefit row verbatim rather than the standard 11-field summary the
+existing-vs-quoted Summary comparison uses.
 
-These insurer families all lay out a benefit label as the table's own
-first column (unlike Bupa's, which sits outside the table, and unlike
-Maxmed's, which needs word-bucketing to survive wrapped rows) - a real
-bordered table with clean row/column lines is enough here. A single wide
-cell spanning the whole row (no value alongside it) is a section banner
-("HEALTHCARE BENEFITS", "MATERNITY", ...) rather than a real benefit row,
-and is kept as context for the rows that follow rather than a row itself.
+These insurers all lay out a benefit label somewhere in the table's own
+row (unlike Bupa's, which sits outside the table, and unlike Maxmed's,
+which needs word-bucketing to survive wrapped rows) - a real bordered
+table with clean row/column lines is enough here, though which column
+index the label and value actually land in varies (see
+`extract_benefit_rows`' docstring). A single wide cell spanning the whole
+row (no value alongside it) is a section banner ("HEALTHCARE BENEFITS",
+"MATERNITY", ...) rather than a real benefit row, and is kept as context
+for the rows that follow rather than a row itself - as is a row whose
+"value" is just the plan/tier name restated (e.g. "Category 1"), which
+some local insurers repeat as a mini-header at the top of every section.
 """
 import re
 from typing import BinaryIO, Dict, List, Optional
@@ -150,6 +155,44 @@ def _clean(text: Optional[str]) -> str:
     return " ".join(text.replace("\n", " ").split())
 
 
+_TIER_VALUE_PREFIXES = ("category", "plan ", "tier ")
+
+
+def _looks_like_tier_name(value: str) -> bool:
+    """A cell whose text is just the plan/tier identifier itself (e.g.
+    "Category 1", "Plan 2") rather than an actual benefit value - some
+    insurers (Sukoon, among others) repeat this as a mini-header at the
+    top of every section within one big table, not only in a single
+    document-wide header row.
+    """
+    return value.strip().lower().startswith(_TIER_VALUE_PREFIXES)
+
+
+def _contained_in(inner_bbox, outer_bbox, tolerance: float = 1.0) -> bool:
+    return (
+        inner_bbox[0] >= outer_bbox[0] - tolerance
+        and inner_bbox[1] >= outer_bbox[1] - tolerance
+        and inner_bbox[2] <= outer_bbox[2] + tolerance
+        and inner_bbox[3] <= outer_bbox[3] + tolerance
+    )
+
+
+def _distinct_tables(page: "pdfplumber.page.Page") -> List:
+    """Some documents' automatic table detection finds not just the real
+    table but also smaller redundant sub-regions nested inside it (the
+    same cell's wrapped text re-detected as its own tiny table) - keeping
+    both would process the same benefit rows twice, or worse, only the
+    fragment. Largest-bbox-first, dropping anything already covered by a
+    table already kept, leaves just the real, distinct tables on the page.
+    """
+    tables = sorted(page.find_tables(), key=lambda t: -(t.bbox[2] - t.bbox[0]) * (t.bbox[3] - t.bbox[1]))
+    kept: List = []
+    for table in tables:
+        if not any(_contained_in(table.bbox, k.bbox) for k in kept):
+            kept.append(table)
+    return kept
+
+
 def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
     """Returns [{"section", "label", "value", "note"}] for every real
     benefit row found, in document order. `section` carries forward the
@@ -157,6 +200,13 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
     one). Column-header rows (e.g. "Benefits | Benefit Limit |
     Clarifications") are recognized by their fixed wording and skipped
     rather than surfaced as a bogus benefit row.
+
+    Label and value aren't assumed to sit in fixed column indices - some
+    documents (Sukoon's local-market TOB, in particular) alternate between
+    a "top-level" pair of columns and an indented "detail" pair depending
+    on how nested a row is, with blank spacer columns in between. The
+    leftmost populated cell is always the label and the rightmost is
+    always the value, whichever actual column indices those land on.
     """
     rows: List[Dict[str, str]] = []
     current_section = ""
@@ -168,54 +218,74 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
             return _rows_via_geometry_ocr(pdf)
 
         for page in pdf.pages:
-            for table in page.find_tables():
+            for table in _distinct_tables(page):
                 data = table.extract()
                 if not data:
                     continue
                 table_rows = table.rows
+                last_value: Optional[str] = None
                 for row_index in range(len(data)):
                     raw_cells = [_clean(c) for c in data[row_index]]
                     non_empty_idx = [i for i, c in enumerate(raw_cells) if c]
                     if not non_empty_idx:
                         continue
+
+                    note = ""
                     if len(non_empty_idx) == 1 and non_empty_idx[0] == 0:
                         # A lone cell in the label column with nothing
                         # alongside it is a section banner, not a benefit
                         # row on its own.
                         current_section = raw_cells[0]
+                        last_value = None
                         continue
                     if len(non_empty_idx) == 1:
-                        # The label/note columns aren't ruled as their own
-                        # cells in this row (some documents only rule the
-                        # value column) - recover them from the geometry
-                        # either side of the one cell that IS ruled, rather
-                        # than discarding a real benefit row as if it had
-                        # no label.
                         if row_index >= len(table_rows):
                             continue
-                        value_idx = non_empty_idx[0]
+                        idx = non_empty_idx[0]
                         cells = table_rows[row_index].cells
-                        value_cell = cells[value_idx] if value_idx < len(cells) else None
-                        if value_cell is None:
-                            continue
-                        row_top, row_bottom = table_rows[row_index].bbox[1], table_rows[row_index].bbox[3]
-                        label, note = _label_and_note_from_geometry(
-                            page, table.bbox, row_top, row_bottom, value_cell[0], value_cell[2]
-                        )
-                        value = raw_cells[value_idx]
-                        if "(cid:" in value:
-                            # A handful of glyphs in this font have no
-                            # Unicode mapping - pdfplumber falls back to
-                            # printing the raw font code instead. OCR the
-                            # same cell to recover the actual text.
-                            value = _ocr_bbox(page, (value_cell[0], row_top, value_cell[2], row_bottom))
-                        if not label:
-                            continue
+                        ruled_cell_count = sum(1 for c in cells if c is not None)
+                        if ruled_cell_count <= 1:
+                            # The label/note columns aren't ruled as their
+                            # own cells in this row (some documents only
+                            # rule the value column) - recover them from
+                            # the geometry either side of the one cell
+                            # that IS ruled, rather than discarding a real
+                            # benefit row as if it had no label.
+                            value_cell = cells[idx] if idx < len(cells) else None
+                            if value_cell is None:
+                                continue
+                            row_top, row_bottom = table_rows[row_index].bbox[1], table_rows[row_index].bbox[3]
+                            label, note = _label_and_note_from_geometry(
+                                page, table.bbox, row_top, row_bottom, value_cell[0], value_cell[2]
+                            )
+                            value = raw_cells[idx]
+                            if "(cid:" in value:
+                                # A handful of glyphs in this font have no
+                                # Unicode mapping - pdfplumber falls back
+                                # to printing the raw font code instead.
+                                # OCR the same cell to recover the text.
+                                value = _ocr_bbox(page, (value_cell[0], row_top, value_cell[2], row_bottom))
+                            if not label:
+                                continue
+                        else:
+                            # A genuinely multi-column ruled table whose
+                            # value cell is just blank on this row - most
+                            # commonly a limit that covers several listed
+                            # procedures at once (e.g. one dental benefit
+                            # limit applying to consultation, x-ray,
+                            # extraction, ... each listed as its own row).
+                            # Inherit the value from the last row in this
+                            # table that actually had one.
+                            if last_value is None:
+                                continue
+                            label = raw_cells[idx]
+                            value = last_value
                     else:
-                        label, value = raw_cells[0], raw_cells[1] if len(raw_cells) > 1 else ""
+                        label, value = raw_cells[non_empty_idx[0]], raw_cells[non_empty_idx[-1]]
                         if not label or not value:
                             continue
-                        note = " ".join(c for c in raw_cells[2:] if c)
+                        middle_idx = non_empty_idx[1:-1]
+                        note = " ".join(raw_cells[i] for i in middle_idx if raw_cells[i])
 
                     if label.lower() in _HEADER_ROW_WORDS or value.lower() in _HEADER_ROW_WORDS:
                         if label.lower() in _HEADER_ROW_WORDS and value and header_plan_value is None:
@@ -227,8 +297,17 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                         continue
                     if header_plan_value is not None and value == header_plan_value:
                         continue
+                    if _looks_like_tier_name(value):
+                        # A section (or sub-section) banner repeating the
+                        # plan/tier name as its own "value" rather than a
+                        # real benefit row - e.g. Sukoon's TOB restates
+                        # "Category 1" at the top of every section.
+                        current_section = label
+                        last_value = None
+                        continue
                     if _is_non_benefit_section(current_section):
                         continue
                     rows.append({"section": current_section, "label": label, "value": value, "note": note})
+                    last_value = value
 
     return rows
