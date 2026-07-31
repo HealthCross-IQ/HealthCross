@@ -109,7 +109,7 @@ def test_delete_reference_plan(client):
     assert client.get("/reference-plans").json() == []
 
 
-def test_compare_two_plans_returns_union_of_labels_by_section(client):
+def test_compare_maps_both_plans_onto_the_fixed_category_list(client):
     with open(GOLD_CATEGORY_A, "rb") as f:
         gold = client.post("/reference-plans?insurer_name=Max Health&plan_label=Gold", files={"file": (GOLD_CATEGORY_A.name, f, "application/pdf")}).json()[0]
     with open(BRONZE_CATEGORY_B, "rb") as f:
@@ -121,15 +121,20 @@ def test_compare_two_plans_returns_union_of_labels_by_section(client):
     assert [p["plan_label"] for p in body["plans"]] == ["Gold", "Bronze"]
 
     all_rows = [row for section in body["sections"] for row in section["rows"]]
-    dental_row = next(row for row in all_rows if "dental limit" in row["label"].lower())
-    # Both plans have a real value against the same (matched) label.
+    # Every one of the fixed 38 categories appears as its own row, in the
+    # agreed order, regardless of whether either plan actually has a match.
+    assert len(all_rows) == 38
+    assert [row["label"] for row in all_rows][:2] == ["Annual/Indemnity Maximum", "Area of Cover"]
+
+    dental_row = next(row for row in all_rows if row["label"] == "Dental Annual Limit")
+    # Both plans word their dental limit differently ("DENTAL Dental Limit"
+    # vs whatever Bronze's own wording is) but both map onto this one row.
     assert all(v is not None for v in dental_row["values"].values())
 
-    # The union of labels across both plans must be at least as large as
-    # either plan's own row count - a label unique to one plan still gets
-    # its own row (with a null on the other plan's side) rather than being
-    # dropped or forced to match something it isn't.
-    assert len(all_rows) >= max(len(gold["benefit_rows"]), len(bronze["benefit_rows"]))
+    # Real rows that don't match any of the 38 categories aren't dropped -
+    # they're kept per plan, verbatim, in other_benefits.
+    assert len(body["other_benefits"][str(gold["id"])]) > 0
+    assert len(body["other_benefits"][str(bronze["id"])]) > 0
 
 
 def test_compare_missing_plan_id_404s(client):

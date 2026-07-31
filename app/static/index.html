@@ -642,9 +642,24 @@ async function runReferenceComparison() {
   const area = document.getElementById('ref-comparison-area');
   try {
     const result = await api(`/reference-plans/compare?ids=${ids.join(',')}`);
+    const otherBenefitsHtml = result.plans.map(p => {
+      const rows = result.other_benefits[String(p.id)] || [];
+      if (!rows.length) return '';
+      return `
+        <h4>${escapeHtml(p.insurer_name)} - ${escapeHtml(p.plan_label)}</h4>
+        <table>
+          <tr><th>Section</th><th>Benefit (as worded in the source document)</th><th>Value</th></tr>
+          ${rows.map(r => `
+            <tr><td>${escapeHtml(r.section || '-')}</td><td>${escapeHtml(r.label)}</td><td>${escapeHtml(r.value)}</td></tr>
+          `).join('')}
+        </table>
+      `;
+    }).join('');
+
     area.innerHTML = `
       <div class="card">
         <h3>Detailed comparison</h3>
+        <div class="hint">Every plan's own wording is mapped onto this fixed 38-benefit list, so a "—" means the plan genuinely has no matching benefit - not that its wording didn't match.</div>
         ${result.sections.map(section => `
           <h4>${escapeHtml(section.section || 'General')}</h4>
           <table>
@@ -658,6 +673,13 @@ async function runReferenceComparison() {
           </table>
         `).join('')}
       </div>
+      ${otherBenefitsHtml ? `
+        <div class="card">
+          <h3>Other benefits (not in the fixed list)</h3>
+          <div class="hint">Real benefit rows found in each source document that don't match any of the 38 categories above - shown verbatim per plan rather than dropped.</div>
+          ${otherBenefitsHtml}
+        </div>
+      ` : ''}
     `;
   } catch (err) {
     toast(err.message, true);

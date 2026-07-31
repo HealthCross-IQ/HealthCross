@@ -17,6 +17,7 @@ from app.ingestion.international_tob import extract_benefit_rows as extract_gene
 from app.ingestion.labeled_row_benefits_pdf import extract_all_rows as extract_labeled_row_rows
 from app.models import db_models as models
 from app.models import schemas
+from app.reference.benefit_category_mapping import CATEGORIES, DISPLAY_ORDER, map_label_to_category
 
 router = APIRouter(prefix="/reference-plans", tags=["reference-plans"])
 
@@ -128,13 +129,26 @@ def delete_reference_plan(plan_id: int, db: Session = Depends(get_db)):
 
 @router.get("/compare")
 def compare_reference_plans(ids: str = Query(..., description="Comma-separated reference plan IDs to compare"), db: Session = Depends(get_db)):
-    """Detailed side-by-side comparison: every distinct benefit label seen
-    across the selected plans becomes a row (grouped under whichever
-    section it appeared under), each selected plan becomes a column, and a
-    plan that has no row for a given label shows null rather than a forced
-    guess - insurers genuinely offer different benefits, and papering over
-    that with "Not covered" would misrepresent documents that simply never
-    mention it.
+    """Detailed side-by-side comparison against the fixed 38-category
+    master benefit list (app/reference/benefit_category_mapping.py),
+    agreed with the underwriting team specifically to fix the previous
+    verbatim-label comparison: insurers word the same benefit differently
+    (Bupa's "Overall Annual Maximum" vs Cigna's "Plan Annual Maximum" vs
+    Sukoon's "Indemnity Limit"), which made a plan that clearly does offer
+    a benefit show a blank just because its own wording didn't match
+    another plan's. Every raw row from each plan is matched to whichever
+    category it belongs to (by keyword, against its own section + label
+    text) rather than kept as its own row; a category only shows null for
+    a plan that genuinely has no matching row, not a wording mismatch.
+
+    A plan's first row within a repeated category (e.g. Sukoon lists nine
+    dental procedures that all share one limit) wins, since later rows
+    for the same category are either duplicates of the same limit or a
+    more granular sub-item the master list doesn't break out on its own.
+
+    Rows that don't match any of the 38 categories are kept - per plan,
+    verbatim - in `other_benefits`, so nothing found in the source
+    document is silently dropped, it just isn't a shared comparison row.
     """
     try:
         plan_ids = [int(x) for x in ids.split(",") if x.strip()]
@@ -152,37 +166,46 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
     plans_by_id = {p.id: p for p in plans}
     ordered_plans = [plans_by_id[pid] for pid in plan_ids]
 
-    # section -> label -> {plan_id: value}
-    sections: Dict[str, Dict[str, Dict[int, str]]] = {}
-    section_order: List[str] = []
-    label_order: Dict[str, List[str]] = {}
+    # category -> {plan_id: value}
+    category_values: Dict[str, Dict[int, str]] = {name: {} for name in DISPLAY_ORDER}
+    other_benefits: Dict[int, List[dict]] = {}
 
     for plan in ordered_plans:
+        other_benefits[plan.id] = []
         for row in plan.benefit_rows or []:
-            section = row.get("section") or "General"
-            label = row["label"]
-            if section not in sections:
-                sections[section] = {}
-                section_order.append(section)
-                label_order[section] = []
-            if label not in sections[section]:
-                sections[section][label] = {}
-                label_order[section].append(label)
-            sections[section][label][plan.id] = row.get("value")
+            label = row.get("label")
+            value = row.get("value")
+            if not label or not value:
+                continue
+            category = map_label_to_category(row.get("section"), label)
+            if category is None:
+                other_benefits[plan.id].append(
+                    {"section": row.get("section") or "", "label": label, "value": value}
+                )
+                continue
+            # First match per plan wins - a repeated category (e.g. several
+            # dental procedures sharing one limit) shouldn't overwrite an
+            # already-found value with a less specific later row.
+            category_values[category].setdefault(plan.id, value)
 
-    result_sections = [
-        {
-            "section": section,
-            "rows": [
-                {
-                    "label": label,
-                    "values": {plan.id: sections[section][label].get(plan.id) for plan in ordered_plans},
-                }
-                for label in label_order[section]
-            ],
-        }
-        for section in section_order
-    ]
+    result_sections = []
+    current_group = None
+    current_rows: List[dict] = []
+    for name in DISPLAY_ORDER:
+        group = CATEGORIES[name]["group"]
+        if group != current_group:
+            if current_rows:
+                result_sections.append({"section": current_group, "rows": current_rows})
+            current_group = group
+            current_rows = []
+        current_rows.append(
+            {
+                "label": name,
+                "values": {plan.id: category_values[name].get(plan.id) for plan in ordered_plans},
+            }
+        )
+    if current_rows:
+        result_sections.append({"section": current_group, "rows": current_rows})
 
     return {
         "plans": [
@@ -190,4 +213,7 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             for p in ordered_plans
         ],
         "sections": result_sections,
+        "other_benefits": {
+            str(p.id): other_benefits[p.id] for p in ordered_plans
+        },
     }
