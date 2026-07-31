@@ -765,6 +765,7 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="claims">
       <div id="claims-projection-area"></div>
+      <div id="claims-report-breakdown-area"></div>
       <div id="diagnosis-exposure-area"></div>
       <div id="claims-ledger-analysis-area"></div>
       <div id="renewal-rating-area"></div>
@@ -810,6 +811,7 @@ function renderCaseWorkspace() {
   loadPremiumByCategory();
   loadBenefitsComparison();
   loadClaimsProjection();
+  loadClaimsReportBreakdown();
   loadDiagnosisExposure();
   loadClaimsLedgerAnalysis();
   loadRenewalRating();
@@ -871,7 +873,7 @@ async function uploadFile(kind) {
     if (kind === 'census') await loadCensusSummary();
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
-    if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadDiagnosisExposure(); }
+    if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadClaimsReportBreakdown(); await loadDiagnosisExposure(); }
     if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
@@ -1168,6 +1170,58 @@ async function recomputeClaimsProjection() {
   const pct = Number(input.value);
   if (Number.isNaN(pct) || pct < 0 || pct > 100) { toast('Enter a credibility % between 0 and 100', true); return; }
   await loadClaimsProjection(pct / 100);
+}
+
+async function loadClaimsReportBreakdown() {
+  const area = document.getElementById('claims-report-breakdown-area');
+  try {
+    const b = await api(`/cases/${currentCase.id}/claims-report-breakdown`);
+    const hasAnnualized = b.final_projected_claims != null;
+
+    const providersTable = b.top_providers.length ? `
+      <h4>Top ${b.top_providers.length} providers</h4>
+      <table>
+        <tr><th>Provider</th><th>Amount</th><th>% of total</th></tr>
+        ${b.top_providers.map(p => `
+          <tr><td>${escapeHtml(p.provider)}</td><td>${p.value.toLocaleString()}</td><td>${p.pct_of_total ?? '-'}%</td></tr>
+        `).join('')}
+      </table>
+    ` : '';
+
+    const treatmentTable = b.treatment_type_breakdown.length ? `
+      <h4>Claims by treatment type</h4>
+      <table>
+        <tr><th>Type</th><th>Amount</th><th>% of total</th>${hasAnnualized ? '<th>Annualized</th>' : ''}</tr>
+        ${b.treatment_type_breakdown.map(t => `
+          <tr>
+            <td>${escapeHtml(t.type)}</td><td>${t.value.toLocaleString()}</td><td>${t.pct_of_total ?? '-'}%</td>
+            ${hasAnnualized ? `<td>${t.annualized.toLocaleString()}</td>` : ''}
+          </tr>
+        `).join('')}
+        ${b.maternity ? `
+          <tr style="border-top:2px solid var(--border-color, #ccc);">
+            <td>Maternity (${escapeHtml(b.maternity.label)})</td><td>${b.maternity.value.toLocaleString()}</td><td>${b.maternity.pct_of_total ?? '-'}%</td>
+            ${hasAnnualized ? `<td>${b.maternity.annualized.toLocaleString()}</td>` : ''}
+          </tr>
+        ` : ''}
+      </table>
+      <div class="hint">${b.maternity ? 'Maternity is a diagnosis-based cross-cut shown for reference - its amount is already included within In-Patient/Out-Patient above, not additional to them. ' : 'No Maternity diagnosis grouping found on this report. '}${b.treatment_type_breakdown.length ? '' : 'Treatment-type split isn\'t available for this report format. '}${hasAnnualized ? '' : 'Annualized figures need 6 full months of claims plus a census to run the projection.'}</div>
+    ` : '<div class="hint">Treatment-type split isn\'t available for this report format.</div>';
+
+    if (!providersTable && !b.treatment_type_breakdown.length && !b.maternity) {
+      area.innerHTML = '';
+      return;
+    }
+    area.innerHTML = `
+      <div class="card">
+        <h3>Claims breakdown</h3>
+        ${providersTable}
+        ${treatmentTable}
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 async function loadDiagnosisExposure() {

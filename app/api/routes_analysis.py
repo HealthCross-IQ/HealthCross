@@ -139,6 +139,80 @@ def get_diagnosis_exposure(case_id: int, db: Session = Depends(get_db)):
     return rows
 
 
+def _with_percentages(rows: List[dict], value_key: str, total: float) -> List[dict]:
+    result = []
+    for row in rows:
+        copy = dict(row)
+        copy["pct_of_total"] = round(100 * copy[value_key] / total, 1) if total else None
+        result.append(copy)
+    return result
+
+
+@router.get("/{case_id}/claims-report-breakdown")
+def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
+    """Top 10 providers, IP/OP/Pharmacy/Dental/Optical/Not-Yet-Classified
+    treatment-type split (see app/ingestion/claims_report.py - format 1's
+    row 14 partitions the whole report by billing method, and each of its
+    two rows carries the same treatment-type columns as the diagnosis
+    breakdown, so summing them gives a complete, grand-total-accurate
+    split), and the Maternity diagnosis grouping's own amount, each as a
+    % of the report's total_paid. Where a 6-month claims projection can
+    also be run for this case (see /claims-projection), each figure is
+    additionally annualized by applying its % share to the projected
+    final_projected_claims.
+
+    Only available where the source report is DHA Mandated Format
+    (format 1) - format 2's row 13 only splits In Network/Out of Network,
+    not by treatment type, so treatment_type_breakdown comes back empty
+    for those reports (top providers and Maternity still work either way).
+    """
+    case = _get_case_or_404(db, case_id)
+    report = _latest_claims_report(db, case_id)
+    total = report.total_paid or 0.0
+
+    top_providers = sorted(report.provider_breakdown or [], key=lambda p: p["value"], reverse=True)[:10]
+    top_providers = _with_percentages(top_providers, "value", total)
+
+    treatment_type_breakdown = _with_percentages(report.treatment_type_breakdown or [], "value", total)
+
+    maternity = None
+    for entry in report.diagnosis_breakdown or []:
+        if " ".join(entry["label"].split()).lower() == "pregnancy, childbirth and the puerperium":
+            maternity = dict(entry)
+            maternity["pct_of_total"] = round(100 * entry["value"] / total, 1) if total else None
+            break
+
+    result = {
+        "total_paid": report.total_paid,
+        "top_providers": top_providers,
+        "treatment_type_breakdown": treatment_type_breakdown,
+        "maternity": maternity,
+    }
+
+    # Annualize each category by its % share of the projected annual
+    # claims figure, when there's enough data to run that projection at
+    # all (same preconditions as /claims-projection: 6 full months, a
+    # census, and opening/closing member counts).
+    census_count = len(case.census_records)
+    monthly = report.monthly_paid or []
+    full_months = [m["paid"] for m in monthly if not m.get("partial")]
+    if census_count and len(full_months) >= 6 and report.opening_members and report.closing_members:
+        projection = project_annual_claims(
+            six_month_paid_claims=full_months[:6],
+            opening_members=report.opening_members,
+            closing_members=report.closing_members,
+            current_census_members=census_count,
+        )
+        final_projected_claims = projection["final_projected_claims"]
+        for row in treatment_type_breakdown:
+            row["annualized"] = round(final_projected_claims * row["value"] / total, 2) if total else None
+        if maternity:
+            maternity["annualized"] = round(final_projected_claims * maternity["value"] / total, 2) if total else None
+        result["final_projected_claims"] = final_projected_claims
+
+    return result
+
+
 @router.get("/{case_id}/census-summary")
 def get_census_summary(case_id: int, db: Session = Depends(get_db)):
     """Plain demographic breakdown of the uploaded census - age bands,

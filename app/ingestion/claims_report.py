@@ -113,11 +113,13 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
         "diagnosis_breakdown": [],
         "provider_breakdown": [],
         "claims_by_type": [],
+        "treatment_type_breakdown": [],
         "monthly_paid": [],
     }
 
     diagnosis_rows: Dict[str, dict] = {}
     counts_rows: Dict[str, dict] = {}
+    claims_by_type_numbers: List[List[float]] = []
 
     for line in lines:
         match = _ROW_PREFIX_RE.match(line)
@@ -184,6 +186,23 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
             label, numbers = _split_label_and_seven_numbers(rest)
             if numbers:
                 result["claims_by_type"].append({"type": label, "value": numbers[6]})
+                claims_by_type_numbers.append(numbers)
+
+    if claims_by_type_numbers:
+        # Row 14's entries (Direct Billing / Reimbursement) partition every
+        # AED in the report, so summing their own IP/OP/Pharmacy/Dental/
+        # Optical/Not-Yet-Classified columns gives the whole report's
+        # treatment-type split - a cleaner total than summing the
+        # per-diagnosis rows, which would only equal the grand total if
+        # every diagnosis grouping happened to be captured.
+        column_sums = [sum(row[i] for row in claims_by_type_numbers) for i in range(6)]
+        result["treatment_type_breakdown"] = [
+            {"type": name, "value": value}
+            for name, value in zip(
+                ["In-Patient", "Out-Patient", "Pharmacy", "Dental", "Optical", "Not Yet Classified"],
+                column_sums,
+            )
+        ]
 
     for letter, entry in diagnosis_rows.items():
         counts = counts_rows.get(letter, {})
@@ -295,6 +314,10 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
         "diagnosis_breakdown": [],
         "provider_breakdown": [],
         "claims_by_type": [],
+        # This layout's row 13 only splits In Network/Out of Network, not
+        # IP/OP/Pharmacy/Dental/Optical like format 1's row 14 does - so
+        # there's no reliable source for a treatment-type breakdown here.
+        "treatment_type_breakdown": [],
         "monthly_paid": [],
     }
 
