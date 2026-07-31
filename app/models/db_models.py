@@ -164,6 +164,11 @@ class ClaimsLedgerEntry(Base):
     claim_status = Column(String, nullable=True)  # "Paid Claims" / "Outstanding Claims"
     policy_start_date = Column(Date, nullable=True)
     policy_end_date = Column(Date, nullable=True)
+    # The scheme's own fixed term above, vs. this individual member's own
+    # enrollment dates - can fall short of it if they joined late or left
+    # early (see top_patients_by_final_amount's member_status).
+    member_start_date = Column(Date, nullable=True)
+    member_end_date = Column(Date, nullable=True)
     date_of_treatment = Column(Date, nullable=True)
     relation = Column(String, nullable=True)
     ip_op_maternity = Column(String, nullable=True)

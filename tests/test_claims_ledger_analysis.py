@@ -14,7 +14,7 @@ from app.scoring.rules.claims_ledger_analysis import (
 
 def _entry(patient_id, final_amount, claim_id=None, diagnosis_code=None, diagnosis_description=None,
            ip_op_maternity="OP", date_of_treatment=None, provider_name=None, medical_category=None,
-           policy_start_date=None, policy_end_date=None):
+           policy_start_date=None, policy_end_date=None, member_start_date=None, member_end_date=None):
     return {
         "patient_id": patient_id,
         "claim_id": claim_id or f"{patient_id}-{final_amount}",
@@ -27,6 +27,8 @@ def _entry(patient_id, final_amount, claim_id=None, diagnosis_code=None, diagnos
         "medical_category": medical_category,
         "policy_start_date": policy_start_date,
         "policy_end_date": policy_end_date,
+        "member_start_date": member_start_date,
+        "member_end_date": member_end_date,
     }
 
 
@@ -43,20 +45,22 @@ def test_top_patients_ranked_by_total_final_amount():
 
 
 def test_top_patients_member_status_active_vs_deleted():
-    # P1 stayed the whole scheme term (their own end date matches the
-    # scheme's latest observed end date); P2 left early (an earlier end
-    # date than that) - should read Active vs Deleted respectively.
+    # Both share the same fixed scheme policy_end_date. P1's own
+    # member_end_date matches it (stayed the full term - Active); P2's own
+    # member_end_date falls before it (left the scheme early - Deleted).
     entries = [
-        _entry("P1", 1000, claim_id="C1", policy_end_date=date(2025, 12, 31)),
-        _entry("P2", 2000, claim_id="C2", policy_end_date=date(2025, 6, 30)),
+        _entry("P1", 1000, claim_id="C1", policy_end_date=date(2025, 12, 31), member_end_date=date(2025, 12, 31)),
+        _entry("P2", 2000, claim_id="C2", policy_end_date=date(2025, 12, 31), member_end_date=date(2025, 6, 30)),
     ]
     top = top_patients_by_final_amount(entries)
     statuses = {r["patient_id"]: r["member_status"] for r in top}
     assert statuses == {"P1": "Active", "P2": "Deleted"}
 
 
-def test_top_patients_member_status_unknown_without_policy_end_dates():
-    entries = [_entry("P1", 1000, claim_id="C1")]
+def test_top_patients_member_status_unknown_without_member_end_date():
+    # policy_end_date alone (no member_end_date column at all) isn't enough
+    # to determine status - there's nothing to compare it against.
+    entries = [_entry("P1", 1000, claim_id="C1", policy_end_date=date(2025, 12, 31))]
     top = top_patients_by_final_amount(entries)
     assert top[0]["member_status"] == "Unknown"
 

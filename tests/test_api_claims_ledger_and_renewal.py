@@ -101,6 +101,34 @@ def test_claims_ledger_analysis_returns_top_patients_and_diagnoses(client):
     assert cancer["high_exposure"] is True
 
 
+def test_claims_ledger_analysis_member_status_active_vs_deleted(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C1",
+                policy_start_date=date(2025, 1, 1), policy_end_date=date(2025, 12, 31),
+                member_start_date=date(2025, 1, 1), member_end_date=date(2025, 12, 31),
+                date_of_treatment=date(2025, 10, 5), final_amount=5000,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C2",
+                policy_start_date=date(2025, 1, 1), policy_end_date=date(2025, 12, 31),
+                member_start_date=date(2025, 1, 1), member_end_date=date(2025, 6, 30),
+                date_of_treatment=date(2025, 11, 5), final_amount=100,
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    statuses = {p["patient_id"]: p["member_status"] for p in resp.json()["top_patients"]}
+    assert statuses == {"P1": "Active", "P2": "Deleted"}
+
+
 def test_claims_ledger_analysis_returns_top_providers(client):
     case_id = _create_case(client)
     db = client.db_session_local()

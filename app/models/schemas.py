@@ -99,6 +99,8 @@ class ClaimsLedgerEntryOut(BaseModel):
     claim_status: Optional[str] = None
     policy_start_date: Optional[date] = None
     policy_end_date: Optional[date] = None
+    member_start_date: Optional[date] = None
+    member_end_date: Optional[date] = None
     date_of_treatment: Optional[date] = None
     relation: Optional[str] = None
     ip_op_maternity: Optional[str] = None

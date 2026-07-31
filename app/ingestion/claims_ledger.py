@@ -22,6 +22,11 @@ CLAIMS_LEDGER_ALIASES: Dict[str, List[str]] = {
     "claim_status": ["claim status", "claim_status", "status"],
     "policy_start_date": ["policy_start_date", "policy start date"],
     "policy_end_date": ["policy_end_date", "policy end date"],
+    # The scheme's own policy_start/end_date above is fixed for every row -
+    # these are the individual MEMBER's own enrollment dates, which can
+    # fall short of the scheme's if they joined late or left early.
+    "member_start_date": ["member_start_date", "member start date"],
+    "member_end_date": ["member_end_date", "member end date"],
     "date_of_treatment": ["date_of_treatment", "date of treatment", "treatment date"],
     "relation": ["relation", "relationship"],
     "ip_op_maternity": ["ip_op_maternity", "ip/op/maternity", "claim type"],
@@ -61,6 +66,8 @@ def parse_claims_ledger(file: BinaryIO, filename: str) -> List[dict]:
                 "claim_status": _str_or_none(row.get("claim_status")),
                 "policy_start_date": _date_or_none(row.get("policy_start_date")),
                 "policy_end_date": _date_or_none(row.get("policy_end_date")),
+                "member_start_date": _date_or_none(row.get("member_start_date")),
+                "member_end_date": _date_or_none(row.get("member_end_date")),
                 "date_of_treatment": _date_or_none(row.get("date_of_treatment")),
                 "relation": _str_or_none(row.get("relation")),
                 "ip_op_maternity": _str_or_none(row.get("ip_op_maternity")),
