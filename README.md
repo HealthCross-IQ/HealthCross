@@ -274,11 +274,23 @@ estimate.
   case's census carries the necessary dates (see below) - the real
   actuarial per-member-per-month burning cost, rather than the raw
   monthly total alone.
-- An `expected_annual_premium`: the average full month annualized (x12),
-  trended for inflation, then grossed up for the commission/OPEX loading
-  via `/ (1 - loading)` - the same convention as the burning-cost method,
-  just without its member-count rescaling step. `inflation_pct`/
-  `loading_pct` are overridable per call (defaults 7.5%/28%).
+- An `expected_annual_premium`, computed **two ways** side by side so a
+  group that grew or shrank mid-term doesn't silently distort the figure:
+  - **Method 1** (`avg_month`/`annualized_incurred_claims`/`trended_claims`/
+    `expected_annual_premium`): the average FULL month's raw claims total,
+    annualized (x12), trended for inflation, then grossed up for the
+    commission/OPEX loading via `/ (1 - loading)`.
+  - **Method 2** (`avg_cost_per_erp_member`/`avg_erp`/
+    `annualized_incurred_claims_pmpm`/`trended_claims_pmpm`/
+    `expected_annual_premium_pmpm`): the average of each full month's
+    **ERP-normalized** per-member rate (`final claims amount / that month's
+    ERP`, see below) instead of the raw total, annualized as
+    `avg_erp x (avg_cost_per_erp_member x 12)`, then trended and grossed up
+    the same way. Only present when the case's census carries the ERP date
+    columns; omitted (not an error) otherwise.
+
+  `inflation_pct`/`loading_pct` are overridable per call (defaults 7.5%/28%)
+  and apply identically to both methods.
 - A **category-wise burning cost breakdown** (`category_burning_cost()`):
   the same average/annualize/trend/load formula as above, computed
   separately per `medical_category` value (whatever categorization the
@@ -332,6 +344,17 @@ mid-term joiners and leavers. Requires the census upload to carry
 `policy_start_date`/`policy_end_date` (several aliases recognized, e.g.
 "Eff Date"/"Exp Date") - silently omitted from the claims-ledger-analysis
 table (not an error) when the census doesn't have them.
+
+Some brokers export these dates as a separate "endorsement" file rather
+than columns on the main member roster. `POST /cases/{id}/census?mode=merge-dates`
+handles this: upload the main roster first (default `mode=replace`), then
+upload the dates-only file with `mode=merge-dates` - each of its rows is
+matched onto an already-uploaded census row by employee/member ID
+(`employee_ref`), and only the `policy_start_date`/`policy_end_date`/
+`member_start_date`/`member_end_date` columns are filled in, leaving every
+other demographic field on the existing rows untouched. Returns the full,
+now-merged census. 400s if there's no existing census to merge dates into,
+or if the census file itself hasn't been uploaded yet.
 
 ## PDF ingestion
 
@@ -479,7 +502,7 @@ uploads accept drag-and-drop onto their row in addition to the file picker.
 - `GET /cases` - list all cases
 - `POST /cases` - create a case (broker, company, industry, region, business_type, current_annual_premium)
 - `PATCH /cases/{id}` - update business_type/current_annual_premium after creation
-- `POST /cases/{id}/census` - upload the census (xlsx/csv)
+- `POST /cases/{id}/census` - upload the census (xlsx/csv); `?mode=merge-dates` matches a separate dates-only "endorsement" file onto an already-uploaded census by employee/member ID instead of replacing it (default `mode=replace`)
 - `POST /cases/{id}/benefits` - upload the existing/incumbent table of benefits (xlsx/csv/pdf); `?mode=append` adds one category's file without replacing the others (default `mode=replace`)
 - `POST /cases/{id}/quote` - upload a new insurer's quotation for comparison (pdf)
 - `POST /cases/{id}/claims` - upload claims history (xlsx/csv, optional)

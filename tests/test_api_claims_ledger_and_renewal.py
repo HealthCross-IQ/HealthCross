@@ -162,6 +162,48 @@ def test_claims_ledger_analysis_merges_monthly_erp_from_census(client):
     assert monthly[(2025, 11)]["cost_per_erp_member"] == 1000.0
 
 
+def test_claims_ledger_analysis_second_pmpm_based_annualization_method(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            # Member A present the whole term; Member B joins Nov 1 - ERP
+            # grows from 1.0 (Oct) to 2.0 (Nov), so the plain monthly-total
+            # average (Method 1) and the ERP-normalized rate (Method 2)
+            # should diverge.
+            models.CensusRecord(
+                case_id=case_id, employee_ref="A",
+                policy_start_date=date(2025, 10, 1), policy_end_date=date(2025, 12, 31),
+                member_start_date=date(2025, 10, 1), member_end_date=date(2025, 12, 31),
+            ),
+            models.CensusRecord(
+                case_id=case_id, employee_ref="B",
+                policy_start_date=date(2025, 10, 1), policy_end_date=date(2025, 12, 31),
+                member_start_date=date(2025, 11, 1), member_end_date=date(2025, 12, 31),
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    _insert_ledger_entries(client, case_id, {(2025, 10): 1000, (2025, 11): 3000, (2025, 12): 500})
+
+    resp = client.get(f"/cases/{case_id}/claims-ledger-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Method 1 (plain monthly-total average): (1000 + 3000) / 2 = 2000/month.
+    assert body["avg_month"] == 2000.0
+    assert body["annualized_incurred_claims"] == 24000.0
+
+    # Method 2 (ERP-normalized rate): avg cost/member = (1000/1.0 + 3000/2.0) / 2 = 1250,
+    # avg ERP = (1.0 + 2.0) / 2 = 1.5 -> annualized = 1250 * 12 * 1.5 = 22500.
+    assert body["avg_cost_per_erp_member"] == 1250.0
+    assert body["avg_erp"] == 1.5
+    assert body["annualized_incurred_claims_pmpm"] == 22500.0
+    assert body["annualized_incurred_claims_pmpm"] != body["annualized_incurred_claims"]
+
+
 def test_claims_ledger_analysis_returns_top_providers(client):
     case_id = _create_case(client)
     db = client.db_session_local()

@@ -553,9 +553,13 @@ function renderCaseWorkspace() {
       <div class="dropzone" id="dropzone-census">
         <span class="kind-label">Census</span>
         <input type="file" id="file-census" accept=".xlsx,.xls,.csv">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
+          <input type="checkbox" id="file-census-merge-dates" style="width:auto;"> dates-only file (merge into existing census)
+        </label>
         <button onclick="uploadFile('census')">Upload</button>
         <span id="status-census" class="status-pending"></span>
       </div>
+      <div class="hint" style="margin-top:-4px;">If member start/end dates come from a separate file (e.g. an "endorsement" export) rather than the main roster, upload the roster first, then tick this and upload the dates file - rows are matched by employee/member ID and only the date columns are filled in.</div>
       <div class="dropzone" id="dropzone-benefits">
         <span class="kind-label">Benefits</span>
         <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv,.pdf">
@@ -680,12 +684,21 @@ async function uploadFile(kind) {
   statusEl.className = 'status-pending';
   try {
     const appendCheckbox = document.getElementById(`file-${kind}-append`);
-    const query = (kind === 'benefits' && appendCheckbox && appendCheckbox.checked) ? '?mode=append' : '';
+    const mergeDatesCheckbox = document.getElementById(`file-${kind}-merge-dates`);
+    let query = '';
+    if (kind === 'benefits' && appendCheckbox && appendCheckbox.checked) query = '?mode=append';
+    if (kind === 'census' && mergeDatesCheckbox && mergeDatesCheckbox.checked) query = '?mode=merge-dates';
     const result = await api(`/cases/${currentCase.id}/${kind}${query}`, { method: 'POST', body: form });
     if (Array.isArray(result)) {
-      const unit = kind === 'quote' ? 'categories' : 'rows';
-      statusEl.textContent = `${result.length} ${unit} parsed`;
-      toast(`${kind} uploaded (${result.length} ${unit})`);
+      if (query === '?mode=merge-dates') {
+        const withDates = result.filter(r => r.member_end_date).length;
+        statusEl.textContent = `${withDates} of ${result.length} census rows now have member dates`;
+        toast(`Dates merged into census (${withDates} of ${result.length} rows matched)`);
+      } else {
+        const unit = kind === 'quote' ? 'categories' : 'rows';
+        statusEl.textContent = `${result.length} ${unit} parsed`;
+        toast(`${kind} uploaded (${result.length} ${unit})`);
+      }
     } else {
       statusEl.textContent = 'Report parsed';
       toast(`${kind} report parsed`);
@@ -1002,13 +1015,26 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
     const qs = params.toString() ? `?${params.toString()}` : '';
     const a = await api(`/cases/${currentCase.id}/claims-ledger-analysis${qs}`);
 
+    const pmpmBlock = a.annualized_incurred_claims_pmpm != null ? `
+      <h4 style="margin-top:16px;">Method 2: Average cost per ERP member</h4>
+      <table>
+        <tr><th>Average cost per ERP member (full months)</th><td>${a.avg_cost_per_erp_member.toLocaleString()}</td></tr>
+        <tr><th>Average ERP (full months)</th><td>${a.avg_erp.toLocaleString()}</td></tr>
+        <tr><th>Annualized incurred claims</th><td>${a.annualized_incurred_claims_pmpm.toLocaleString()}</td></tr>
+        <tr><th>+ Inflation (${(a.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${a.trended_claims_pmpm.toLocaleString()}</td></tr>
+        <tr><th><b>Expected annual premium</b> (÷ loading)</th><td><b>${a.expected_annual_premium_pmpm.toLocaleString()}</b></td></tr>
+      </table>
+    ` : '';
+
     const expectedBlock = a.expected_annual_premium != null ? `
-      <table style="margin-top:16px;">
+      <h4>Method 1: Average month-wise claims</h4>
+      <table>
         <tr><th>Average month (full months)</th><td>${a.avg_month.toLocaleString()}</td></tr>
         <tr><th>Annualized incurred claims</th><td>${a.annualized_incurred_claims.toLocaleString()}</td></tr>
         <tr><th>+ Inflation (${(a.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${a.trended_claims.toLocaleString()}</td></tr>
         <tr><th><b>Expected annual premium</b> (÷ loading)</th><td><b>${a.expected_annual_premium.toLocaleString()}</b></td></tr>
       </table>
+      ${pmpmBlock}
       <div class="row" style="margin-top:12px; align-items:flex-end;">
         <div><label>Inflation %</label><input type="number" id="ledger-inflation-override" step="0.1" value="${(a.assumptions_used.inflation_pct*100).toFixed(1)}"></div>
         <div><label>Loading %</label><input type="number" id="ledger-loading-override" step="0.1" value="${(a.assumptions_used.loading_pct*100).toFixed(1)}"></div>

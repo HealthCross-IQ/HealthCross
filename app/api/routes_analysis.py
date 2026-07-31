@@ -457,6 +457,32 @@ def get_claims_ledger_analysis(
             }
         )
 
+        # Second method: the same average/annualize/trend/load formula, but
+        # built from the ERP-normalized per-member rate rather than the raw
+        # monthly total - corrects for a group that grew or shrank across
+        # the observed months (this ledger's ERP climbs from 120 to 132
+        # over its own term, so the plain monthly-total average understates
+        # what the per-member rate implies for the group's actual size).
+        full_month_keys = {(m["year"], m["month"]) for m in full_months}
+        full_months_with_erp = [
+            row for row in monthly if (row["year"], row["month"]) in full_month_keys and row.get("erp")
+        ]
+        if full_months_with_erp:
+            avg_cost_per_erp_member = sum(row["cost_per_erp_member"] for row in full_months_with_erp) / len(full_months_with_erp)
+            avg_erp = sum(row["erp"] for row in full_months_with_erp) / len(full_months_with_erp)
+            annualized_pmpm = avg_cost_per_erp_member * 12 * avg_erp
+            trended_pmpm = annualized_pmpm * (1 + assumptions.inflation_pct)
+            expected_annual_premium_pmpm = trended_pmpm / (1 - assumptions.loading_pct)
+            result.update(
+                {
+                    "avg_cost_per_erp_member": round(avg_cost_per_erp_member, 2),
+                    "avg_erp": round(avg_erp, 2),
+                    "annualized_incurred_claims_pmpm": round(annualized_pmpm, 2),
+                    "trended_claims_pmpm": round(trended_pmpm, 2),
+                    "expected_annual_premium_pmpm": round(expected_annual_premium_pmpm, 2),
+                }
+            )
+
         full_month_keys = [(m["year"], m["month"]) for m in full_months]
         category_rows = category_burning_cost(
             entry_dicts, full_month_keys, assumptions.inflation_pct, assumptions.loading_pct

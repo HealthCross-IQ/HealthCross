@@ -61,7 +61,23 @@ def update_case(case_id: int, payload: schemas.CaseUpdate, db: Session = Depends
 
 
 @router.post("/{case_id}/census", response_model=List[schemas.CensusRecordOut])
-def upload_census(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+def upload_census(
+    case_id: int,
+    file: UploadFile = File(...),
+    mode: str = Query(
+        "replace",
+        description=(
+            "'replace' (default): this file is the WHOLE census - wipe out any "
+            "previously-uploaded census rows first. 'merge-dates': this file only "
+            "carries policy/member start-end dates (some brokers export enrollment "
+            "dates as a separate 'endorsement' file from the main member roster) - "
+            "match each row to an already-uploaded census row by its employee ref "
+            "and fill in just the date columns, leaving every other field on the "
+            "existing rows untouched."
+        ),
+    ),
+    db: Session = Depends(get_db),
+):
     case = _get_case_or_404(db, case_id)
     try:
         parsed = parse_census(file.file, file.filename)
@@ -69,6 +85,28 @@ def upload_census(case_id: int, file: UploadFile = File(...), db: Session = Depe
         raise HTTPException(status_code=400, detail=f"Could not parse census file: {exc}")
     if not parsed:
         raise HTTPException(status_code=400, detail="No census rows found in file")
+
+    if mode == "merge-dates":
+        existing = db.query(models.CensusRecord).filter_by(case_id=case.id).all()
+        if not existing:
+            raise HTTPException(
+                status_code=400,
+                detail="No existing census to merge dates into - upload the main census file first.",
+            )
+        by_ref = {r.employee_ref: r for r in existing if r.employee_ref}
+        date_fields = ("policy_start_date", "policy_end_date", "member_start_date", "member_end_date")
+        for row in parsed:
+            record = by_ref.get(row.get("employee_ref"))
+            if not record:
+                continue
+            for field in date_fields:
+                value = row.get(field)
+                if value is not None:
+                    setattr(record, field, value)
+        db.commit()
+        for record in existing:
+            db.refresh(record)
+        return existing
 
     # A re-upload replaces the case's census entirely rather than piling on
     # top of a previous one - otherwise re-uploading the same file (e.g.

@@ -40,6 +40,59 @@ def test_reuploading_census_replaces_rather_than_accumulates(client):
     assert case["id"] == case_id
 
 
+def test_census_merge_dates_mode_fills_in_dates_without_touching_other_fields(client):
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    roster_df = pd.DataFrame(
+        [
+            {"Employee ID": "E1", "Category": "D", "Gender": "M", "DOB": "1994-02-15", "Marital Status": "Single", "Relation": "Employee", "Nationality": "Indian"},
+            {"Employee ID": "E2", "Category": "D", "Gender": "F", "DOB": "1990-06-01", "Marital Status": "Married", "Relation": "Employee", "Nationality": "Filipino"},
+        ]
+    )
+    resp = client.post(
+        f"/cases/{case_id}/census",
+        files={"file": ("roster.xlsx", _xlsx_bytes(roster_df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert len(resp.json()) == 2
+
+    # A separate "endorsement" export carrying only member IDs and dates -
+    # matched onto the already-uploaded roster rows by employee ID rather
+    # than replacing them.
+    dates_df = pd.DataFrame(
+        [
+            {"Employee ID": "E1", "Eff Date": "2025-10-01", "Exp Date": "2026-09-30", "EndoDate (Member Start Date)": "2025-10-01", "EndoDate (Member End Date)": "2026-09-30"},
+            {"Employee ID": "E2", "Eff Date": "2025-10-01", "Exp Date": "2026-09-30", "EndoDate (Member Start Date)": "2025-12-01", "EndoDate (Member End Date)": "2026-09-30"},
+        ]
+    )
+    resp = client.post(
+        f"/cases/{case_id}/census?mode=merge-dates",
+        files={"file": ("endorsements.xlsx", _xlsx_bytes(dates_df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    records = {r["employee_ref"]: r for r in resp.json()}
+    assert len(records) == 2
+    # Demographic fields from the original roster upload are untouched.
+    assert records["E1"]["nationality"] == "Indian"
+    assert records["E2"]["nationality"] == "Filipino"
+    # Date fields are now populated from the second file.
+    assert records["E1"]["member_start_date"] == "2025-10-01"
+    assert records["E2"]["member_start_date"] == "2025-12-01"
+    assert records["E1"]["policy_end_date"] == "2026-09-30"
+
+
+def test_census_merge_dates_mode_requires_an_existing_census(client):
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    dates_df = pd.DataFrame([{"Employee ID": "E1", "Eff Date": "2025-10-01", "Exp Date": "2026-09-30"}])
+    resp = client.post(
+        f"/cases/{case_id}/census?mode=merge-dates",
+        files={"file": ("endorsements.xlsx", _xlsx_bytes(dates_df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400
+
+
 def test_reuploading_benefits_replaces_rather_than_accumulates(client):
     resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
     case_id = resp.json()["id"]
