@@ -427,6 +427,18 @@ files, compute the scorecard, and record an outcome, all by clicking
 around instead of using `/docs`. It's a thin client over the same API
 below.
 
+The case workspace is organized into four tabs (Census / Benefits / Claims /
+Scorecard) below an always-visible case-details and file-upload area, rather
+than one long stacked page - so reviewing a case's claims trend doesn't
+require scrolling past the benefits comparison table first. Several sections
+render a small hand-rolled inline SVG chart alongside their detail tables
+(age distribution, nationality-zone mix, monthly claims trend, burning cost
+by category, the scorecard's composite-score meter and component-multiplier
+bars) - no charting library, consistent with the page's zero-dependency,
+single-file design. Every chart mark carries a hover tooltip (a shared
+`#chart-tooltip` element bound to any `[data-tooltip]` node), and file
+uploads accept drag-and-drop onto their row in addition to the file picker.
+
 ## API
 
 - `GET /cases` - list all cases

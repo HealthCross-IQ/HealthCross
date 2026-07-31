@@ -7,36 +7,51 @@
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f7f7f5;
-    --surface: #ffffff;
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
     --surface-2: #f0efec;
     --border: rgba(11,11,11,0.10);
-    --ink: #17181a;
-    --ink-2: #5a5c60;
-    --ink-muted: #8b8d91;
-    --accent: #2a5db0;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-muted: #898781;
+    --grid: #e1e0d9;
+    --accent: #2a78d6;
     --accent-ink: #ffffff;
     --good: #0ca30c;
     --good-bg: #0ca30c1a;
-    --warn: #b7791a;
-    --warn-bg: #fab2191f;
-    --bad: #b8322f;
-    --bad-bg: #d03b3b1a;
+    --warning: #fab219;
+    --warning-bg: #fab2191a;
+    --serious: #ec835a;
+    --serious-bg: #ec835a1a;
+    --critical: #d03b3b;
+    --critical-bg: #d03b3b1a;
+    --series-1: #2a78d6;
+    --series-2: #eb6834;
+    --series-3: #1baf7a;
+    --series-4: #eda100;
+    --series-1-wash: #2a78d61a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0f1012;
-      --surface: #1a1b1e;
-      --surface-2: #232427;
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #232320;
       --border: rgba(255,255,255,0.10);
-      --ink: #f2f2f0;
+      --ink: #ffffff;
       --ink-2: #c3c2b7;
-      --ink-muted: #8b8d91;
-      --accent: #6fa1e8;
-      --accent-ink: #0f1012;
+      --ink-muted: #898781;
+      --grid: #2c2c2a;
+      --accent: #3987e5;
+      --accent-ink: #0d0d0d;
       --good-bg: #0ca30c26;
-      --warn-bg: #fab21926;
-      --bad-bg: #d03b3b26;
+      --warning-bg: #fab21926;
+      --serious-bg: #ec835a26;
+      --critical-bg: #d03b3b26;
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --series-3: #199e70;
+      --series-4: #c98500;
+      --series-1-wash: #3987e526;
     }
   }
   * { box-sizing: border-box; }
@@ -44,25 +59,29 @@
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
     line-height: 1.45;
   }
   header {
-    padding: 16px 24px;
+    padding: 14px 24px;
     border-bottom: 1px solid var(--border);
     display: flex;
     align-items: baseline;
     gap: 10px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
   }
-  header h1 { font-size: 18px; margin: 0; font-weight: 700; }
-  header span { color: var(--ink-muted); font-size: 13px; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  header span { color: var(--ink-muted); font-size: 12.5px; }
 
   .layout {
     display: grid;
-    grid-template-columns: 260px 1fr;
-    min-height: calc(100vh - 57px);
+    grid-template-columns: 250px 1fr;
+    min-height: calc(100vh - 50px);
   }
-  @media (max-width: 720px) { .layout { grid-template-columns: 1fr; } }
+  @media (max-width: 780px) { .layout { grid-template-columns: 1fr; } }
 
   aside {
     border-right: 1px solid var(--border);
@@ -72,22 +91,24 @@
     gap: 12px;
   }
   aside h2 {
-    font-size: 11.5px;
+    font-size: 11px;
     text-transform: uppercase;
-    letter-spacing: 0.04em;
+    letter-spacing: 0.06em;
     color: var(--ink-muted);
-    margin: 0;
+    margin: 4px 0 0;
+    font-weight: 600;
   }
-  .case-list { display: flex; flex-direction: column; gap: 4px; overflow-y: auto; }
+  .case-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
   .case-item {
     text-align: left;
     background: none;
     border: 1px solid transparent;
     border-radius: 8px;
-    padding: 8px 10px;
+    padding: 9px 10px;
     cursor: pointer;
     font-size: 13px;
     color: var(--ink);
+    transition: background 0.1s ease;
   }
   .case-item:hover { background: var(--surface-2); }
   .case-item.active { background: var(--surface-2); border-color: var(--border); }
@@ -103,6 +124,7 @@
     color: var(--ink);
     padding: 8px 14px;
     font-size: 13.5px;
+    transition: background 0.1s ease, filter 0.1s ease;
   }
   button:hover { background: var(--surface-2); }
   button.primary {
@@ -114,19 +136,21 @@
   button.primary:hover { filter: brightness(1.08); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-  main { padding: 24px; max-width: 880px; }
+  main { padding: 22px 26px 60px; max-width: 980px; }
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 20px 22px;
-    margin-bottom: 18px;
+    margin-bottom: 16px;
   }
-  .card h3 { margin: 0 0 4px; font-size: 15px; }
+  .card h3 { margin: 0 0 4px; font-size: 14.5px; font-weight: 700; }
+  .card h4 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 600; }
   .card .hint { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 14px; }
+  .hint-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 
   label { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 4px; }
-  input[type=text], input[type=number] {
+  input[type=text], input[type=number], select {
     width: 100%;
     padding: 8px 10px;
     border-radius: 7px;
@@ -139,11 +163,23 @@
   .row { display: flex; gap: 12px; flex-wrap: wrap; }
   .row > div { flex: 1; min-width: 160px; }
 
-  .upload-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-  .upload-row input[type=file] { flex: 1; font-size: 12.5px; }
-  .status-ok { color: var(--good); font-size: 12.5px; }
-  .status-err { color: var(--bad); font-size: 12.5px; }
-  .status-pending { color: var(--ink-muted); font-size: 12.5px; }
+  .dropzone {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px dashed var(--border);
+    border-radius: 9px;
+    margin-bottom: 8px;
+    background: var(--surface);
+    transition: border-color 0.12s ease, background 0.12s ease;
+  }
+  .dropzone.dragover { border-color: var(--accent); background: var(--series-1-wash); }
+  .dropzone .kind-label { width: 100px; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+  .dropzone input[type=file] { flex: 1; font-size: 12px; min-width: 0; }
+  .status-ok { color: var(--good); font-size: 12.5px; white-space: nowrap; }
+  .status-err { color: var(--critical); font-size: 12.5px; white-space: nowrap; }
+  .status-pending { color: var(--ink-muted); font-size: 12.5px; white-space: nowrap; }
 
   .kpi-grid {
     display: grid;
@@ -152,13 +188,13 @@
     margin-bottom: 16px;
   }
   .kpi {
-    background: var(--surface);
+    background: var(--surface-2);
     border: 1px solid var(--border);
     border-radius: 10px;
-    padding: 14px 16px;
+    padding: 12px 14px;
   }
-  .kpi .label { font-size: 11.5px; color: var(--ink-muted); display: block; }
-  .kpi .value { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .kpi .label { font-size: 11px; color: var(--ink-muted); display: block; margin-bottom: 2px; }
+  .kpi .value { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
 
   .tier-pill {
     display: inline-flex;
@@ -169,23 +205,54 @@
   }
   .tier-Preferred { background: var(--good-bg); color: var(--good); }
   .tier-Standard { background: var(--surface-2); color: var(--ink-2); }
-  .tier-Substandard { background: var(--warn-bg); color: var(--warn); }
-  .tier-DeclineRefer { background: var(--bad-bg); color: var(--bad); }
+  .tier-Substandard { background: var(--serious-bg); color: var(--serious); }
+  .tier-DeclineRefer { background: var(--critical-bg); color: var(--critical); }
   .dir-improved { background: var(--good-bg); color: var(--good); }
-  .dir-reduced { background: var(--bad-bg); color: var(--bad); }
+  .dir-reduced { background: var(--critical-bg); color: var(--critical); }
   .dir-same { background: var(--surface-2); color: var(--ink-2); }
-  .dir-review { background: var(--warn-bg); color: var(--warn); }
+  .dir-review { background: var(--warning-bg); color: var(--ink-2); }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); }
-  table th { color: var(--ink-muted); font-weight: 600; font-size: 11.5px; text-transform: uppercase; }
+  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table th { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-variant-numeric: normal; }
+
+  /* Tabs */
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
+  .tab-btn {
+    background: none; border: none; border-radius: 0;
+    padding: 9px 14px; font-size: 13.5px; font-weight: 600;
+    color: var(--ink-muted); border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { background: none; color: var(--ink); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  /* Charts */
+  .chart-wrap { margin: 4px 0 18px; }
+  .chart-svg { display: block; overflow: visible; }
+  .chart-label { font-size: 11.5px; fill: var(--ink-2); text-anchor: end; dominant-baseline: middle; }
+  .chart-value { font-size: 11.5px; fill: var(--ink-2); font-variant-numeric: tabular-nums; dominant-baseline: middle; }
+  .chart-axis-label { font-size: 10.5px; fill: var(--ink-muted); }
+  .chart-grid { stroke: var(--grid); stroke-width: 1; }
+  .chart-row { cursor: default; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 10px; }
+  .chart-legend .swatch { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); }
+  .chart-legend .dot { width: 10px; height: 10px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
+  #chart-tooltip {
+    position: fixed; display: none; pointer-events: none; z-index: 50;
+    background: var(--ink); color: var(--bg); font-size: 12px;
+    padding: 5px 9px; border-radius: 6px; max-width: 260px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+  }
 
   .empty-state { color: var(--ink-muted); font-size: 13px; padding: 20px 0; text-align: center; }
   #toast {
     position: fixed; bottom: 20px; right: 20px;
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 8px; padding: 10px 16px; font-size: 13px;
-    box-shadow: 0 4px 16px rgba(0,0,0,0.12);
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
     display: none;
   }
 </style>
@@ -208,6 +275,7 @@
 </div>
 
 <div id="toast"></div>
+<div id="chart-tooltip"></div>
 
 <script>
 const API = '';
@@ -217,11 +285,12 @@ const ZONE_LABELS = {
   zone_2_middle_east: 'Middle East',
   zone_3_europe_americas: 'Europe & Americas',
 };
+const SERIES = ['var(--series-1)', 'var(--series-2)', 'var(--series-3)', 'var(--series-4)'];
 
 function toast(message, isError) {
   const el = document.getElementById('toast');
   el.textContent = message;
-  el.style.borderColor = isError ? 'var(--bad)' : 'var(--border)';
+  el.style.borderColor = isError ? 'var(--critical)' : 'var(--border)';
   el.style.display = 'block';
   clearTimeout(el._t);
   el._t = setTimeout(() => { el.style.display = 'none'; }, 3500);
@@ -236,6 +305,129 @@ async function api(path, options) {
   return res.json();
 }
 
+function escapeHtml(s) {
+  return (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+}
+
+/* ---------------- chart helpers (hand-rolled SVG, no external library) ---------------- */
+
+function bindChartTooltips(container) {
+  const tooltip = document.getElementById('chart-tooltip');
+  container.querySelectorAll('[data-tooltip]').forEach(el => {
+    el.addEventListener('mouseenter', () => {
+      tooltip.textContent = el.getAttribute('data-tooltip');
+      tooltip.style.display = 'block';
+    });
+    el.addEventListener('mousemove', (e) => {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 14) + 'px';
+    });
+    el.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+  });
+}
+
+// Horizontal bar chart - a single-hue magnitude ranking (e.g. age bands, burning cost by category).
+function svgBarChart(items, opts) {
+  opts = opts || {};
+  const color = opts.color || 'var(--series-1)';
+  const formatValue = opts.formatValue || (v => v.toLocaleString());
+  const barH = 20, gapY = 12, labelW = opts.labelWidth || 150, plotW = opts.plotWidth || 380, valueW = 90;
+  const maxVal = Math.max(...items.map(i => i.value), 1);
+  const totalW = labelW + plotW + valueW;
+  const totalH = items.length * (barH + gapY);
+  const rows = items.map((item, i) => {
+    const w = Math.max(2, (item.value / maxVal) * plotW);
+    const y = i * (barH + gapY);
+    const valueText = formatValue(item.value);
+    return `
+      <g class="chart-row" data-tooltip="${escapeHtml(item.label)}: ${escapeHtml(valueText)}">
+        <text x="${labelW - 10}" y="${y + barH / 2}" class="chart-label">${escapeHtml(item.label)}</text>
+        <rect x="${labelW}" y="${y}" width="${w}" height="${barH}" rx="4" fill="${color}"/>
+        <text x="${labelW + w + 10}" y="${y + barH / 2}" class="chart-value">${escapeHtml(valueText)}</text>
+      </g>
+    `;
+  }).join('');
+  return `<svg viewBox="0 0 ${totalW} ${totalH}" class="chart-svg" style="width:100%; height:${totalH}px;">${rows}</svg>`;
+}
+
+// Single stacked proportion bar - identity/part-of-whole (e.g. nationality zone mix).
+function svgProportionBar(items, opts) {
+  opts = opts || {};
+  const totalW = 600, barH = 26, segGap = 2;
+  let x = 0;
+  const segments = items.map((item, i) => {
+    const w = Math.max(0, item.pct * totalW - segGap);
+    const seg = `<rect x="${x.toFixed(1)}" y="0" width="${w.toFixed(1)}" height="${barH}" rx="4" fill="${SERIES[i % SERIES.length]}" class="chart-row" data-tooltip="${escapeHtml(item.label)}: ${item.count} (${(item.pct * 100).toFixed(1)}%)"/>`;
+    x += w + segGap;
+    return seg;
+  }).join('');
+  const legend = items.map((item, i) => `
+    <span class="swatch"><span class="dot" style="background:${SERIES[i % SERIES.length]};"></span>${escapeHtml(item.label)} &middot; ${(item.pct * 100).toFixed(1)}%</span>
+  `).join('');
+  return `
+    <svg viewBox="0 0 ${totalW} ${barH}" class="chart-svg" style="width:100%; height:${barH}px;">${segments}</svg>
+    <div class="chart-legend">${legend}</div>
+  `;
+}
+
+// Line chart with hover dots - magnitude over time (e.g. monthly claims trend).
+function svgLineChart(points, opts) {
+  opts = opts || {};
+  const formatValue = opts.formatValue || (v => v.toLocaleString());
+  const w = 720, h = 200, padL = 64, padB = 26, padT = 14, padR = 16;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const maxVal = Math.max(...points.map(p => p.value), 1);
+  const stepX = points.length > 1 ? plotW / (points.length - 1) : 0;
+  const coords = points.map((p, i) => ({
+    x: padL + i * stepX,
+    y: padT + plotH - (p.value / maxVal) * plotH,
+    label: p.label,
+    value: p.value,
+  }));
+  const path = coords.map((c, i) => `${i === 0 ? 'M' : 'L'} ${c.x.toFixed(1)} ${c.y.toFixed(1)}`).join(' ');
+  const areaPath = `${path} L ${coords[coords.length - 1].x.toFixed(1)} ${(padT + plotH).toFixed(1)} L ${coords[0].x.toFixed(1)} ${(padT + plotH).toFixed(1)} Z`;
+  const gridlines = [0, 0.5, 1].map(f => {
+    const y = padT + plotH * (1 - f);
+    return `
+      <line x1="${padL}" y1="${y.toFixed(1)}" x2="${w - padR}" y2="${y.toFixed(1)}" class="chart-grid"/>
+      <text x="${padL - 8}" y="${(y + 4).toFixed(1)}" class="chart-axis-label" text-anchor="end">${Math.round(maxVal * f).toLocaleString()}</text>
+    `;
+  }).join('');
+  const showEvery = Math.max(1, Math.ceil(coords.length / 7));
+  const xLabels = coords.map((c, i) => (i % showEvery === 0 || i === coords.length - 1)
+    ? `<text x="${c.x.toFixed(1)}" y="${h - 6}" class="chart-axis-label" text-anchor="middle">${escapeHtml(c.label)}</text>`
+    : '').join('');
+  const dots = coords.map(c => `
+    <circle cx="${c.x.toFixed(1)}" cy="${c.y.toFixed(1)}" r="4" fill="var(--series-1)" stroke="var(--surface)" stroke-width="2" class="chart-row" data-tooltip="${escapeHtml(c.label)}: ${escapeHtml(formatValue(c.value))}"/>
+  `).join('');
+  return `
+    <svg viewBox="0 0 ${w} ${h}" class="chart-svg" style="width:100%; height:${h}px;">
+      ${gridlines}
+      <path d="${areaPath}" fill="var(--series-1)" opacity="0.1"/>
+      <path d="${path}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      ${dots}
+      ${xLabels}
+    </svg>
+  `;
+}
+
+// Horizontal meter - a single score against fixed tier thresholds.
+function svgScoreMeter(score, tier) {
+  const w = 600, h = 26;
+  const tierColor = { Preferred: 'var(--good)', Standard: 'var(--accent)', Substandard: 'var(--serious)', 'Decline/Refer': 'var(--critical)' }[tier] || 'var(--accent)';
+  const pct = Math.max(0, Math.min(100, score)) / 100;
+  const markers = [40, 60, 80].map(t => `<line x1="${(t / 100 * w).toFixed(1)}" y1="0" x2="${(t / 100 * w).toFixed(1)}" y2="${h}" stroke="var(--surface)" stroke-width="2"/>`).join('');
+  return `
+    <svg viewBox="0 0 ${w} ${h}" class="chart-svg" style="width:100%; height:${h}px;">
+      <rect x="0" y="0" width="${w}" height="${h}" rx="6" fill="var(--surface-2)"/>
+      <rect x="0" y="0" width="${Math.max(4, pct * w).toFixed(1)}" height="${h}" rx="6" fill="${tierColor}"/>
+      ${markers}
+    </svg>
+  `;
+}
+
+/* ---------------- cases sidebar ---------------- */
+
 async function loadCases() {
   const cases = await api('/cases');
   const list = document.getElementById('caseList');
@@ -249,10 +441,6 @@ async function loadCases() {
       <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
     </button>
   `).join('');
-}
-
-function escapeHtml(s) {
-  return (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
 function showNewCaseForm() {
@@ -274,7 +462,7 @@ function showNewCaseForm() {
         <div class="row">
           <div>
             <label>Business type</label>
-            <select name="business_type" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
+            <select name="business_type">
               <option value="new">New business</option>
               <option value="existing">Existing business (renewal)</option>
             </select>
@@ -320,6 +508,20 @@ async function selectCase(id) {
   renderCaseWorkspace();
 }
 
+/* ---------------- workspace / tabs ---------------- */
+
+const TABS = [
+  { id: 'census', label: 'Census' },
+  { id: 'benefits', label: 'Benefits' },
+  { id: 'claims', label: 'Claims' },
+  { id: 'scorecard', label: 'Scorecard' },
+];
+
+function switchTab(id) {
+  document.querySelectorAll('.tab-panel').forEach(el => el.classList.toggle('active', el.dataset.tab === id));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.toggle('active', el.dataset.tab === id));
+}
+
 function renderCaseWorkspace() {
   const c = currentCase;
   document.getElementById('main').innerHTML = `
@@ -331,7 +533,7 @@ function renderCaseWorkspace() {
       <div class="row" style="margin-top:12px; align-items:flex-end;">
         <div>
           <label>Business type</label>
-          <select id="case-business-type" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
+          <select id="case-business-type">
             <option value="new" ${c.business_type === 'existing' ? '' : 'selected'}>New business</option>
             <option value="existing" ${c.business_type === 'existing' ? 'selected' : ''}>Existing business (renewal)</option>
           </select>
@@ -345,84 +547,97 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="card">
-      <h3>1. Upload files</h3>
+      <h3>Upload files</h3>
       <div class="hint">Census is required to score. Table of benefits is required. Claims/claims ledger are optional.</div>
 
-      <div class="upload-row">
-        <span style="width:110px;">Census</span>
+      <div class="dropzone" id="dropzone-census">
+        <span class="kind-label">Census</span>
         <input type="file" id="file-census" accept=".xlsx,.xls,.csv">
         <button onclick="uploadFile('census')">Upload</button>
         <span id="status-census" class="status-pending"></span>
       </div>
-      <div class="upload-row">
-        <span style="width:110px;">Benefits</span>
+      <div class="dropzone" id="dropzone-benefits">
+        <span class="kind-label">Benefits</span>
         <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv,.pdf">
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px;">
+        <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
           <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
         </label>
         <button onclick="uploadFile('benefits')">Upload</button>
         <span id="status-benefits" class="status-pending"></span>
       </div>
-      <div class="hint">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
-      <div class="upload-row">
-        <span style="width:110px;">Claims</span>
+      <div class="hint" style="margin-top:-4px;">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
+      <div class="dropzone" id="dropzone-claims">
+        <span class="kind-label">Claims</span>
         <input type="file" id="file-claims" accept=".xlsx,.xls,.csv">
         <button onclick="uploadFile('claims')">Upload</button>
         <span id="status-claims" class="status-pending"></span>
       </div>
-      <div class="upload-row">
-        <span style="width:110px;">Quote</span>
+      <div class="dropzone" id="dropzone-quote">
+        <span class="kind-label">Quote</span>
         <input type="file" id="file-quote" accept=".pdf">
         <button onclick="uploadFile('quote')">Upload</button>
         <span id="status-quote" class="status-pending"></span>
       </div>
-      <div class="hint">Quote: a new insurer's proposal for this case, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
-      <div class="upload-row">
-        <span style="width:110px;">Claims ledger</span>
+      <div class="hint" style="margin-top:-4px;">Quote: a new insurer's proposal for this case, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
+      <div class="dropzone" id="dropzone-claims-ledger">
+        <span class="kind-label">Claims ledger</span>
         <input type="file" id="file-claims-ledger" accept=".xlsx,.xls,.csv">
         <button onclick="uploadFile('claims-ledger')">Upload</button>
         <span id="status-claims-ledger" class="status-pending"></span>
       </div>
-      <div class="hint">Claims ledger: a raw per-claim-line export (e.g. the "ServicePlan" format) - only available for existing-business renewals, powering the top patients/diagnoses and renewal-increase analysis below instead of the burning-cost quote projection.</div>
+      <div class="hint" style="margin-top:-4px;">Claims ledger: a raw per-claim-line export (e.g. the "ServicePlan" format) - only available for existing-business renewals, powering the top patients/diagnoses and renewal-increase analysis below instead of the burning-cost quote projection.</div>
     </div>
 
-    <div id="census-summary-area"></div>
-    <div id="benefits-summary-area"></div>
-    <div id="premium-by-category-area"></div>
-    <div id="benefits-comparison-area"></div>
-    <div id="claims-projection-area"></div>
-    <div id="diagnosis-exposure-area"></div>
-    <div id="claims-ledger-analysis-area"></div>
-    <div id="renewal-rating-area"></div>
-
-    <div class="card">
-      <h3>2. Compute risk scorecard</h3>
-      <label>Estimated annual premium (optional, improves claims-experience accuracy)</label>
-      <input type="number" id="estimated-premium" placeholder="e.g. 30000">
-      <div style="margin-top:12px;"><button class="primary" onclick="computeScore()">Compute scorecard</button></div>
+    <div class="tab-bar">
+      ${TABS.map(t => `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('')}
     </div>
 
-    <div id="scorecard-area"></div>
+    <div class="tab-panel" data-tab="census">
+      <div id="census-summary-area"></div>
+    </div>
 
-    <div class="card">
-      <h3>3. Record outcome</h3>
-      <div class="hint">Once the case is bound (or declined), record what happened here — this feeds the recalibration loop.</div>
-      <form onsubmit="recordOutcome(event)">
-        <div class="row">
-          <div>
-            <label>Outcome</label>
-            <select name="bound" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink);">
-              <option value="true">Bound</option>
-              <option value="false">Declined</option>
-            </select>
+    <div class="tab-panel" data-tab="benefits">
+      <div id="benefits-summary-area"></div>
+      <div id="premium-by-category-area"></div>
+      <div id="benefits-comparison-area"></div>
+    </div>
+
+    <div class="tab-panel" data-tab="claims">
+      <div id="claims-projection-area"></div>
+      <div id="diagnosis-exposure-area"></div>
+      <div id="claims-ledger-analysis-area"></div>
+      <div id="renewal-rating-area"></div>
+    </div>
+
+    <div class="tab-panel" data-tab="scorecard">
+      <div class="card">
+        <h3>Compute risk scorecard</h3>
+        <label>Estimated annual premium (optional, improves claims-experience accuracy)</label>
+        <input type="number" id="estimated-premium" placeholder="e.g. 30000">
+        <div style="margin-top:12px;"><button class="primary" onclick="computeScore()">Compute scorecard</button></div>
+      </div>
+      <div id="scorecard-area"></div>
+      <div class="card">
+        <h3>Record outcome</h3>
+        <div class="hint">Once the case is bound (or declined), record what happened here — this feeds the recalibration loop.</div>
+        <form onsubmit="recordOutcome(event)">
+          <div class="row">
+            <div>
+              <label>Outcome</label>
+              <select name="bound">
+                <option value="true">Bound</option>
+                <option value="false">Declined</option>
+              </select>
+            </div>
+            <div><label>Final premium</label><input type="number" name="final_premium"></div>
+            <div><label>Actual loss ratio (e.g. 0.75)</label><input type="number" step="0.01" name="actual_loss_ratio"></div>
           </div>
-          <div><label>Final premium</label><input type="number" name="final_premium"></div>
-          <div><label>Actual loss ratio (e.g. 0.75)</label><input type="number" step="0.01" name="actual_loss_ratio"></div>
-        </div>
-        <div style="margin-top:12px;"><button type="submit">Save outcome</button></div>
-      </form>
+          <div style="margin-top:12px;"><button type="submit">Save outcome</button></div>
+        </form>
+      </div>
     </div>
   `;
+  switchTab('census');
   loadLatestScorecard();
   loadCensusSummary();
   loadBenefitsSummary();
@@ -488,6 +703,27 @@ async function uploadFile(kind) {
   }
 }
 
+document.addEventListener('dragover', (e) => {
+  const zone = e.target.closest && e.target.closest('.dropzone');
+  if (zone) { e.preventDefault(); zone.classList.add('dragover'); }
+});
+document.addEventListener('dragleave', (e) => {
+  const zone = e.target.closest && e.target.closest('.dropzone');
+  if (zone) zone.classList.remove('dragover');
+});
+document.addEventListener('drop', (e) => {
+  const zone = e.target.closest && e.target.closest('.dropzone');
+  if (!zone) return;
+  e.preventDefault();
+  zone.classList.remove('dragover');
+  const input = zone.querySelector('input[type=file]');
+  if (input && e.dataTransfer.files.length) {
+    input.files = e.dataTransfer.files;
+  }
+});
+
+/* ---------------- census ---------------- */
+
 function _pctTable(counts, pct) {
   return Object.keys(counts).map(k => `
     <tr><th>${escapeHtml(k)}</th><td>${counts[k]}</td><td>${(pct[k] * 100).toFixed(1)}%</td></tr>
@@ -510,6 +746,11 @@ async function loadCensusSummary() {
   const area = document.getElementById('census-summary-area');
   try {
     const s = await api(`/cases/${currentCase.id}/census-summary`);
+    const ageBandItems = Object.keys(s.age_band_counts).map(band => ({ label: band, value: s.age_band_counts[band] }));
+    const zoneItems = Object.keys(s.nationality_zone_counts).map(zone => ({
+      label: ZONE_LABELS[zone] || zone, count: s.nationality_zone_counts[zone], pct: s.nationality_zone_pct[zone],
+    }));
+
     area.innerHTML = `
       <div class="card">
         <h3>Census demographic breakdown</h3>
@@ -523,6 +764,13 @@ async function loadCensusSummary() {
           <div class="kpi"><span class="label">Favorable children (&gt;1yr)</span><span class="value">${s.favorable_children_count}</span></div>
           <div class="kpi"><span class="label">Female spouses</span><span class="value">${s.female_spouse_count}</span></div>
         </div>
+
+        <h4>Age distribution</h4>
+        <div class="chart-wrap">${svgBarChart(ageBandItems, { labelWidth: 90 })}</div>
+
+        <h4>Nationality zone mix</h4>
+        <div class="chart-wrap">${svgProportionBar(zoneItems)}</div>
+
         <div class="row" style="margin-top:16px;">
           <table>
             <tr><th>Age band</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
@@ -571,10 +819,13 @@ async function loadCensusSummary() {
         </table>
       </div>
     `;
+    bindChartTooltips(area);
   } catch (err) {
     area.innerHTML = '';
   }
 }
+
+/* ---------------- benefits ---------------- */
 
 async function loadBenefitsSummary() {
   const area = document.getElementById('benefits-summary-area');
@@ -647,7 +898,7 @@ async function loadBenefitsComparison() {
           HealthCross Quote: ${escapeHtml(c.quoted_plan_name || '-')}${c.quoted_category ? ' (Cat ' + escapeHtml(c.quoted_category) + ')' : ''}
           ${c.quoted_gross_premium != null ? ` (AED ${c.quoted_gross_premium.toLocaleString()}${c.quoted_member_count ? ' / ' + c.quoted_member_count + ' members' : ''})` : ''}
         </div>
-        ${c.existing_plan_reused ? `<div class="hint" style="color:var(--warn);">Note: this case's existing plan wasn't split by category (e.g. a scanned/OCR'd document) - the same existing figures shown above are being compared against this quoted category too, not a distinct Category 2/B entry.</div>` : ''}
+        ${c.existing_plan_reused ? `<div class="hint"><span class="hint-dot" style="background:var(--warning);"></span>Note: this case's existing plan wasn't split by category (e.g. a scanned/OCR'd document) - the same existing figures shown above are being compared against this quoted category too, not a distinct Category 2/B entry.</div>` : ''}
         <table>
           <tr><th>Field</th><th>Existing</th><th>HealthCross Quote</th><th>Direction</th></tr>
           ${Object.entries(c.fields).map(([field, cmp]) => `
@@ -665,6 +916,8 @@ async function loadBenefitsComparison() {
     area.innerHTML = '';
   }
 }
+
+/* ---------------- claims ---------------- */
 
 async function loadClaimsProjection(credibilityOverride) {
   const area = document.getElementById('claims-projection-area');
@@ -758,6 +1011,20 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
       </div>
     ` : `<div class="hint">Not enough full months of claims data yet for an annualized projection.</div>`;
 
+    const monthlyChart = a.monthly_final_amount && a.monthly_final_amount.length ? `
+      <h4>Monthly claims trend</h4>
+      <div class="chart-wrap">${svgLineChart(a.monthly_final_amount.map(m => ({ label: `${m.year}-${String(m.month).padStart(2,'0')}`, value: m.final_amount })))}</div>
+    ` : '';
+
+    const categoryChart = a.category_burning_cost && a.category_burning_cost.length ? `
+      <h4>Burning cost by category</h4>
+      <div class="chart-wrap">${svgBarChart(
+        a.category_burning_cost.slice().sort((x, y) => y.projected_annual_claims - x.projected_annual_claims)
+          .map(c => ({ label: c.category, value: c.projected_annual_claims })),
+        { labelWidth: 130, color: 'var(--series-2)' }
+      )}</div>
+    ` : '';
+
     const categoryBlock = a.category_burning_cost && a.category_burning_cost.length ? `
       <table style="margin-top:16px;">
         <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Claims count</th><th>Burning cost (annualized)</th><th>Avg claims/member</th><th>% of total</th><th>Quoted premium</th><th>Projected loss ratio</th></tr>
@@ -808,6 +1075,7 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
             `).join('')}
           </table>
         </div>
+        ${monthlyChart}
         <table style="margin-top:16px;">
           <tr><th>Month</th><th>Final claims amount</th></tr>
           ${a.monthly_final_amount.map(m => `
@@ -815,9 +1083,11 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
           `).join('')}
         </table>
         ${expectedBlock}
+        ${categoryChart}
         ${categoryBlock}
       </div>
     `;
+    bindChartTooltips(area);
   } catch (err) {
     area.innerHTML = '';
   }
@@ -867,6 +1137,8 @@ async function recomputeRenewalRating() {
   await loadRenewalRating(inflation, loading);
 }
 
+/* ---------------- scorecard ---------------- */
+
 async function computeScore() {
   const premiumInput = document.getElementById('estimated-premium').value;
   try {
@@ -888,9 +1160,19 @@ async function loadLatestScorecard() {
   try {
     const sc = await api(`/cases/${currentCase.id}/scorecard`);
     const tierClass = 'tier-' + sc.risk_tier.replace(/[^A-Za-z]/g, '');
+    const componentItems = [
+      { label: 'Demographic', value: sc.demographic_risk },
+      { label: 'Claims exp.', value: sc.claims_experience_risk },
+      { label: 'Benefit richness', value: sc.benefit_richness_risk },
+      { label: 'Industry', value: sc.industry_risk },
+    ];
     area.innerHTML = `
       <div class="card">
         <h3>Risk scorecard <span class="tier-pill ${tierClass}">${sc.risk_tier}</span></h3>
+        <div class="chart-wrap" style="margin-top:12px;">
+          ${svgScoreMeter(sc.composite_score, sc.risk_tier)}
+          <div class="hint" style="margin-top:6px; margin-bottom:0;">Composite score ${sc.composite_score} / 100 &middot; tier thresholds at 40 / 60 / 80</div>
+        </div>
         <div class="kpi-grid">
           <div class="kpi"><span class="label">Composite score</span><span class="value">${sc.composite_score}</span></div>
           <div class="kpi"><span class="label">Suggested loading</span><span class="value">${sc.suggested_loading_pct}%</span></div>
@@ -899,6 +1181,8 @@ async function loadLatestScorecard() {
           <div class="kpi"><span class="label">Benefit richness</span><span class="value">${sc.benefit_richness_risk}&times;</span></div>
           <div class="kpi"><span class="label">Industry</span><span class="value">${sc.industry_risk}&times;</span></div>
         </div>
+        <h4>Component risk multipliers</h4>
+        <div class="chart-wrap">${svgBarChart(componentItems, { labelWidth: 110, formatValue: v => v.toFixed(2) + '×' })}</div>
         <table>
           <tr><th>Avg age</th><td>${sc.details.demographic.avg_age ?? '-'}</td></tr>
           <tr><th>Male ratio (employees)</th><td>${(sc.details.demographic.male_ratio_employees*100).toFixed(1)}%</td></tr>
@@ -908,11 +1192,12 @@ async function loadLatestScorecard() {
           <tr><th>Group size (employees)</th><td>${sc.details.demographic.group_size}</td></tr>
           <tr><th>Group favorability discount</th><td>${(sc.details.demographic.group_favorability_discount*100).toFixed(1)}%</td></tr>
           <tr><th>Small-group loading (&lt;50 employees)</th><td>${(sc.details.demographic.small_group_loading*100).toFixed(1)}%</td></tr>
-          <tr><th>Network tier score</th><td>${sc.details.network_tier_score ?? 'n/a'} <span style="color:#888">(0=cheapest network, 1=Platinum-tier)</span></td></tr>
+          <tr><th>Network tier score</th><td>${sc.details.network_tier_score ?? 'n/a'} <span style="color:var(--ink-muted);">(0=cheapest network, 1=Platinum-tier)</span></td></tr>
           <tr><th>Claims loss ratio</th><td>${sc.details.claims_experience.loss_ratio ?? 'n/a'}</td></tr>
         </table>
       </div>
     `;
+    bindChartTooltips(area);
   } catch (err) {
     area.innerHTML = '';
   }
