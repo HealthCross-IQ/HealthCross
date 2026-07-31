@@ -128,6 +128,7 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
     """
     rows: List[Dict[str, str]] = []
     current_section = ""
+    candidate_rows_seen = 0
 
     with pdfplumber.open(file) as pdf:
         sample_text = " ".join((page.extract_text() or "") for page in pdf.pages[:3])
@@ -144,11 +145,16 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                     non_empty = [c for c in raw_cells if c]
                     if not non_empty:
                         continue
+                    candidate_rows_seen += 1
                     if len(non_empty) == 1:
                         # A lone cell with no value alongside it is a
-                        # section banner, not a benefit row on its own.
-                        current_section = non_empty[0]
-                        continue
+                        # section banner, not a benefit row on its own -
+                        # UNLESS the populated cell sits in a later column
+                        # (the label column came back blank), which means
+                        # this is really a value-only row, not a banner.
+                        if raw_cells[0]:
+                            current_section = non_empty[0]
+                            continue
                     label, value = raw_cells[0], raw_cells[1] if len(raw_cells) > 1 else ""
                     if not label or not value:
                         continue
@@ -158,5 +164,15 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                         continue
                     note = " ".join(c for c in raw_cells[2:] if c)
                     rows.append({"section": current_section, "label": label, "value": value, "note": note})
+
+        # Some documents have a benefit-label column rendered in a font
+        # pdfplumber can't turn into text at all (blank, not garbled) while
+        # the value/clarification columns extract fine - native parsing
+        # then finds real benefit rows but with no usable label, and (worse)
+        # miscounts many of them as section banners. If almost nothing came
+        # out despite there being real candidate rows, the label column is
+        # unreadable and geometry OCR is the only way to recover it.
+        if not rows and candidate_rows_seen > 5:
+            return _rows_via_geometry_ocr(pdf)
 
     return rows
