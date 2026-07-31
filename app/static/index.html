@@ -1016,15 +1016,6 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
       <div class="chart-wrap">${svgLineChart(a.monthly_final_amount.map(m => ({ label: `${m.year}-${String(m.month).padStart(2,'0')}`, value: m.final_amount })))}</div>
     ` : '';
 
-    const categoryChart = a.category_burning_cost && a.category_burning_cost.length ? `
-      <h4>Burning cost by category</h4>
-      <div class="chart-wrap">${svgBarChart(
-        a.category_burning_cost.slice().sort((x, y) => y.projected_annual_claims - x.projected_annual_claims)
-          .map(c => ({ label: c.category, value: c.projected_annual_claims })),
-        { labelWidth: 130, color: 'var(--series-2)' }
-      )}</div>
-    ` : '';
-
     const categoryBlock = a.category_burning_cost && a.category_burning_cost.length ? `
       <table style="margin-top:16px;">
         <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Claims count</th><th>Burning cost (annualized)</th><th>Avg claims/member</th><th>% of total</th><th>Quoted premium</th><th>Projected loss ratio</th></tr>
@@ -1083,7 +1074,6 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
           `).join('')}
         </table>
         ${expectedBlock}
-        ${categoryChart}
         ${categoryBlock}
       </div>
     `;
