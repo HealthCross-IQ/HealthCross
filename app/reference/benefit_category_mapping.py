@@ -58,7 +58,10 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Room Type / Accommodation": {
         "group": "Inpatient",
-        "keywords": ["room accommodation", "hospital accommodation", "room & board", "room and board", "room type"],
+        "keywords": [
+            "room accommodation", "hospital accommodation", "room & board", "room and board",
+            "room type", "hospital room",
+        ],
     },
     "Companion / Parental Accommodation": {
         "group": "Inpatient",
@@ -88,7 +91,8 @@ CATEGORIES: Dict[str, Dict] = {
         "group": "Outpatient",
         "keywords": [
             "general practitioner", "specialist or consultant", "out-patient consultation",
-            "outpatient consultation", "gp consultation",
+            "outpatient consultation", "gp consultation", "gp/specialist", "gp / specialist",
+            "specialist consultation",
         ],
     },
     "Diagnostics (Lab/X-ray/Imaging)": {
@@ -133,6 +137,13 @@ CATEGORIES: Dict[str, Dict] = {
             "maternity and childbirth cover", "maternity limit", "maternity annual",
             "maternity outpatient", "maternity inpatient", "maternity in-patient",
             "maternity out-patient", "maternity benefit",
+            # Bare catch-all, checked last among the maternity categories -
+            # every more specific one (Antenatal, Normal Delivery, C-Section,
+            # Complications, Newborn) already gets first pick in MATCH_ORDER,
+            # so this only catches a maternity row that doesn't fit any of
+            # those (e.g. an odd punctuation variant like "Maternity- Limit"
+            # that the more specific phrases above don't happen to match).
+            "maternity",
         ],
     },
     "Dental Annual Limit": {
@@ -160,15 +171,21 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Adult Vaccinations": {
         "group": "Wellness",
-        "keywords": ["vaccination", "vaccine"],
+        "keywords": ["vaccination", "vaccine", "influenza"],
     },
     "Cancer Screening": {
         "group": "Wellness",
-        "keywords": ["cancer screening", "breast cancer screening", "prostate cancer screening", "diabetes screening"],
+        "keywords": [
+            "cancer screening", "breast cancer screening", "prostate cancer screening", "diabetes screening",
+            "pap smear", "mammogram", "colonoscopy",
+        ],
     },
     "Alternative Medicine Limit": {
         "group": "Alternative Medicine",
-        "keywords": ["alternative medicine", "homeopathy", "ayurvedic"],
+        "keywords": [
+            "alternative medicine", "homeopathy", "ayurvedic", "ayurveda",
+            "complementary and alternative treatment", "complementary and alternative medicine",
+        ],
     },
     "Emergency Medical Evacuation & Repatriation": {
         "group": "Assistance",
