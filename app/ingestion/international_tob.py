@@ -260,10 +260,20 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                     note = ""
                     if len(non_empty_idx) == 1 and non_empty_idx[0] == 0:
                         # A lone cell in the label column with nothing
-                        # alongside it is a section banner, not a benefit
-                        # row on its own.
-                        current_section = raw_cells[0]
-                        last_value = None
+                        # alongside it is USUALLY a section banner - but a
+                        # long wrapped disclaimer/note paragraph can also
+                        # end up alone in column 0 with nothing ruled
+                        # alongside it (e.g. a "Medications not covered
+                        # include..." aside within a Dental section). A
+                        # real banner is short and title-like; treating a
+                        # multi-sentence paragraph as one would wipe out
+                        # the section/value context genuine rows further
+                        # down still need (and silently drop the very next
+                        # row if it depends on an inherited value) - so
+                        # only genuinely short text updates the section.
+                        if len(raw_cells[0].split()) <= 8:
+                            current_section = raw_cells[0]
+                            last_value = None
                         continue
                     if len(non_empty_idx) == 1:
                         if row_index >= len(table_rows):
@@ -303,9 +313,19 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                             # extraction, ... each listed as its own row).
                             # Inherit the value from the last row in this
                             # table that actually had one.
+                            label = raw_cells[idx]
+                            if "co-insurance" in label.lower() or "coinsurance" in label.lower():
+                                # A co-insurance sub-header whose own value
+                                # is a %, not the section's shared limit -
+                                # the real percentage is on the very next
+                                # row (its own label is often just the
+                                # generic word "Co-insurance"), so inheriting
+                                # the limit here would be flatly wrong
+                                # (and would wrongly win the category match
+                                # before that next, correct row is reached).
+                                continue
                             if last_value is None:
                                 continue
-                            label = raw_cells[idx]
                             value = last_value
                     else:
                         label, value = raw_cells[non_empty_idx[0]], raw_cells[non_empty_idx[-1]]
@@ -321,6 +341,17 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                             # name" header on every page can be told apart
                             # from a real benefit row further down.
                             header_plan_value = value
+                        elif value.lower() in _HEADER_ROW_WORDS and label.lower() not in _HEADER_ROW_WORDS:
+                            # Some documents embed the actual section name
+                            # in the header row itself (e.g. "Dental
+                            # benefits | Benefit Limit | Clarifications"
+                            # repeated at the top of every page's table,
+                            # rather than a generic "Benefits" column
+                            # title) - without this, the row gets silently
+                            # discarded as a header and the section name
+                            # never gets tracked at all, so every dental
+                            # row that follows loses its section context.
+                            current_section = label
                         continue
                     if header_plan_value is not None and value == header_plan_value:
                         continue
