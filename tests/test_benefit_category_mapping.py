@@ -1,4 +1,4 @@
-"""Tests for the fixed 38-category benefit mapping
+"""Tests for the fixed 36-category benefit mapping
 (app/reference/benefit_category_mapping.py) - agreed with the underwriting
 team to replace the earlier verbatim-label comparison, which showed a
 plan as missing a benefit just because its own wording didn't match
@@ -15,8 +15,8 @@ from app.reference.benefit_category_mapping import (
 
 def test_display_and_match_order_cover_every_category_exactly_once():
     assert set(DISPLAY_ORDER) == set(MATCH_ORDER) == set(CATEGORIES.keys())
-    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 38
-    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 38
+    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 36
+    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 36
 
 
 def test_maps_differently_worded_annual_maximum_labels_onto_one_category():

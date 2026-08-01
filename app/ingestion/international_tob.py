@@ -119,8 +119,18 @@ def _label_and_note_from_geometry(page: "pdfplumber.page.Page", table_bbox, row_
     # `within_bbox` only keeps characters fully inside the box, so a
     # region flush against the table's own edge clips the first/last
     # glyph of the label and note text - pad both sides by a few points.
+    # The label region's own left edge starts from the page's true left
+    # margin (0) rather than the detected table's own bbox - some
+    # documents' automatic table detection finds only the narrow value
+    # column itself as "the table" (one cell per row, no label/note
+    # columns even possible within it), so table_bbox[0] would already BE
+    # the value column's left edge, cropping the label region down to
+    # nothing. Starting from 0 instead is always at least as wide as
+    # starting from table_bbox[0] - margin, so it can only find more, not
+    # cross into unrelated content, since nothing on these documents sits
+    # further left than the row's own real label text.
     margin = 3
-    label_bbox = (table_bbox[0] - margin, row_top, value_x0, row_bottom)
+    label_bbox = (0, row_top, value_x0, row_bottom)
     label = _text_then_ocr(page, label_bbox)
     note_bbox = (value_x1, row_top, table_bbox[2] + margin, row_bottom)
     note = _text_then_ocr(page, note_bbox)
@@ -258,19 +268,28 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                         continue
 
                     note = ""
-                    if len(non_empty_idx) == 1 and non_empty_idx[0] == 0:
-                        # A lone cell in the label column with nothing
-                        # alongside it is USUALLY a section banner - but a
-                        # long wrapped disclaimer/note paragraph can also
-                        # end up alone in column 0 with nothing ruled
-                        # alongside it (e.g. a "Medications not covered
-                        # include..." aside within a Dental section). A
-                        # real banner is short and title-like; treating a
-                        # multi-sentence paragraph as one would wipe out
-                        # the section/value context genuine rows further
-                        # down still need (and silently drop the very next
-                        # row if it depends on an inherited value) - so
-                        # only genuinely short text updates the section.
+                    if len(raw_cells) > 1 and len(non_empty_idx) == 1 and non_empty_idx[0] == 0:
+                        # A lone cell in the label column of a genuinely
+                        # multi-column table, with nothing ruled alongside
+                        # it, is USUALLY a section banner - but a long
+                        # wrapped disclaimer/note paragraph can also end up
+                        # alone in column 0 the same way (e.g. a
+                        # "Medications not covered include..." aside
+                        # within a Dental section). A real banner is short
+                        # and title-like; treating a multi-sentence
+                        # paragraph as one would wipe out the section/
+                        # value context genuine rows further down still
+                        # need (and silently drop the very next row if it
+                        # depends on an inherited value) - so only
+                        # genuinely short text updates the section.
+                        #
+                        # (This check only applies when the table itself
+                        # has more than one column at all - some documents
+                        # detect a table that's really just the single
+                        # narrow value-column strip on its own, one cell
+                        # per row with no label/note columns possible even
+                        # in principle; that's a value needing a
+                        # reconstructed label below, never a banner.)
                         if len(raw_cells[0].split()) <= 8:
                             current_section = raw_cells[0]
                             last_value = None

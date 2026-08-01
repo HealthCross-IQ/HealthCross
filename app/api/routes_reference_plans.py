@@ -135,7 +135,7 @@ def delete_reference_plan(plan_id: int, db: Session = Depends(get_db)):
 
 @router.get("/compare")
 def compare_reference_plans(ids: str = Query(..., description="Comma-separated reference plan IDs to compare"), db: Session = Depends(get_db)):
-    """Detailed side-by-side comparison against the fixed 38-category
+    """Detailed side-by-side comparison against the fixed 36-category
     master benefit list (app/reference/benefit_category_mapping.py),
     agreed with the underwriting team specifically to fix the previous
     verbatim-label comparison: insurers word the same benefit differently
@@ -152,7 +152,7 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
     for the same category are either duplicates of the same limit or a
     more granular sub-item the master list doesn't break out on its own.
 
-    Rows that don't match any of the 38 categories are kept - per plan,
+    Rows that don't match any of the 36 categories are kept - per plan,
     verbatim - in `other_benefits`, so nothing found in the source
     document is silently dropped, it just isn't a shared comparison row.
     """

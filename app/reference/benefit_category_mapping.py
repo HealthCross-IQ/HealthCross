@@ -4,7 +4,7 @@ Rather than showing every insurer's own exact wording as its own row (which
 produces a mostly-empty table since insurers rarely word the same benefit
 identically - Bupa's "Overall Annual Maximum" vs Cigna's "Plan Annual
 Maximum" vs Sukoon's "Indemnity Limit" are all the same benefit), each raw
-row extracted from a TOB is mapped onto one of this fixed 38-category
+row extracted from a TOB is mapped onto one of this fixed 36-category
 master list (agreed with the underwriting team) before being placed into
 the comparison. A plan only shows "-" for a category it genuinely doesn't
 offer, not because its own wording didn't match another plan's.
@@ -28,11 +28,17 @@ from typing import Any, Dict, List, Optional
 CATEGORIES: Dict[str, Dict] = {
     "Annual/Indemnity Maximum": {
         "group": "General",
-        "keywords": ["annual maximum", "indemnity limit", "overall annual", "plan annual maximum", "sum insured"],
+        "keywords": [
+            "annual maximum", "indemnity limit", "overall annual", "plan annual maximum", "sum insured",
+            "annual aggregate limit", "annual policy limit",
+        ],
     },
     "Area of Cover": {
         "group": "General",
-        "keywords": ["area of cover", "geographical cover", "territory for elective", "geographical scope", "basic territory"],
+        "keywords": [
+            "area of cover", "geographical cover", "territory for elective", "geographical scope",
+            "basic territory", "area of coverage",
+        ],
     },
     "Home Country Cover": {
         "group": "General",
@@ -49,14 +55,6 @@ CATEGORIES: Dict[str, Dict] = {
     "Network / Provider Tier": {
         "group": "General",
         "keywords": ["medical providers network", "available network", "network in the uae"],
-    },
-    "Emergency Treatment (In/Out of Network)": {
-        "group": "General",
-        "keywords": ["emergency treatment", "emergency in uae", "emergency abroad"],
-    },
-    "Elective Treatment (In/Out of Network)": {
-        "group": "General",
-        "keywords": ["elective treatment", "elective abroad", "elective in uae"],
     },
     "Room Type / Accommodation": {
         "group": "Inpatient",
@@ -194,8 +192,7 @@ CATEGORIES: Dict[str, Dict] = {
 DISPLAY_ORDER: List[str] = [
     "Annual/Indemnity Maximum", "Area of Cover", "Home Country Cover",
     "Pre-existing & Chronic Conditions", "Congenital Conditions",
-    "Network / Provider Tier", "Emergency Treatment (In/Out of Network)",
-    "Elective Treatment (In/Out of Network)",
+    "Network / Provider Tier",
     "Room Type / Accommodation", "Companion / Parental Accommodation",
     "ICU / Intensive Care", "Surgery", "Organ Transplant", "Cancer Treatment",
     "Kidney Dialysis",
@@ -234,12 +231,7 @@ MATCH_ORDER: List[str] = [
     "ICU / Intensive Care", "Organ Transplant", "Cancer Treatment", "Kidney Dialysis", "Surgery",
     "GP / Specialist Consultation", "Diagnostics (Lab/X-ray/Imaging)", "Physiotherapy",
     "Prescribed Medicines / Pharmacy", "Outpatient Co-insurance/Deductible",
-    # "Area of Cover" ahead of Emergency/Elective Treatment - a real "Basic
-    # Territory for Elective & Emergency treatment" label contains both
-    # "elective"/"emergency treatment" AND the area-of-cover signal, and
-    # it's the latter that row is actually about.
     "Home Country Cover", "Area of Cover",
-    "Emergency Treatment (In/Out of Network)", "Elective Treatment (In/Out of Network)",
     "Network / Provider Tier",
     "Pre-existing & Chronic Conditions",
     "Annual/Indemnity Maximum",
@@ -272,7 +264,11 @@ _SECTION_QUALIFIED_COINSURANCE = [
 # would risk matching an unrelated row whose note happens to mention the
 # word in passing (e.g. "optical treatment following dental surgery"),
 # so this only fires when the label IS that bare word, nothing else.
-_BARE_LIMIT_LABELS = {"dental": "Dental Annual Limit", "optical": "Optical Annual Limit"}
+_BARE_LIMIT_LABELS = {
+    "dental": "Dental Annual Limit",
+    "optical": "Optical Annual Limit",
+    "network": "Network / Provider Tier",
+}
 
 # Some documents lead the label with the category word followed by the
 # specific items it covers (e.g. Maxmed's "OPTICAL Prescribed Lenses,
