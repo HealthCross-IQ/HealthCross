@@ -254,6 +254,24 @@ def map_label_to_category(section: Optional[str], label: Optional[str]) -> Optio
     return None
 
 
+_NETWORK_COINSURANCE_MARKER_RE = re.compile(r"\b(IP|OP|Pharmacy|Maternity)\s*[:\-]", re.IGNORECASE)
+
+
+def clean_category_value(category: str, value: str) -> str:
+    """Some documents cram the network/provider tier name into the same
+    cell as a per-category co-insurance breakdown that follows it (e.g.
+    Sukoon's "Edge CCAD IP: 20% OP (excluding Pharmacy): 20% Pharmacy:
+    10% ..." row) - only the tier name itself (everything before the
+    first such marker) belongs in this category; the co-insurance detail
+    that follows isn't part of "which network", so it's trimmed rather
+    than shown as if it were the network name.
+    """
+    if category != "Network / Provider Tier":
+        return value
+    match = _NETWORK_COINSURANCE_MARKER_RE.search(value)
+    return value[: match.start()].strip() if match else value
+
+
 # Bridges this 38-category master list onto the older, fixed 11-field
 # standard summary (app/scoring/rules/benefits_summary.py) used by the
 # per-case existing/quoted plan review - a single-tier document (e.g.
@@ -290,7 +308,7 @@ def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, st
     for row in rows:
         category = map_label_to_category(row.get("section"), row.get("label"))
         if category and category not in category_values:
-            category_values[category] = row.get("value")
+            category_values[category] = clean_category_value(category, row.get("value"))
 
     return {
         field: category_values[category_name]

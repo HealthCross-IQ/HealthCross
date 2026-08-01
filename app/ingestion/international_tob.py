@@ -66,6 +66,24 @@ def _clamp_bbox(page: "pdfplumber.page.Page", bbox):
     return (x0, top, x1, bottom)
 
 
+def _has_any_visual_content(page: "pdfplumber.page.Page", bbox) -> bool:
+    """Whether a region has anything at all worth rendering an image and
+    running OCR over. Curves are included alongside characters since
+    that's precisely the signature of the documents this OCR fallback
+    exists for (a font whose glyphs are drawn as vector outlines rather
+    than real characters - see module docstring) - a region with truly
+    nothing in it (no chars, no curves, no rects, no lines) has nothing
+    for OCR to find either, and skipping it avoids the cost of rendering
+    and OCR-ing every blank cell in documents that simply don't have a
+    clarification/note column at all (most of a real row-per-line TOB).
+    """
+    clamped = _clamp_bbox(page, bbox)
+    if clamped is None:
+        return False
+    cropped = page.within_bbox(clamped)
+    return bool(cropped.chars or cropped.curves or cropped.rects or cropped.lines)
+
+
 def _ocr_bbox(page: "pdfplumber.page.Page", bbox) -> str:
     clamped = _clamp_bbox(page, bbox)
     if clamped is None:
@@ -82,6 +100,15 @@ def _text_bbox(page: "pdfplumber.page.Page", bbox) -> str:
     return _clean(page.within_bbox(clamped).extract_text())
 
 
+def _text_then_ocr(page: "pdfplumber.page.Page", bbox) -> str:
+    text = _text_bbox(page, bbox)
+    if text:
+        return text
+    if not _has_any_visual_content(page, bbox):
+        return ""
+    return _ocr_bbox(page, bbox)
+
+
 def _label_and_note_from_geometry(page: "pdfplumber.page.Page", table_bbox, row_top: float, row_bottom: float, value_x0: float, value_x1: float):
     """Recovers the label/note text either side of a row's one ruled value
     cell. Native text extraction is tried first since it's fast and most
@@ -94,9 +121,9 @@ def _label_and_note_from_geometry(page: "pdfplumber.page.Page", table_bbox, row_
     # glyph of the label and note text - pad both sides by a few points.
     margin = 3
     label_bbox = (table_bbox[0] - margin, row_top, value_x0, row_bottom)
-    label = _text_bbox(page, label_bbox) or _ocr_bbox(page, label_bbox)
+    label = _text_then_ocr(page, label_bbox)
     note_bbox = (value_x1, row_top, table_bbox[2] + margin, row_bottom)
-    note = _text_bbox(page, note_bbox) or _ocr_bbox(page, note_bbox)
+    note = _text_then_ocr(page, note_bbox)
     return label, note
 
 
@@ -146,7 +173,7 @@ def _rows_via_geometry_ocr(pdf: "pdfplumber.PDF") -> List[Dict[str, str]]:
                 note_text = _ocr_bbox(page, (value_x1, row_top, table.bbox[2], row_bottom))
                 rows.append({"section": "", "label": label_text, "value": value_text, "note": note_text})
 
-    return rows
+    return _merge_wrapped_label_continuations(rows)
 
 
 def _clean(text: Optional[str]) -> str:
@@ -310,4 +337,24 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                     rows.append({"section": current_section, "label": label, "value": value, "note": note})
                     last_value = value
 
-    return rows
+    return _merge_wrapped_label_continuations(rows)
+
+
+def _merge_wrapped_label_continuations(rows: List[Dict[str, str]]) -> List[Dict[str, str]]:
+    """A label that wraps across two lines (e.g. "Wellness Health Check-
+    Up") can surface as two adjacent rows sharing the exact same label,
+    each holding one fragment of what's really one continuous value/note
+    (e.g. "Preventative examinations and tests are" then, on the next
+    detected row, "covered up to 2,500/- pppy. Covered tests..." - the
+    actual limit only ever appears in the second fragment). Two
+    back-to-back rows for the same section+label are joined into one
+    rather than kept as a duplicate with a truncated value.
+    """
+    merged: List[Dict[str, str]] = []
+    for row in rows:
+        if merged and merged[-1]["section"] == row["section"] and merged[-1]["label"] == row["label"]:
+            merged[-1]["value"] = " ".join(p for p in (merged[-1]["value"], row["value"]) if p)
+            merged[-1]["note"] = " ".join(p for p in (merged[-1]["note"], row["note"]) if p)
+        else:
+            merged.append(dict(row))
+    return merged
