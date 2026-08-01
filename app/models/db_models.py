@@ -217,6 +217,8 @@ class ClaimsReport(Base):
     provider_breakdown = Column(JSON, nullable=True)
     claims_by_type = Column(JSON, nullable=True)
     treatment_type_breakdown = Column(JSON, nullable=True)
+    claims_by_member_type_value = Column(JSON, nullable=True)
+    claims_by_member_type_count = Column(JSON, nullable=True)
     monthly_paid = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 

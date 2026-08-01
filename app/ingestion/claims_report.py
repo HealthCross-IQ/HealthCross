@@ -114,12 +114,17 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
         "provider_breakdown": [],
         "claims_by_type": [],
         "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
         "monthly_paid": [],
     }
 
     diagnosis_rows: Dict[str, dict] = {}
     counts_rows: Dict[str, dict] = {}
     claims_by_type_numbers: List[List[float]] = []
+    member_type_value_rows: Dict[str, dict] = {}
+    member_type_count_rows: Dict[str, dict] = {}
+    _TREATMENT_TYPE_NAMES = ["In-Patient", "Out-Patient", "Pharmacy", "Dental", "Optical", "Not Yet Classified"]
 
     for line in lines:
         match = _ROW_PREFIX_RE.match(line)
@@ -170,6 +175,14 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
             nums = re.findall(r"[\d,]+", rest)
             if nums:
                 result["closing_male"] = int(_parse_number(nums[-1]))
+        elif row_num == "8" and row_letter:
+            label, numbers = _split_label_and_seven_numbers(rest)
+            if numbers:
+                member_type_value_rows[row_letter] = {"label": label, "numbers": numbers}
+        elif row_num == "9" and row_letter:
+            label, numbers = _split_label_and_seven_numbers(rest)
+            if numbers:
+                member_type_count_rows[row_letter] = {"label": label, "numbers": numbers}
         elif row_num == "10" and row_letter:
             label, numbers = _split_label_and_seven_numbers(rest)
             if numbers:
@@ -198,11 +211,38 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
         column_sums = [sum(row[i] for row in claims_by_type_numbers) for i in range(6)]
         result["treatment_type_breakdown"] = [
             {"type": name, "value": value}
-            for name, value in zip(
-                ["In-Patient", "Out-Patient", "Pharmacy", "Dental", "Optical", "Not Yet Classified"],
-                column_sums,
-            )
+            for name, value in zip(_TREATMENT_TYPE_NAMES, column_sums)
         ]
+
+    def _member_type_rows(raw_rows: Dict[str, dict], cast) -> List[dict]:
+        # Row 8/9's own letters (a/b/c/.../"Totals") aren't in a fixed,
+        # guaranteed order across every real report, so sort by letter
+        # (matching a/b/c.. row lettering) and drop whichever row is the
+        # report's own "Totals" line - that's a cross-check value, not a
+        # real member-type category, and would otherwise double the real
+        # relations' figures if summed together.
+        rows = []
+        for letter in sorted(raw_rows.keys()):
+            entry = raw_rows[letter]
+            if entry["label"].strip().lower() == "totals":
+                continue
+            numbers = entry["numbers"]
+            rows.append(
+                {
+                    "relation": entry["label"],
+                    "in_patient": cast(numbers[0]),
+                    "out_patient": cast(numbers[1]),
+                    "pharmacy": cast(numbers[2]),
+                    "dental": cast(numbers[3]),
+                    "optical": cast(numbers[4]),
+                    "not_yet_classified": cast(numbers[5]),
+                    "total": cast(numbers[6]),
+                }
+            )
+        return rows
+
+    result["claims_by_member_type_value"] = _member_type_rows(member_type_value_rows, float)
+    result["claims_by_member_type_count"] = _member_type_rows(member_type_count_rows, int)
 
     for letter, entry in diagnosis_rows.items():
         counts = counts_rows.get(letter, {})
@@ -317,7 +357,11 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
         # This layout's row 13 only splits In Network/Out of Network, not
         # IP/OP/Pharmacy/Dental/Optical like format 1's row 14 does - so
         # there's no reliable source for a treatment-type breakdown here.
+        # Its member-type-by-relation rows (format 1's 8/9) aren't a
+        # confirmed part of this layout either.
         "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
         "monthly_paid": [],
     }
 

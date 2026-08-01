@@ -20,6 +20,16 @@ PART I Health insurance claims record summary
 7a Female 34 14 27 40 7 1 123
 7b Male 30 7 17 43 6 1 104
 PART II Claims data
+8 Claims data by member type (value AED) IP OP Pharmacy Dental Optical Not yet classified Totals
+8a Employee 99,786 331,844 122,566 56,008 39,920 3,741 653,865
+8b Spouse 382,229 289,781 121,788 25,231 16,364 907 836,299
+8c Dependents 44,695 118,480 58,711 32,162 23,989 3,826 281,863
+8d Totals 526,709 740,105 303,065 113,401 80,272 8,475 1,772,027
+9 Claims data by member type (number) IP OP Pharmacy Dental Optical Not yet classified Totals
+9a Employee 49 553 310 40 30 2 984
+9b Spouse 126 435 280 19 13 3 876
+9c Dependents 24 311 252 38 19 6 650
+9d Totals 199 1,299 842 97 62 11 2,510
 10a NEOPLASMS 346,113 32,224 2,789 0 0 0 381,126
 10bENDOCRINE, NUTRITIONAL, METABOLIC, IMMUNITY 5,484 64,483 118,828 0 0 0 188,795
 11a 6 31 15 0 0 0 52
@@ -86,6 +96,19 @@ def test_parses_diagnosis_and_provider_breakdown():
 
     assert result["claims_by_type"][0]["type"] == "Direct Billing"
     assert result["claims_by_type"][0]["value"] == 1395172.0
+
+
+def test_parses_claims_by_member_type_value_and_count_excluding_the_totals_row():
+    result = parse_claims_report_text(SAMPLE_REPORT_TEXT)
+    value_rows = {r["relation"]: r for r in result["claims_by_member_type_value"]}
+    assert set(value_rows) == {"Employee", "Spouse", "Dependents"}  # "Totals" row dropped
+    assert value_rows["Employee"]["in_patient"] == 99786.0
+    assert value_rows["Employee"]["total"] == 653865.0
+    assert value_rows["Spouse"]["dental"] == 25231.0
+
+    count_rows = {r["relation"]: r for r in result["claims_by_member_type_count"]}
+    assert count_rows["Dependents"]["optical"] == 19
+    assert count_rows["Dependents"]["total"] == 650
 
 
 def test_glues_pdf_rendering_whitespace_within_monthly_figures():

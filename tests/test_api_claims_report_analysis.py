@@ -58,6 +58,11 @@ def _insert_claims_report(client, case_id, **overrides):
             {"type": "Optical", "value": 80272.0},
             {"type": "Not Yet Classified", "value": 8475.0},
         ],
+        claims_by_member_type_value=[
+            {"relation": "Employee", "in_patient": 99786.0, "out_patient": 331844.0, "pharmacy": 122566.0, "dental": 56008.0, "optical": 39920.0, "not_yet_classified": 3741.0, "total": 653865.0},
+            {"relation": "Spouse", "in_patient": 382229.0, "out_patient": 289781.0, "pharmacy": 121788.0, "dental": 25231.0, "optical": 16364.0, "not_yet_classified": 907.0, "total": 836299.0},
+            {"relation": "Dependents", "in_patient": 44695.0, "out_patient": 118480.0, "pharmacy": 58711.0, "dental": 32162.0, "optical": 23989.0, "not_yet_classified": 3826.0, "total": 281863.0},
+        ],
         monthly_paid=[
             {"year": 2025, "month": "Sep", "paid": 8870.0, "partial": True},
             {"year": 2025, "month": "Oct", "paid": 203861.0, "partial": False},
@@ -171,6 +176,61 @@ def test_claims_report_breakdown_top_providers_and_treatment_types(client):
     total_annualized = sum(row["annualized"] for row in body["treatment_type_breakdown"])
     assert round(total_annualized) == round(body["final_projected_claims"])
     assert body["maternity"]["annualized"] > 0
+
+
+def test_claims_report_breakdown_member_type_split_with_burning_cost_per_relation(client):
+    resp = client.post(
+        "/cases",
+        json={"broker_name": "Broker A", "company_name": "Mixed Relation Co", "industry": "trading"},
+    )
+    case_id = resp.json()["id"]
+
+    # 100 employees, 60 spouses, 52 children/other - proportioned so the
+    # burning-cost-per-member math below is easy to hand-check.
+    rows = (
+        [{"Category": "D", "Gender": "M", "DOB": "1990-01-01", "Marital Status": "Married", "Relation": "Employee", "Nationality": "Indian"} for _ in range(100)]
+        + [{"Category": "D", "Gender": "F", "DOB": "1990-01-01", "Marital Status": "Married", "Relation": "Spouse", "Nationality": "Indian"} for _ in range(60)]
+        + [{"Category": "D", "Gender": "M", "DOB": "2015-01-01", "Marital Status": "Single", "Relation": "Child", "Nationality": "Indian"} for _ in range(52)]
+    )
+    census_df = pd.DataFrame(rows)
+    resp = client.post(
+        f"/cases/{case_id}/census",
+        files={"file": ("census.xlsx", _xlsx_bytes(census_df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+
+    _insert_claims_report(client, case_id, opening_members=161, closing_members=212)
+
+    resp = client.get(f"/cases/{case_id}/claims-report-breakdown")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    rows_by_relation = {r["relation"]: r for r in body["claims_by_member_type"]}
+    assert set(rows_by_relation) == {"Employee", "Spouse", "Dependents"}
+
+    employee = rows_by_relation["Employee"]
+    assert employee["member_count"] == 100
+    # Employee's own share of the In-Patient column total (99,786 of
+    # 526,709 - the same 3 relations' in_patient values summed).
+    assert employee["pct_of_column"]["in_patient"] == round(100 * 99786.0 / 526709.0, 1)
+
+    dependents = rows_by_relation["Dependents"]
+    assert dependents["member_count"] == 52  # Child -> folded into "Dependents"
+
+    spouse = rows_by_relation["Spouse"]
+    assert spouse["member_count"] == 60
+
+    # Enough months/census/members here to also annualize and divide by
+    # each relation's own member count.
+    assert "final_projected_claims" in body
+    for entry in body["claims_by_member_type"]:
+        assert entry["annualized_total"] > 0
+        assert entry["burning_cost_per_member"] == round(entry["annualized_total"] / entry["member_count"], 2)
+
+    # The three relations' annualized totals add up to the overall
+    # projected annual claims figure (they partition the same total_paid).
+    total_annualized = sum(e["annualized_total"] for e in body["claims_by_member_type"])
+    assert round(total_annualized) == round(body["final_projected_claims"])
 
 
 def test_claims_report_breakdown_without_enough_months_skips_annualization(client):

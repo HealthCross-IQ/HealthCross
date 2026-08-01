@@ -140,6 +140,8 @@ class ClaimsReportOut(BaseModel):
     provider_breakdown: Optional[List[Dict[str, Any]]] = None
     claims_by_type: Optional[List[Dict[str, Any]]] = None
     treatment_type_breakdown: Optional[List[Dict[str, Any]]] = None
+    claims_by_member_type_value: Optional[List[Dict[str, Any]]] = None
+    claims_by_member_type_count: Optional[List[Dict[str, Any]]] = None
     monthly_paid: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
 

@@ -182,11 +182,45 @@ def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
             maternity["pct_of_total"] = round(100 * entry["value"] / total, 1) if total else None
             break
 
+    # Row 8's own Employee/Spouse/Dependents split, each column shown as a
+    # % of that COLUMN's own total (not the report's grand total) - e.g.
+    # what share of all In-Patient claims Spouse accounts for - since
+    # that's the comparison a relation-by-relation breakdown is actually
+    # for. "Dependents" is everyone who isn't the Employee or Spouse (the
+    # census doesn't carry a matching "Dependents" relation value of its
+    # own - only employee/spouse/child/other - so those two are folded
+    # together here to line up with the report's own three-way split).
+    member_type_columns = ["in_patient", "out_patient", "pharmacy", "dental", "optical", "not_yet_classified", "total"]
+    member_type_rows = report.claims_by_member_type_value or []
+    claims_by_member_type = None
+    if member_type_rows:
+        column_totals = {col: sum(r[col] for r in member_type_rows) for col in member_type_columns}
+        relation_member_counts = {"employee": 0, "spouse": 0, "dependents": 0}
+        for c in case.census_records:
+            rel = (c.relation or "").strip().lower()
+            if rel == "employee":
+                relation_member_counts["employee"] += 1
+            elif rel == "spouse":
+                relation_member_counts["spouse"] += 1
+            else:
+                relation_member_counts["dependents"] += 1
+
+        claims_by_member_type = []
+        for row in member_type_rows:
+            entry = dict(row)
+            entry["pct_of_column"] = {
+                col: (round(100 * row[col] / column_totals[col], 1) if column_totals[col] else None)
+                for col in member_type_columns
+            }
+            entry["member_count"] = relation_member_counts.get(row["relation"].strip().lower())
+            claims_by_member_type.append(entry)
+
     result = {
         "total_paid": report.total_paid,
         "top_providers": top_providers,
         "treatment_type_breakdown": treatment_type_breakdown,
         "maternity": maternity,
+        "claims_by_member_type": claims_by_member_type,
     }
 
     # Annualize each category by its % share of the projected annual
@@ -208,6 +242,21 @@ def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
             row["annualized"] = round(final_projected_claims * row["value"] / total, 2) if total else None
         if maternity:
             maternity["annualized"] = round(final_projected_claims * maternity["value"] / total, 2) if total else None
+        if claims_by_member_type:
+            # Each relation's own share of the report's total claims,
+            # projected for the whole year the same way as everything
+            # else, then divided by that relation's own member count -
+            # the burning cost per member, by relation.
+            grand_total = column_totals["total"]
+            for entry in claims_by_member_type:
+                annualized_total = (
+                    round(final_projected_claims * entry["total"] / grand_total, 2) if grand_total else None
+                )
+                entry["annualized_total"] = annualized_total
+                member_count = entry["member_count"]
+                entry["burning_cost_per_member"] = (
+                    round(annualized_total / member_count, 2) if annualized_total and member_count else None
+                )
         result["final_projected_claims"] = final_projected_claims
 
     return result

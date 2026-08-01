@@ -1230,7 +1230,29 @@ async function loadClaimsReportBreakdown() {
       <div class="hint">${b.maternity ? 'Maternity is a diagnosis-based cross-cut shown for reference - its amount is already included within In-Patient/Out-Patient above, not additional to them. ' : 'No Maternity diagnosis grouping found on this report. '}${b.treatment_type_breakdown.length ? '' : 'Treatment-type split isn\'t available for this report format. '}${hasAnnualized ? '' : 'Annualized figures need 6 full months of claims plus a census to run the projection.'}</div>
     ` : '<div class="hint">Treatment-type split isn\'t available for this report format.</div>';
 
-    if (!providersTable && !b.treatment_type_breakdown.length && !b.maternity) {
+    const memberTypeCols = [
+      { key: 'in_patient', label: 'IP' }, { key: 'out_patient', label: 'OP' },
+      { key: 'pharmacy', label: 'Pharmacy' }, { key: 'dental', label: 'Dental' },
+      { key: 'optical', label: 'Optical' }, { key: 'not_yet_classified', label: 'Not yet classified' },
+      { key: 'total', label: 'Total' },
+    ];
+    const memberTypeTable = (b.claims_by_member_type && b.claims_by_member_type.length) ? `
+      <h4>Claims by member type (relation)</h4>
+      <table>
+        <tr><th>Relation</th>${memberTypeCols.map(c => `<th>${c.label}</th>`).join('')}<th>Members</th>${hasAnnualized ? '<th>Annualized</th><th>Burning cost / member</th>' : ''}</tr>
+        ${b.claims_by_member_type.map(r => `
+          <tr>
+            <td>${escapeHtml(r.relation)}</td>
+            ${memberTypeCols.map(c => `<td>${r[c.key].toLocaleString()}<br><span class="hint" style="margin:0;">${r.pct_of_column[c.key] ?? '-'}%</span></td>`).join('')}
+            <td>${r.member_count ?? '-'}</td>
+            ${hasAnnualized ? `<td>${r.annualized_total?.toLocaleString() ?? '-'}</td><td>${r.burning_cost_per_member?.toLocaleString() ?? '-'}</td>` : ''}
+          </tr>
+        `).join('')}
+      </table>
+      <div class="hint">Each cell's % is that relation's own share of the column's total (e.g. what share of all In-Patient claims Spouse accounts for). "Dependents" folds in every census member who isn't the Employee or Spouse (the report doesn't split children out separately). Burning cost / member = this relation's own share of the projected annual claims, divided by its own member count from the census.</div>
+    ` : '';
+
+    if (!providersTable && !b.treatment_type_breakdown.length && !b.maternity && !memberTypeTable) {
       area.innerHTML = '';
       return;
     }
@@ -1239,6 +1261,7 @@ async function loadClaimsReportBreakdown() {
         <h3>Claims breakdown</h3>
         ${providersTable}
         ${treatmentTable}
+        ${memberTypeTable}
       </div>
     `;
   } catch (err) {
