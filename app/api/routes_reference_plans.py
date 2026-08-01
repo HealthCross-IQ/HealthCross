@@ -17,7 +17,13 @@ from app.ingestion.international_tob import extract_benefit_rows as extract_gene
 from app.ingestion.labeled_row_benefits_pdf import extract_all_rows as extract_labeled_row_rows
 from app.models import db_models as models
 from app.models import schemas
-from app.reference.benefit_category_mapping import CATEGORIES, DISPLAY_ORDER, clean_category_value, map_label_to_category
+from app.reference.benefit_category_mapping import (
+    CATEGORIES,
+    DISPLAY_ORDER,
+    clean_category_value,
+    map_label_to_category,
+    unify_currency_to_aed,
+)
 
 router = APIRouter(prefix="/reference-plans", tags=["reference-plans"])
 
@@ -186,7 +192,8 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             # First match per plan wins - a repeated category (e.g. several
             # dental procedures sharing one limit) shouldn't overwrite an
             # already-found value with a less specific later row.
-            category_values[category].setdefault(plan.id, clean_category_value(category, value))
+            cleaned = clean_category_value(category, value)
+            category_values[category].setdefault(plan.id, unify_currency_to_aed(cleaned))
 
     result_sections = []
     current_group = None

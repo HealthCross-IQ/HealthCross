@@ -15,6 +15,7 @@ from app.ingestion.international_tob import (
     _looks_garbled,
     _looks_like_tier_name,
 )
+from app.reference.benefit_category_mapping import unify_currency_to_aed
 
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLD_CATEGORY_A = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Gold_Group_Category_A.pdf"
@@ -61,6 +62,25 @@ def test_contained_in_detects_nested_table_fragments():
 
     overlapping_not_contained = (400, 650, 600, 750)
     assert _contained_in(overlapping_not_contained, outer) is False
+
+
+def test_unify_currency_to_aed_converts_usd_amounts():
+    assert unify_currency_to_aed("US$ 7,500,000 per year of insurance") == (
+        "US$ 7,500,000 (AED 27,543,750) per year of insurance"
+    )
+    assert unify_currency_to_aed("$ 1,000,000 per year of insurance") == (
+        "$ 1,000,000 (AED 3,672,500) per year of insurance"
+    )
+
+
+def test_unify_currency_to_aed_leaves_aed_values_and_non_currency_text_alone():
+    # Bupa's documents already state their own AED equivalent - adding a
+    # second, redundant one would be confusing, not helpful.
+    already_aed = "USD 4,700,000 (AED 17,260,750), GBP 3,500,000, EUR 4,200,000 each membership year"
+    assert unify_currency_to_aed(already_aed) == already_aed
+    assert unify_currency_to_aed("AED 1,000,000/-") == "AED 1,000,000/-"
+    assert unify_currency_to_aed("Covered") == "Covered"
+    assert unify_currency_to_aed(None) is None
 
 
 def test_upload_labeled_row_pdf_creates_one_reference_plan(client):

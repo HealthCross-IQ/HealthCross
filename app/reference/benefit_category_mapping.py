@@ -151,11 +151,14 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Optical Co-insurance": {
         "group": "Optical",
-        "keywords": ["optical co-insurance", "optical copay"],
+        "keywords": ["optical co-insurance", "optical co-payment", "optical copay"],
     },
     "Health Check-up": {
         "group": "Wellness",
-        "keywords": ["health check-up", "health check up", "wellness health check", "routine health examination"],
+        "keywords": [
+            "health check-up", "health check up", "health check,", "health check/",
+            "wellness health check", "routine health examination", "wellness package",
+        ],
     },
     "Adult Vaccinations": {
         "group": "Wellness",
@@ -215,8 +218,13 @@ DISPLAY_ORDER: List[str] = [
 MATCH_ORDER: List[str] = [
     "Antenatal Care", "Normal Delivery", "C-Section", "Maternity Complications",
     "Newborn Cover", "Maternity Annual Limit",
-    "Dental Annual Limit", "Dental Co-insurance",
-    "Optical Annual Limit", "Optical Co-insurance",
+    # Co-insurance checked before its matching Annual Limit category - the
+    # limit's own keywords (e.g. "dental benefit") match the whole section
+    # a co-insurance row also sits in, so checking the limit first would
+    # claim every row in that section for the limit and the co-insurance
+    # category would never be reached.
+    "Dental Co-insurance", "Dental Annual Limit",
+    "Optical Co-insurance", "Optical Annual Limit",
     "Alternative Medicine Limit",
     "Health Check-up", "Adult Vaccinations", "Cancer Screening",
     "Emergency Medical Evacuation & Repatriation",
@@ -242,19 +250,99 @@ assert set(DISPLAY_ORDER) == set(MATCH_ORDER) == set(CATEGORIES.keys()), (
 )
 
 
+# A row's label is sometimes just the bare word "Co-insurance"/
+# "Coinsurance" with no qualifier of its own (the qualifier - "Dental",
+# "Optical" - only appears in the row's SECTION banner, several rows
+# earlier) - a plain substring match against "section + label" combined
+# can't tell these apart from a keyword phrase like "dental co-insurance"
+# alone, since "dental" and "co-insurance" never appear adjacent in the
+# combined text. Checked only when the label truly has no qualifier of
+# its own, so a label like "Optical Co-Insurance (Opted level)" (which
+# already matches its category directly) is unaffected.
+_BARE_COINSURANCE_LABELS = {"co-insurance", "coinsurance"}
+_SECTION_QUALIFIED_COINSURANCE = [
+    ("dental", "Dental Co-insurance"),
+    ("optical", "Optical Co-insurance"),
+    ("outpatient", "Outpatient Co-insurance/Deductible"),
+]
+
+# Some documents (Bupa's, in particular) state the limit itself as a bare
+# one-word label - just "Dental" or "Optical" - rather than a phrase like
+# "Dental Benefit"/"Optical Limit". A loose substring keyword ("dental")
+# would risk matching an unrelated row whose note happens to mention the
+# word in passing (e.g. "optical treatment following dental surgery"),
+# so this only fires when the label IS that bare word, nothing else.
+_BARE_LIMIT_LABELS = {"dental": "Dental Annual Limit", "optical": "Optical Annual Limit"}
+
+# Some documents lead the label with the category word followed by the
+# specific items it covers (e.g. Maxmed's "OPTICAL Prescribed Lenses,
+# Annual Eye Exam, Frames and Contact lenses") rather than a clean phrase
+# like "Optical Benefit". A prefix match (label STARTS WITH "optical ")
+# is safe against false positives in a way a bare substring anywhere in
+# the text wouldn't be (that could match an unrelated row's note
+# mentioning the word in passing).
+_LIMIT_LABEL_PREFIXES = [("optical", "Optical Annual Limit"), ("dental", "Dental Annual Limit")]
+
+
 def map_label_to_category(section: Optional[str], label: Optional[str]) -> Optional[str]:
     """Returns the canonical category name this row belongs to, or None if
     it doesn't match any of the fixed categories (kept per-plan in an
     "Other benefits" appendix instead of being silently dropped).
     """
+    normalized_label = (label or "").strip().lower()
+    if normalized_label in _BARE_COINSURANCE_LABELS:
+        section_lower = (section or "").lower()
+        for section_keyword, category in _SECTION_QUALIFIED_COINSURANCE:
+            if section_keyword in section_lower:
+                return category
+    if normalized_label in _BARE_LIMIT_LABELS:
+        return _BARE_LIMIT_LABELS[normalized_label]
+
     search_text = f"{section or ''} {label or ''}".lower()
     for name in MATCH_ORDER:
         if any(keyword in search_text for keyword in CATEGORIES[name]["keywords"]):
             return name
+
+    # Nothing matched a specific phrase - fall back to a prefix check
+    # (checked last, after every more specific keyword had its chance, so
+    # e.g. "Optical Co-payment" is still caught by Optical Co-insurance's
+    # own keyword above rather than landing here).
+    for prefix, category in _LIMIT_LABEL_PREFIXES:
+        if normalized_label.startswith(prefix + " "):
+            return category
     return None
 
 
 _NETWORK_COINSURANCE_MARKER_RE = re.compile(r"\b(IP|OP|Pharmacy|Maternity)\s*[:\-]", re.IGNORECASE)
+
+
+USD_TO_AED_RATE = 3.6725
+
+# Matches a USD-denominated amount however the document happened to write
+# it ("USD 7,500,000", "US$ 7,500,000", "US $200", "$1,000,000") - the
+# amount itself always follows one of these prefixes directly, so the
+# match captures exactly the number to convert, nothing else in the cell.
+_USD_AMOUNT_RE = re.compile(r"(?:USD|US\s?\$|\$)\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+
+
+def unify_currency_to_aed(value: Optional[str], rate: float = USD_TO_AED_RATE) -> Optional[str]:
+    """Appends the AED equivalent right after the first USD amount in a
+    value, so every plan's limits can be read on the same scale without
+    losing the source document's own wording. Left untouched when the
+    value already states an AED figure of its own (Bupa's documents
+    already give one, e.g. "USD 4,700,000 (AED 17,260,750)") or has no
+    USD amount to convert in the first place.
+    """
+    if not value or "aed" in value.lower():
+        return value
+    match = _USD_AMOUNT_RE.search(value)
+    if not match:
+        return value
+    amount = float(match.group(1).replace(",", ""))
+    aed_amount = amount * rate
+    aed_text = f" (AED {aed_amount:,.0f})"
+    insert_at = match.end()
+    return value[:insert_at] + aed_text + value[insert_at:]
 
 
 def clean_category_value(category: str, value: str) -> str:
@@ -309,6 +397,26 @@ def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, st
         category = map_label_to_category(row.get("section"), row.get("label"))
         if category and category not in category_values:
             category_values[category] = clean_category_value(category, row.get("value"))
+
+    # Some documents (Sukoon's, in particular) never state one combined
+    # "Maternity Annual Limit" figure - only itemized amounts per
+    # procedure (Antenatal, Normal Delivery, C-Section, Complications,
+    # Newborn). Rather than reporting maternity as "not specified" when
+    # it plainly is covered, just itemized, combine whichever of those
+    # are actually present into one descriptive value.
+    if "Maternity Annual Limit" not in category_values:
+        itemized = [
+            (label, category_values[cat])
+            for cat, label in (
+                ("Normal Delivery", "Normal Delivery"),
+                ("C-Section", "C-Section"),
+                ("Maternity Complications", "Complications"),
+                ("Antenatal Care", "Antenatal"),
+            )
+            if cat in category_values
+        ]
+        if itemized:
+            category_values["Maternity Annual Limit"] = "; ".join(f"{label}: {value}" for label, value in itemized)
 
     return {
         field: category_values[category_name]
