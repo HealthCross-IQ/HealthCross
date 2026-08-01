@@ -175,15 +175,15 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": ["emergency medical evacuation", "medical evacuation", "repatriation", "second medical opinion"],
     },
     "Work-related Injuries": {
-        "group": "Exclusions",
+        "group": "Special Cover",
         "keywords": ["work-related injur", "work related injur", "occupational injur"],
     },
     "Passive War Risk": {
-        "group": "Exclusions",
+        "group": "Special Cover",
         "keywords": ["passive war risk", "war risk"],
     },
     "Psychiatric Treatment": {
-        "group": "Exclusions",
+        "group": "Special Cover",
         "keywords": ["psychiatric", "psychotherap", "mental health"],
     },
 }
