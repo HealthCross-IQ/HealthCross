@@ -12,6 +12,7 @@ class CaseCreate(BaseModel):
     employee_count_declared: Optional[int] = None
     business_type: Optional[str] = None  # "new" or "existing"
     current_annual_premium: Optional[float] = None
+    policy_start_date: Optional[date] = None
 
 
 class CaseOut(BaseModel):
@@ -32,6 +33,7 @@ class CaseOut(BaseModel):
     submitted_at: datetime
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
+    policy_start_date: Optional[date] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -119,6 +121,7 @@ class ClaimsLedgerEntryOut(BaseModel):
 class CaseUpdate(BaseModel):
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
+    policy_start_date: Optional[date] = None
 
 
 class ClaimsReportOut(BaseModel):

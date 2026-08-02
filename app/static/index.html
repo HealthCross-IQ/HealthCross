@@ -473,6 +473,13 @@ function showNewCaseForm() {
           </div>
           <div><label>Current annual premium (renewals only)</label><input type="number" name="current_annual_premium" placeholder="e.g. 3000000"></div>
         </div>
+        <div class="row">
+          <div>
+            <label>Policy start date</label>
+            <input type="date" name="policy_start_date">
+            <div class="hint">Used to work out member ages as of the scheme's own start date, not today - only needed if the census file doesn't already carry its own effective-date column.</div>
+          </div>
+        </div>
         <div style="margin-top:16px;"><button class="primary" type="submit">Create case</button></div>
       </form>
     </div>
@@ -491,6 +498,7 @@ async function createCase(event) {
     employee_count_declared: form.get('employee_count_declared') ? Number(form.get('employee_count_declared')) : null,
     business_type: form.get('business_type') || null,
     current_annual_premium: form.get('current_annual_premium') ? Number(form.get('current_annual_premium')) : null,
+    policy_start_date: form.get('policy_start_date') || null,
   };
   try {
     const created = await api('/cases', {
@@ -882,8 +890,13 @@ function renderCaseWorkspace() {
           <label>Current annual premium (for renewal rating)</label>
           <input type="number" id="current-annual-premium" value="${c.current_annual_premium ?? ''}" placeholder="e.g. 3000000">
         </div>
+        <div>
+          <label>Policy start date</label>
+          <input type="date" id="case-policy-start-date" value="${c.policy_start_date ?? ''}">
+        </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
+      <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column.</div>
     </div>
 
     <div class="card">
@@ -1005,6 +1018,7 @@ function renderCaseWorkspace() {
 async function saveCaseDetails() {
   const premiumValue = document.getElementById('current-annual-premium').value;
   const businessType = document.getElementById('case-business-type').value;
+  const policyStartDate = document.getElementById('case-policy-start-date').value;
   try {
     currentCase = await api(`/cases/${currentCase.id}`, {
       method: 'PATCH',
@@ -1012,6 +1026,7 @@ async function saveCaseDetails() {
       body: JSON.stringify({
         business_type: businessType,
         current_annual_premium: premiumValue ? Number(premiumValue) : null,
+        policy_start_date: policyStartDate || null,
       }),
     });
     toast('Case details saved');

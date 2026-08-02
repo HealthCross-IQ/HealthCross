@@ -82,7 +82,7 @@ def upload_census(
 ):
     case = _get_case_or_404(db, case_id)
     try:
-        parsed = parse_census(file.file, file.filename)
+        parsed = parse_census(file.file, file.filename, default_policy_start_date=case.policy_start_date)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Could not parse census file: {exc}")
     if not parsed:

@@ -61,7 +61,7 @@ def _normalize_marital_status(value: Any) -> str:
     return str(value).strip().lower()
 
 
-def parse_census(file: BinaryIO, filename: str) -> List[dict]:
+def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date | None = None) -> List[dict]:
     if filename.lower().endswith(".csv"):
         df = pd.read_csv(file)
     else:
@@ -77,7 +77,7 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
             parsed = pd.to_datetime(row.get(col_name), errors="coerce")
             return parsed.date() if pd.notna(parsed) else None
 
-        policy_start_date = _date_col("policy_start_date")
+        policy_start_date = _date_col("policy_start_date") or default_policy_start_date
 
         age = row.get("age")
         if pd.isna(age) and "date_of_birth" in df.columns:

@@ -41,6 +41,10 @@ class Case(Base):
     target_premium = Column(Float, nullable=True)
     claims_available = Column(Boolean, nullable=True)
     renewal_date = Column(Date, nullable=True)
+    # Fallback reference date for age-band calculations when the uploaded
+    # census file has no per-row effective-date column of its own - see
+    # app/ingestion/census.py's default_policy_start_date param.
+    policy_start_date = Column(Date, nullable=True)
     submitted_at = Column(DateTime, default=datetime.datetime.utcnow)
     status = Column(SAEnum(CaseStatus), default=CaseStatus.SUBMITTED)
 
