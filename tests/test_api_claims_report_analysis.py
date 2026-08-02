@@ -233,6 +233,52 @@ def test_claims_report_breakdown_member_type_split_with_burning_cost_per_relatio
     assert round(total_annualized) == round(body["final_projected_claims"])
 
 
+def test_burning_cost_per_member_is_zero_not_none_for_a_relation_with_no_claims(client):
+    # A relation that genuinely filed zero claims this period (annualized
+    # total == 0.0) still has real members - burning cost per member should
+    # report 0.0, not silently disappear as if it couldn't be computed at
+    # all (a falsy-but-valid 0.0 must not be treated the same as "missing").
+    resp = client.post(
+        "/cases",
+        json={"broker_name": "Broker A", "company_name": "Zero Claims Co", "industry": "trading"},
+    )
+    case_id = resp.json()["id"]
+
+    rows = (
+        [{"Category": "D", "Gender": "M", "DOB": "1990-01-01", "Marital Status": "Married", "Relation": "Employee", "Nationality": "Indian"} for _ in range(100)]
+        + [{"Category": "D", "Gender": "F", "DOB": "1990-01-01", "Marital Status": "Married", "Relation": "Spouse", "Nationality": "Indian"} for _ in range(60)]
+        + [{"Category": "D", "Gender": "M", "DOB": "2015-01-01", "Marital Status": "Single", "Relation": "Child", "Nationality": "Indian"} for _ in range(52)]
+    )
+    census_df = pd.DataFrame(rows)
+    resp = client.post(
+        f"/cases/{case_id}/census",
+        files={"file": ("census.xlsx", _xlsx_bytes(census_df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+
+    _insert_claims_report(
+        client,
+        case_id,
+        opening_members=161,
+        closing_members=212,
+        claims_by_member_type_value=[
+            {"relation": "Employee", "in_patient": 99786.0, "out_patient": 331844.0, "pharmacy": 122566.0, "dental": 56008.0, "optical": 39920.0, "not_yet_classified": 3741.0, "total": 653865.0},
+            {"relation": "Spouse", "in_patient": 382229.0, "out_patient": 289781.0, "pharmacy": 121788.0, "dental": 25231.0, "optical": 16364.0, "not_yet_classified": 907.0, "total": 836299.0},
+            # Dependents filed nothing at all this period.
+            {"relation": "Dependents", "in_patient": 0.0, "out_patient": 0.0, "pharmacy": 0.0, "dental": 0.0, "optical": 0.0, "not_yet_classified": 0.0, "total": 0.0},
+        ],
+    )
+
+    resp = client.get(f"/cases/{case_id}/claims-report-breakdown")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    dependents = next(r for r in body["claims_by_member_type"] if r["relation"] == "Dependents")
+    assert dependents["member_count"] == 52
+    assert dependents["annualized_total"] == 0.0
+    assert dependents["burning_cost_per_member"] == 0.0
+
+
 def test_claims_report_breakdown_without_enough_months_skips_annualization(client):
     case_id = _create_case_with_census(client, member_count=212)
     _insert_claims_report(

@@ -647,6 +647,11 @@ const _LOWER_IS_BETTER_LABELS = new Set([
 
 function _firstComparableNumber(value) {
   if (!value) return null;
+  // "NIL" is this domain's own way of writing a zero co-insurance/deductible
+  // (e.g. "NIL Copay") - it carries no digits of its own, so without this it
+  // would fail to parse as a number at all and the row would fall back to
+  // unranked "neutral" even though 0% is a perfectly real, comparable value.
+  if (/^nil\b/i.test(value.trim())) return 0;
   // Prefer the AED figure unify_currency_to_aed appended in parentheses, so
   // an originally-USD limit and an originally-AED limit compare on the same
   // scale rather than by coincidence of which currency was written first.
@@ -675,7 +680,10 @@ function rankRowCells(label, planIds, values) {
   const present = planIds.filter(hasValue);
   if (present.length === 0) return result;
   if (present.length === 1) {
-    result[present[0]] = 'neutral'; // only one plan even lists it - no other plan to be "better" than
+    // Every other plan in the row is already 'missing' (red) - the one
+    // plan that does offer this benefit is better than not having it at
+    // all, consistent with "red = worse or missing" everywhere else.
+    result[present[0]] = 'better';
     return result;
   }
 

@@ -255,7 +255,9 @@ def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
                 entry["annualized_total"] = annualized_total
                 member_count = entry["member_count"]
                 entry["burning_cost_per_member"] = (
-                    round(annualized_total / member_count, 2) if annualized_total and member_count else None
+                    round(annualized_total / member_count, 2)
+                    if annualized_total is not None and member_count
+                    else None
                 )
         result["final_projected_claims"] = final_projected_claims
 
@@ -360,7 +362,9 @@ def get_premium_by_category(case_id: int, db: Session = Depends(get_db)):
     categories = []
     for plan in quoted_plans:
         premium_per_member = (
-            round(plan.gross_premium / plan.member_count, 2) if plan.gross_premium and plan.member_count else None
+            round(plan.gross_premium / plan.member_count, 2)
+            if plan.gross_premium is not None and plan.member_count
+            else None
         )
         categories.append(
             {

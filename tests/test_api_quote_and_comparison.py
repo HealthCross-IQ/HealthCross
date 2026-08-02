@@ -93,6 +93,19 @@ def test_premium_by_category_returns_quoted_plans_with_per_member_figure(client)
     assert round(cat_a["premium_per_member"], 2) == round(918950.0 / 54, 2)
 
 
+def test_premium_by_category_reports_zero_not_none_for_a_zero_premium_category(client):
+    # A category can genuinely have a recorded gross premium of 0 (e.g. a
+    # fully subsidized rider) with real members on it - premium_per_member
+    # should be 0.0, not silently None as if it couldn't be computed.
+    case_id = _create_case(client)
+    _insert_quoted_plan(client, case_id, category="A", member_count=54, gross_premium=0.0, plan_name="Gold - CAT A")
+
+    resp = client.get(f"/cases/{case_id}/premium-by-category")
+    assert resp.status_code == 200
+    cat_a = next(c for c in resp.json()["categories"] if c["category"] == "A")
+    assert cat_a["premium_per_member"] == 0.0
+
+
 def test_premium_by_category_404_without_quote(client):
     case_id = _create_case(client)
     resp = client.get(f"/cases/{case_id}/premium-by-category")

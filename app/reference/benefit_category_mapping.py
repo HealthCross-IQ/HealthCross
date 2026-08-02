@@ -427,7 +427,7 @@ def extract_maternity_complications_clause(maternity_annual_limit_value: Optiona
     return clause or None
 
 
-# Bridges this 38-category master list onto the older, fixed 11-field
+# Bridges this 36-category master list onto the older, fixed 11-field
 # standard summary (app/scoring/rules/benefits_summary.py) used by the
 # per-case existing/quoted plan review - a single-tier document (e.g.
 # Sukoon's own "Category 1" layout) doesn't fit Bupa's multi-tier-per-
