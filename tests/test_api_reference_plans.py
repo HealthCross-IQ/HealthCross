@@ -143,9 +143,9 @@ def test_compare_maps_both_plans_onto_the_fixed_category_list(client):
     assert [p["plan_label"] for p in body["plans"]] == ["Gold", "Bronze"]
 
     all_rows = [row for section in body["sections"] for row in section["rows"]]
-    # Every one of the fixed 36 categories appears as its own row, in the
+    # Every one of the fixed 37 categories appears as its own row, in the
     # agreed order, regardless of whether either plan actually has a match.
-    assert len(all_rows) == 36
+    assert len(all_rows) == 37
     assert [row["label"] for row in all_rows][:2] == ["Annual/Indemnity Maximum", "Area of Cover"]
 
     dental_row = next(row for row in all_rows if row["label"] == "Dental Annual Limit")
@@ -153,7 +153,7 @@ def test_compare_maps_both_plans_onto_the_fixed_category_list(client):
     # vs whatever Bronze's own wording is) but both map onto this one row.
     assert all(v is not None for v in dental_row["values"].values())
 
-    # Real rows that don't match any of the 36 categories aren't dropped -
+    # Real rows that don't match any of the 37 categories aren't dropped -
     # they're kept per plan, verbatim, in other_benefits.
     assert len(body["other_benefits"][str(gold["id"])]) > 0
     assert len(body["other_benefits"][str(bronze["id"])]) > 0

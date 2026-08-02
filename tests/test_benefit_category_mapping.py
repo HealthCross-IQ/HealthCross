@@ -9,14 +9,15 @@ from app.reference.benefit_category_mapping import (
     DISPLAY_ORDER,
     MATCH_ORDER,
     build_standard_summary_from_rows,
+    clean_category_value,
     map_label_to_category,
 )
 
 
 def test_display_and_match_order_cover_every_category_exactly_once():
     assert set(DISPLAY_ORDER) == set(MATCH_ORDER) == set(CATEGORIES.keys())
-    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 36
-    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 36
+    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 37
+    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 37
 
 
 def test_maps_differently_worded_annual_maximum_labels_onto_one_category():
@@ -62,3 +63,37 @@ def test_build_standard_summary_maps_first_match_per_field():
     assert summary["annual_limit"] == "AED 1,000,000"
     assert summary["dental"] == "AED 5,000"
     assert "maternity_limit" not in summary  # no matching row - left for the caller's default fill-in
+
+
+def test_maternity_inpatient_coinsurance_row_does_not_pollute_maternity_limit():
+    # A real Sukoon/Arabyads row ("Inpatient Maternity: 10%", under a
+    # "Co-Insurance/Deductible" section) must land in its own Maternity
+    # Co-insurance category, not get swallowed by Maternity Annual Limit's
+    # greedy bare "maternity" catch-all keyword.
+    assert map_label_to_category("Co-Insurance/Deductible", "Inpatient Maternity") == "Maternity Co-insurance"
+
+
+def test_maternity_complications_becomes_the_maternity_limit_when_no_combined_limit_row():
+    # Sukoon/Arabyads never states one combined "Maternity Annual Limit"
+    # figure - "Maternity complications" is described as covered "up to
+    # indemnity limit", i.e. it IS the real ceiling, so it should win over
+    # the smaller itemized Normal Delivery/C-Section amounts rather than
+    # being folded into a combined "Normal Delivery: X; C-Section: Y" string.
+    rows = [
+        {"section": "Maternity & New-Born", "label": "Normal Delivery", "value": "25,000/-"},
+        {"section": "Maternity & New-Born", "label": "Medically necessary C-Section", "value": "30,000/-"},
+        {"section": "Maternity & New-Born", "label": "Maternity complications", "value": "30,000/-"},
+        {"section": "Co-Insurance/Deductible", "label": "Inpatient Maternity", "value": "10%"},
+    ]
+    summary = build_standard_summary_from_rows(rows)
+    assert summary["maternity_limit"] == "30,000/-"
+    assert summary["maternity_coinsurance"] == "10%"
+
+
+def test_network_value_keeps_only_the_first_network_name():
+    # Sukoon/Arabyads crams a primary network name, a second narrower one,
+    # and a per-category co-insurance breakdown into one cell with no
+    # punctuation between them ("Edge CCAD IP: 20% OP...") - only the
+    # first word is the actual network name callers want.
+    value = "Edge CCAD IP: 20% OP (excluding Pharmacy): 20% Pharmacy: 10% Maternity IP: 10%"
+    assert clean_category_value("Network / Provider Tier", value) == "Edge"

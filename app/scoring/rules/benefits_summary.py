@@ -1,10 +1,10 @@
 """Standard table-of-benefits summary format.
 
-Fixed 11-field layout requested for every plan review, regardless of
+Fixed 12-field layout requested for every plan review, regardless of
 insurer or plan tier: Area of Cover, Annual Limit, Deductible, Pre-existing
-& Chronic Limit, Maternity Limit, Dental, Optical, Coinsurance,
-Alternative/Complementary Treatment, Pharmacy Limit & Coinsurance, Health
-Screening/Wellness Package.
+& Chronic Limit, Maternity Limit, Maternity Co-insurance, Dental, Optical,
+Coinsurance, Alternative/Complementary Treatment, Pharmacy Limit &
+Coinsurance, Health Screening/Wellness Package.
 """
 from typing import Any, Dict
 
@@ -14,6 +14,7 @@ STANDARD_FIELDS = [
     "deductible",
     "pre_existing_chronic_limit",
     "maternity_limit",
+    "maternity_coinsurance",
     "dental",
     "optical",
     "coinsurance",
@@ -28,6 +29,7 @@ FIELD_LABELS = {
     "deductible": "Deductible",
     "pre_existing_chronic_limit": "Pre-existing & Chronic Limit",
     "maternity_limit": "Maternity Limit",
+    "maternity_coinsurance": "Maternity Co-insurance",
     "dental": "Dental",
     "optical": "Optical",
     "coinsurance": "Coinsurance",

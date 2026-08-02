@@ -1327,11 +1327,14 @@ async function loadBenefitsComparison() {
 
 /* ---------------- claims ---------------- */
 
-async function loadClaimsProjection(credibilityOverride) {
+async function loadClaimsProjection(credibilityOverride, loadingOverride) {
   const area = document.getElementById('claims-projection-area');
   try {
-    const params = credibilityOverride != null ? `?credibility_pct=${credibilityOverride}` : '';
-    const p = await api(`/cases/${currentCase.id}/claims-projection${params}`);
+    const params = new URLSearchParams();
+    if (credibilityOverride != null) params.set('credibility_pct', credibilityOverride);
+    if (loadingOverride != null) params.set('loading_pct', loadingOverride);
+    const qs = params.toString() ? `?${params.toString()}` : '';
+    const p = await api(`/cases/${currentCase.id}/claims-projection${qs}`);
     area.innerHTML = `
       <div class="card">
         <h3>Claims projection (burning cost)</h3>
@@ -1354,6 +1357,10 @@ async function loadClaimsProjection(credibilityOverride) {
             <label>Credibility % (varies by insurer)</label>
             <input type="number" id="credibility-override" min="0" max="100" step="1" value="${(p.assumptions_used.credibility_pct*100).toFixed(0)}">
           </div>
+          <div>
+            <label>Loading %</label>
+            <input type="number" id="claims-projection-loading-override" step="0.1" value="${(p.assumptions_used.loading_pct*100).toFixed(1)}">
+          </div>
           <button onclick="recomputeClaimsProjection()">Recompute</button>
         </div>
       </div>
@@ -1367,7 +1374,8 @@ async function recomputeClaimsProjection() {
   const input = document.getElementById('credibility-override');
   const pct = Number(input.value);
   if (Number.isNaN(pct) || pct < 0 || pct > 100) { toast('Enter a credibility % between 0 and 100', true); return; }
-  await loadClaimsProjection(pct / 100);
+  const loading = Number(document.getElementById('claims-projection-loading-override').value) / 100;
+  await loadClaimsProjection(pct / 100, loading);
 }
 
 async function loadClaimsReportBreakdown() {

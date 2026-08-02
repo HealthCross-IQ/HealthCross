@@ -154,6 +154,10 @@ CATEGORIES: Dict[str, Dict] = {
         "group": "Maternity",
         "keywords": ["newborn", "new-born", "new born cover"],
     },
+    "Maternity Co-insurance": {
+        "group": "Maternity",
+        "keywords": ["inpatient maternity", "maternity co-insurance", "maternity coinsurance"],
+    },
     "Maternity Annual Limit": {
         "group": "Maternity",
         "keywords": [
@@ -243,7 +247,7 @@ DISPLAY_ORDER: List[str] = [
     "Physiotherapy", "Prescribed Medicines / Pharmacy",
     "Outpatient Co-insurance/Deductible",
     "Antenatal Care", "Normal Delivery", "C-Section", "Maternity Complications",
-    "Newborn Cover", "Maternity Annual Limit",
+    "Newborn Cover", "Maternity Annual Limit", "Maternity Co-insurance",
     "Dental Annual Limit", "Dental Co-insurance",
     "Optical Annual Limit", "Optical Co-insurance",
     "Health Check-up", "Adult Vaccinations", "Cancer Screening",
@@ -257,12 +261,16 @@ DISPLAY_ORDER: List[str] = [
 # checked last) gets a chance to swallow it.
 MATCH_ORDER: List[str] = [
     "Antenatal Care", "Normal Delivery", "C-Section", "Maternity Complications",
-    "Newborn Cover", "Maternity Annual Limit",
+    "Newborn Cover",
     # Co-insurance checked before its matching Annual Limit category - the
     # limit's own keywords (e.g. "dental benefit") match the whole section
     # a co-insurance row also sits in, so checking the limit first would
     # claim every row in that section for the limit and the co-insurance
-    # category would never be reached.
+    # category would never be reached. Maternity Annual Limit's own bare
+    # "maternity" catch-all keyword is especially greedy (it matches ANY
+    # maternity-adjacent row, e.g. Sukoon's "Inpatient Maternity: 10%"
+    # co-insurance line), so Maternity Co-insurance must get first pick.
+    "Maternity Co-insurance", "Maternity Annual Limit",
     "Dental Co-insurance", "Dental Annual Limit",
     "Optical Co-insurance", "Optical Annual Limit",
     # Checked before Diagnostics/GP-Specialist/Physiotherapy/Pharmacy for the
@@ -398,11 +406,20 @@ def clean_category_value(category: str, value: str) -> str:
     first such marker) belongs in this category; the co-insurance detail
     that follows isn't part of "which network", so it's trimmed rather
     than shown as if it were the network name.
+
+    Some of these documents (Sukoon's, in particular) also list a second,
+    narrower network name right after the primary one with no punctuation
+    or marker between them at all (e.g. "Edge CCAD" - Edge is the primary
+    network, CCAD a separate, narrower one) since the line break that
+    originally separated them on the page is long since collapsed into a
+    plain space by the time this value reaches here. Only the first word
+    is the primary network name callers actually want.
     """
     if category != "Network / Provider Tier":
         return value
     match = _NETWORK_COINSURANCE_MARKER_RE.search(value)
-    return value[: match.start()].strip() if match else value
+    trimmed = value[: match.start()].strip() if match else value
+    return trimmed.split()[0] if trimmed else trimmed
 
 
 # Some documents (Bupa's, in particular) never give "Maternity
@@ -427,7 +444,7 @@ def extract_maternity_complications_clause(maternity_annual_limit_value: Optiona
     return clause or None
 
 
-# Bridges this 36-category master list onto the older, fixed 11-field
+# Bridges this 36-category master list onto the older, fixed 12-field
 # standard summary (app/scoring/rules/benefits_summary.py) used by the
 # per-case existing/quoted plan review - a single-tier document (e.g.
 # Sukoon's own "Category 1" layout) doesn't fit Bupa's multi-tier-per-
@@ -436,25 +453,31 @@ def extract_maternity_complications_clause(maternity_annual_limit_value: Optiona
 # collapse onto one category here (e.g. "coinsurance" and "deductible"
 # both draw on network/co-insurance wording) rather than each getting
 # its own dedicated category, matching the coarser granularity the
-# 11-field summary already accepted from the Bupa-specific extractor.
+# 12-field summary already accepted from the Bupa-specific extractor.
 CATEGORY_TO_STANDARD_FIELD = {
     "Area of Cover": "area_of_cover",
     "Annual/Indemnity Maximum": "annual_limit",
     "Pre-existing & Chronic Conditions": "pre_existing_chronic_limit",
     "Maternity Annual Limit": "maternity_limit",
+    "Maternity Co-insurance": "maternity_coinsurance",
     "Dental Annual Limit": "dental",
     "Optical Annual Limit": "optical",
     "Outpatient Co-insurance/Deductible": "coinsurance",
     "Alternative Medicine Limit": "alternative_or_complementary_treatment",
     "Prescribed Medicines / Pharmacy": "pharmacy_limit_and_coinsurance",
     "Health Check-up": "health_screening_wellness",
+    # Not one of the fixed standard-summary fields (app/scoring/rules/
+    # benefits_summary.py) - feeds BenefitPlan.network_type directly (see
+    # to_case_benefit_plan_fields below), same column the CAT-style/
+    # labeled-row parsers already populate for other insurer layouts.
+    "Network / Provider Tier": "network",
 }
 
 
 def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, str]:
     """Maps a document's raw {"section", "label", "value"} rows (as
     extracted by app/ingestion/international_tob.py) onto the fixed
-    11-field standard summary, via the same category matching used for
+    12-field standard summary, via the same category matching used for
     the detailed comparison - so any document family the detailed
     comparison already handles well also gets a usable Summary instead of
     the crude text-proximity fallback.
@@ -468,22 +491,27 @@ def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, st
     # Some documents (Sukoon's, in particular) never state one combined
     # "Maternity Annual Limit" figure - only itemized amounts per
     # procedure (Antenatal, Normal Delivery, C-Section, Complications,
-    # Newborn). Rather than reporting maternity as "not specified" when
-    # it plainly is covered, just itemized, combine whichever of those
-    # are actually present into one descriptive value.
+    # Newborn). Complications is stated as covered "up to indemnity
+    # limit" - i.e. it IS the scheme's real maternity ceiling, not just
+    # one itemized amount among several - so it takes priority over the
+    # smaller per-procedure figures (Normal Delivery/C-Section) whenever
+    # present, rather than being folded into a combined itemized string
+    # that would rather report Normal Delivery's usually-smaller figure.
     if "Maternity Annual Limit" not in category_values:
-        itemized = [
-            (label, category_values[cat])
-            for cat, label in (
-                ("Normal Delivery", "Normal Delivery"),
-                ("C-Section", "C-Section"),
-                ("Maternity Complications", "Complications"),
-                ("Antenatal Care", "Antenatal"),
-            )
-            if cat in category_values
-        ]
-        if itemized:
-            category_values["Maternity Annual Limit"] = "; ".join(f"{label}: {value}" for label, value in itemized)
+        if "Maternity Complications" in category_values:
+            category_values["Maternity Annual Limit"] = category_values["Maternity Complications"]
+        else:
+            itemized = [
+                (label, category_values[cat])
+                for cat, label in (
+                    ("Normal Delivery", "Normal Delivery"),
+                    ("C-Section", "C-Section"),
+                    ("Antenatal Care", "Antenatal"),
+                )
+                if cat in category_values
+            ]
+            if itemized:
+                category_values["Maternity Annual Limit"] = "; ".join(f"{label}: {value}" for label, value in itemized)
 
     return {
         field: category_values[category_name]
@@ -530,4 +558,5 @@ def to_case_benefit_plan_fields(summary: Dict[str, str]) -> Dict[str, Any]:
         "optical_covered": bool(optical_text) and not _NOT_COVERED_RE.search(optical_text),
         "pre_existing_covered": bool(chronic_text) and not _NOT_COVERED_RE.search(chronic_text),
         "chronic_covered": bool(chronic_text) and not _NOT_COVERED_RE.search(chronic_text),
+        "network_type": summary.get("network"),
     }

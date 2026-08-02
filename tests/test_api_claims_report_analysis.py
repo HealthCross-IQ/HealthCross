@@ -125,6 +125,19 @@ def test_claims_projection_credibility_override_via_query_param(client):
     assert lower_credibility_resp.json()["final_projected_claims"] < default_resp.json()["final_projected_claims"]
 
 
+def test_claims_projection_loading_override_via_query_param(client):
+    case_id = _create_case_with_census(client, member_count=212)
+    _insert_claims_report(client, case_id)
+
+    default_resp = client.get(f"/cases/{case_id}/claims-projection")
+    higher_loading_resp = client.get(f"/cases/{case_id}/claims-projection", params={"loading_pct": 0.40})
+
+    assert higher_loading_resp.json()["assumptions_used"]["loading_pct"] == 0.40
+    # Dividing by (1 - loading) - a higher loading means a higher required
+    # premium to cover the same underlying claims.
+    assert higher_loading_resp.json()["final_projected_claims"] > default_resp.json()["final_projected_claims"]
+
+
 def test_diagnosis_exposure_flags_cancer_as_chronic_and_high_exposure(client):
     case_id = _create_case_with_census(client)
     _insert_claims_report(client, case_id)
