@@ -408,3 +408,103 @@ def _merge_wrapped_label_continuations(rows: List[Dict[str, str]]) -> List[Dict[
         else:
             merged.append(dict(row))
     return merged
+
+
+def extract_multi_tier_rows(file: BinaryIO, filename: str) -> Dict[str, List[Dict[str, str]]]:
+    """For documents that lay out several plan tiers side by side in the
+    SAME table (e.g. HealthCROSS Global's quote: "Label | Gold - CAT A |
+    Gold - CAT B"), rather than one document per tier - returns
+    {tier_name: [{"section", "label", "value"}]} for each tier column
+    found, so each becomes its own reference plan instead of only the
+    last column's values surviving (or worse, the repeated per-section
+    mini-header - "Gold - CAT A" / "Gold - CAT B" themselves - being read
+    as if they were real benefit values, since a plain leftmost/rightmost
+    row reader has no way to know there's more than one value column).
+
+    The tier names are read from the first table's header row and then
+    required to repeat identically on every subsequent mini-header within
+    the document (each section restates them, "Dental Benefits: | Gold -
+    CAT A | Gold - CAT B") - this both confirms the layout guess and
+    means a document that ISN'T this multi-tier-per-row shape (a single
+    changing header, or none at all) naturally returns nothing rather
+    than misreading arbitrary rows as tier columns.
+    """
+    def _all_rows(pdf: "pdfplumber.PDF") -> List[List[str]]:
+        rows: List[List[str]] = []
+        for page in pdf.pages:
+            for table in _distinct_tables(page):
+                data = table.extract()
+                if data:
+                    rows.extend([_clean(c) for c in raw_row] for raw_row in data)
+        return rows
+
+    def _header_candidate(raw_cells: List[str]) -> Optional[List[str]]:
+        if not raw_cells or not raw_cells[0]:
+            return None
+        # A real value row can just as easily have two short matching
+        # cells (e.g. "Covered | Covered") as a genuine header can - the
+        # label ending in a colon ("Dental Benefits:", "Inpatient &
+        # Daycase treatment Benefits:") is what actually marks this as a
+        # section title restating the tier names, not a benefit row.
+        if not raw_cells[0].rstrip().endswith(":"):
+            return None
+        other_cells = [c for c in raw_cells[1:] if c]
+        looks_like_header = (
+            len(other_cells) >= 2
+            and len(other_cells) == len(raw_cells) - 1
+            and all(len(c.split()) <= 5 for c in other_cells)
+        )
+        return other_cells if looks_like_header else None
+
+    with pdfplumber.open(file) as pdf:
+        all_rows = _all_rows(pdf)
+
+        # A one-off summary table elsewhere in the document (e.g. a
+        # premium-calculation table) can ALSO look like a plausible
+        # header on a first pass - the real per-section mini-header this
+        # layout needs repeats identically many times over (once per
+        # benefit section), while an unrelated table's header appears
+        # only once or twice, so the most frequent candidate wins.
+        candidate_counts: Dict[tuple, int] = {}
+        for raw_cells in all_rows:
+            candidate = _header_candidate(raw_cells)
+            if candidate:
+                candidate_counts[tuple(candidate)] = candidate_counts.get(tuple(candidate), 0) + 1
+        if not candidate_counts:
+            return {}
+        tier_names = list(max(candidate_counts, key=candidate_counts.get))
+        if candidate_counts[tuple(tier_names)] < 2:
+            return {}  # never repeats - not this layout at all
+
+        tier_rows: Dict[str, List[Dict[str, str]]] = {tier: [] for tier in tier_names}
+        current_section = ""
+        for raw_cells in all_rows:
+            if not raw_cells or not raw_cells[0]:
+                continue
+            other_cells = [c for c in raw_cells[1:] if c]
+            # Once the tier names are confirmed, any row restating them
+            # exactly enters/labels a new section - not just the
+            # colon-suffixed ones pass 1 needed to tell a real header
+            # apart from an incidental "Covered | Covered" value row (a
+            # row that repeats the tier names verbatim can't be a benefit
+            # value in the first place, whatever its own label looks
+            # like, since a real value is never literally the tier name).
+            if other_cells == tier_names:
+                current_section = raw_cells[0]
+                continue
+            # Nothing establishes a section until the document's own
+            # first such header is reached - skips unrelated tables
+            # earlier in the document (e.g. a premium-calculation summary)
+            # that happen to have the right shape (label + N short cells)
+            # but aren't part of this benefit-table layout at all.
+            if not current_section:
+                continue
+            values = raw_cells[1 : 1 + len(tier_names)]
+            if len(values) < len(tier_names) or not any(values):
+                continue
+            label = raw_cells[0]
+            for tier, value in zip(tier_names, values):
+                if value:
+                    tier_rows[tier].append({"section": current_section, "label": label, "value": value, "note": ""})
+
+    return {tier: _merge_wrapped_label_continuations(rows) for tier, rows in tier_rows.items() if rows}

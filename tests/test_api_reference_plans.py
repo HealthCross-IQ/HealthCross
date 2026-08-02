@@ -3,9 +3,11 @@
 dynamically. Uses the repo's existing real Maxmed fixture PDFs (already
 used by test_api_benefits_labeled_row.py) to exercise the labeled-row
 branch of the upload fallback chain end-to-end; the Bupa/Cigna/Allianz/MSH/
-Sukoon branches were verified manually against real client documents that
-aren't committed here (real employee/client PII, and Cigna's needs a slow
-OCR fallback - see app/ingestion/international_tob.py's module docstring).
+Sukoon/multi-tier (HealthCROSS Global's side-by-side "Gold - CAT A" /
+"Gold - CAT B" layout, see extract_multi_tier_rows) branches were verified
+manually against real client documents that aren't committed here (real
+employee/client PII, and Cigna's needs a slow OCR fallback - see
+app/ingestion/international_tob.py's module docstring).
 """
 from pathlib import Path
 

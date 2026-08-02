@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.ingestion.benefits_pdf import extract_all_rows_by_tier
 from app.ingestion.international_tob import extract_benefit_rows as extract_generic_rows
+from app.ingestion.international_tob import extract_multi_tier_rows
 from app.ingestion.labeled_row_benefits_pdf import extract_all_rows as extract_labeled_row_rows
 from app.models import db_models as models
 from app.models import schemas
@@ -83,6 +84,28 @@ def upload_reference_plan(
                 benefit_rows=[{"section": "", "label": r["label"], "value": r["value"], "note": ""} for r in rows],
             )
             for tier, rows in by_tier.items()
+        ]
+        db.add_all(plans)
+        db.commit()
+        for plan in plans:
+            db.refresh(plan)
+        return plans
+
+    file.file.seek(0)
+    try:
+        by_multi_tier: Dict[str, List[Dict[str, str]]] = extract_multi_tier_rows(file.file, filename)
+    except Exception:
+        by_multi_tier = {}
+    if by_multi_tier:
+        base_label = plan_label or filename
+        plans = [
+            models.ReferenceBenefitPlan(
+                insurer_name=insurer_name,
+                plan_label=f"{base_label} - {tier}" if plan_label else tier,
+                source_filename=filename,
+                benefit_rows=rows,
+            )
+            for tier, rows in by_multi_tier.items()
         ]
         db.add_all(plans)
         db.commit()
