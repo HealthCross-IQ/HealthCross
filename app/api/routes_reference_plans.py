@@ -22,7 +22,9 @@ from app.reference.benefit_category_mapping import (
     CATEGORIES,
     DISPLAY_ORDER,
     clean_category_value,
+    dental_class_coinsurance_from_rows,
     extract_maternity_complications_clause,
+    looks_like_cigna_globalcare,
     map_label_to_category,
     unify_currency_to_aed,
 )
@@ -219,6 +221,18 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             cleaned = clean_category_value(category, value)
             category_values[category].setdefault(plan.id, unify_currency_to_aed(cleaned))
 
+    # Some documents (Sukoon/Arabyads', Cigna's, in particular) never state
+    # one combined "Maternity Annual Limit" figure of their own at all -
+    # Complications is stated as covered "up to indemnity limit"/fully
+    # covered, i.e. it IS the real ceiling, so it fills in for a missing
+    # Annual Limit rather than that column showing a misleading "-" next
+    # to a plan whose Maternity Complications row plainly does cover it.
+    for plan in ordered_plans:
+        if plan.id not in category_values["Maternity Annual Limit"]:
+            complications_value = category_values["Maternity Complications"].get(plan.id)
+            if complications_value:
+                category_values["Maternity Annual Limit"][plan.id] = complications_value
+
     # Some documents (HealthCROSS Global's, in particular) state one
     # combined maternity in-patient limit rather than itemizing Normal
     # Delivery and C-Section as their own rows - that one limit covers
@@ -232,6 +246,20 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             complications = extract_maternity_complications_clause(maternity_value)
             if complications:
                 category_values["Maternity Complications"].setdefault(plan.id, complications)
+
+    for plan in ordered_plans:
+        rows = plan.benefit_rows or []
+        # Cigna's dental table only ever breaks co-insurance down per
+        # class (Class one/two/three), never as one flat row a normal
+        # category match would find - see dental_class_coinsurance_from_rows.
+        if plan.id not in category_values["Dental Co-insurance"]:
+            dental_coinsurance = dental_class_coinsurance_from_rows(rows)
+            if dental_coinsurance:
+                category_values["Dental Co-insurance"].setdefault(plan.id, dental_coinsurance)
+        # Cigna Global Care never states a maternity co-insurance figure at
+        # all (it's always NIL for this insurer) - see looks_like_cigna_globalcare.
+        if category_values["Maternity Annual Limit"].get(plan.id) and looks_like_cigna_globalcare(rows):
+            category_values["Maternity Co-insurance"].setdefault(plan.id, "NIL")
 
     result_sections = []
     current_group = None

@@ -143,9 +143,9 @@ def test_compare_maps_both_plans_onto_the_fixed_category_list(client):
     assert [p["plan_label"] for p in body["plans"]] == ["Gold", "Bronze"]
 
     all_rows = [row for section in body["sections"] for row in section["rows"]]
-    # Every one of the fixed 37 categories appears as its own row, in the
+    # Every one of the fixed 36 categories appears as its own row, in the
     # agreed order, regardless of whether either plan actually has a match.
-    assert len(all_rows) == 37
+    assert len(all_rows) == 36
     assert [row["label"] for row in all_rows][:2] == ["Annual/Indemnity Maximum", "Area of Cover"]
 
     dental_row = next(row for row in all_rows if row["label"] == "Dental Annual Limit")
@@ -153,7 +153,7 @@ def test_compare_maps_both_plans_onto_the_fixed_category_list(client):
     # vs whatever Bronze's own wording is) but both map onto this one row.
     assert all(v is not None for v in dental_row["values"].values())
 
-    # Real rows that don't match any of the 37 categories aren't dropped -
+    # Real rows that don't match any of the 36 categories aren't dropped -
     # they're kept per plan, verbatim, in other_benefits.
     assert len(body["other_benefits"][str(gold["id"])]) > 0
     assert len(body["other_benefits"][str(bronze["id"])]) > 0
@@ -167,3 +167,38 @@ def test_compare_missing_plan_id_404s(client):
 def test_compare_requires_at_least_one_id(client):
     resp = client.get("/reference-plans/compare?ids=")
     assert resp.status_code == 400
+
+
+def test_compare_combines_cigna_dental_classes_and_defaults_maternity_coinsurance_to_nil(client):
+    # Cigna Global Care's own rows (synthetic here rather than the real
+    # PDF fixture - see module docstring on why Cigna's isn't committed):
+    # dental co-insurance only ever breaks down per class, and maternity
+    # co-insurance is never stated as its own row at all for this insurer.
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    plan = models.ReferenceBenefitPlan(
+        insurer_name="Cigna",
+        plan_label="GlobalCare Flexible 1",
+        benefit_rows=[
+            {"section": "", "label": "In-Cigna Healthcare network", "value": "Out-of-Cigna Healthcare network", "note": ""},
+            {"section": "Maternity benefits", "label": "Complications of pregnancy and childbirth", "value": "Covered", "note": ""},
+            {"section": "Dental benefits", "label": "Class one Investigative and Preventative treatment", "value": "NIL co-pay", "note": ""},
+            {"section": "Dental benefits", "label": "Class two Basic restorative treatment", "value": "20% co-pay", "note": ""},
+            {"section": "Dental benefits", "label": "Class three Major restorative treatment", "value": "50% co-pay", "note": ""},
+        ],
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    plan_id = plan.id
+    db.close()
+
+    resp = client.get(f"/reference-plans/compare?ids={plan_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    all_rows = {row["label"]: row["values"][str(plan_id)] for section in body["sections"] for row in section["rows"]}
+
+    assert all_rows["Dental Co-insurance"] == "Class one: NIL co-pay; Class two: 20% co-pay; Class three: 50% co-pay"
+    assert all_rows["Maternity Co-insurance"] == "NIL"
+    assert all_rows["Maternity Complications"] == "Covered"

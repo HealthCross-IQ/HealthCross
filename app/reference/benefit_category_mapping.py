@@ -40,16 +40,12 @@ CATEGORIES: Dict[str, Dict] = {
             "basic territory", "area of coverage",
         ],
     },
-    "Home Country Cover": {
-        "group": "General",
-        "keywords": ["home country cover"],
-    },
     "Pre-existing & Chronic Conditions": {
         "group": "General",
         "keywords": ["pre-existing condition", "pre existing condition", "chronic condition"],
     },
     "Congenital Conditions": {
-        "group": "General",
+        "group": "Additional Benefits",
         "keywords": ["congenital"],
     },
     "Network / Provider Tier": {
@@ -61,6 +57,11 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": [
             "room accommodation", "hospital accommodation", "room & board", "room and board",
             "room type", "hospital room",
+            # Cigna's own wording never pairs "room" directly with
+            # "accommodation" or "hospital" - it's "Accommodation on a
+            # private room basis for in-patient treatment", bundled into a
+            # bullet list under the generic "Hospital charges for:" label.
+            "private room basis",
         ],
     },
     "Companion / Parental Accommodation": {
@@ -148,7 +149,10 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Maternity Complications": {
         "group": "Maternity",
-        "keywords": ["maternity complication"],
+        # Cigna's own label is "Complications of pregnancy and childbirth"
+        # (covering elective/emergency c-sections too) rather than a
+        # phrase containing "maternity complication" at all.
+        "keywords": ["maternity complication", "complications of pregnancy"],
     },
     "Newborn Cover": {
         "group": "Maternity",
@@ -182,7 +186,16 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Optical Annual Limit": {
         "group": "Optical",
-        "keywords": ["optical benefit", "optical limit", "annual optical cover", "optical annual", "optical cover"],
+        "keywords": [
+            "optical benefit", "optical limit", "annual optical cover", "optical annual", "optical cover",
+            # Cigna calls this section "Vision benefits" rather than
+            # "Optical" at all, and its own bare "Annual Maximum" row (just
+            # covering the eye exam itself, paid in full) isn't the real
+            # dollar limit - the frames/lenses limit sits on this separate,
+            # more specific row instead ("Expenses for: ... Prescribed
+            # lenses to correct vision ... US$500 per year of insurance").
+            "prescribed lenses",
+        ],
     },
     "Optical Co-insurance": {
         "group": "Optical",
@@ -211,7 +224,7 @@ CATEGORIES: Dict[str, Dict] = {
         ],
     },
     "Alternative Medicine Limit": {
-        "group": "Alternative Medicine",
+        "group": "Additional Benefits",
         "keywords": [
             "alternative medicine", "homeopathy", "ayurvedic", "ayurveda",
             "complementary and alternative treatment", "complementary and alternative medicine",
@@ -222,23 +235,23 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": ["emergency medical evacuation", "medical evacuation", "repatriation", "second medical opinion"],
     },
     "Work-related Injuries": {
-        "group": "Special Cover",
+        "group": "Additional Benefits",
         "keywords": ["work-related injur", "work related injur", "occupational injur"],
     },
     "Passive War Risk": {
-        "group": "Special Cover",
+        "group": "Additional Benefits",
         "keywords": ["passive war risk", "war risk"],
     },
     "Psychiatric Treatment": {
-        "group": "Special Cover",
+        "group": "Additional Benefits",
         "keywords": ["psychiatric", "psychotherap", "mental health"],
     },
 }
 
 # Agreed presentation order - grouped by section, as originally proposed.
 DISPLAY_ORDER: List[str] = [
-    "Annual/Indemnity Maximum", "Area of Cover", "Home Country Cover",
-    "Pre-existing & Chronic Conditions", "Congenital Conditions",
+    "Annual/Indemnity Maximum", "Area of Cover",
+    "Pre-existing & Chronic Conditions",
     "Network / Provider Tier",
     "Room Type / Accommodation", "Companion / Parental Accommodation",
     "ICU / Intensive Care", "Surgery", "Organ Transplant", "Cancer Treatment",
@@ -251,8 +264,8 @@ DISPLAY_ORDER: List[str] = [
     "Dental Annual Limit", "Dental Co-insurance",
     "Optical Annual Limit", "Optical Co-insurance",
     "Health Check-up", "Adult Vaccinations", "Cancer Screening",
-    "Alternative Medicine Limit",
     "Emergency Medical Evacuation & Repatriation",
+    "Congenital Conditions", "Alternative Medicine Limit",
     "Work-related Injuries", "Passive War Risk", "Psychiatric Treatment",
 ]
 
@@ -288,7 +301,7 @@ MATCH_ORDER: List[str] = [
     "ICU / Intensive Care", "Organ Transplant", "Cancer Treatment", "Kidney Dialysis", "Surgery",
     "GP / Specialist Consultation", "Diagnostics (Lab/X-ray/Imaging)", "Physiotherapy",
     "Prescribed Medicines / Pharmacy",
-    "Home Country Cover", "Area of Cover",
+    "Area of Cover",
     "Network / Provider Tier",
     "Pre-existing & Chronic Conditions",
     "Annual/Indemnity Maximum",
@@ -444,6 +457,47 @@ def extract_maternity_complications_clause(maternity_annual_limit_value: Optiona
     return clause or None
 
 
+# Cigna's own dental table never states one flat co-insurance percentage -
+# only a per-class breakdown ("Class one Investigative and Preventative
+# treatment: NIL co-pay", "Class two ...: 20% co-pay", "Class three ...:
+# 50% co-pay"), each its own row rather than a single "Dental Co-insurance"
+# line the normal per-row category match could find directly.
+_DENTAL_CLASS_LABEL_RE = re.compile(r"^class (one|two|three)\b", re.IGNORECASE)
+_DENTAL_CLASS_ORDER = ("one", "two", "three")
+
+
+def dental_class_coinsurance_from_rows(rows: List[Dict[str, str]]) -> Optional[str]:
+    """Combines a Cigna-style "Class one/two/three" dental co-insurance
+    breakdown into one descriptive value, in class order, or None if this
+    document doesn't have that per-class row shape at all.
+    """
+    by_class: Dict[str, str] = {}
+    for row in rows:
+        match = _DENTAL_CLASS_LABEL_RE.match((row.get("label") or "").strip())
+        if match and "dental" in (row.get("section") or "").lower():
+            by_class.setdefault(match.group(1).lower(), row.get("value") or "")
+    if not by_class:
+        return None
+    return "; ".join(f"Class {cls}: {by_class[cls]}" for cls in _DENTAL_CLASS_ORDER if cls in by_class)
+
+
+# Cigna Global Care's own table never states a maternity co-insurance/copay
+# figure anywhere (unlike its dental/optical equivalents) because it's
+# always NIL for this insurer - there's no row for the normal per-row
+# category match to find at all, so this has to be supplied as a known
+# default for this document family rather than extracted. "In-Cigna
+# Healthcare network"/"Out-of-Cigna Healthcare network" is this format's
+# own network-tier column header, occurring in effectively every Cigna
+# Global Care export, so its presence reliably identifies the family
+# without depending on any prose elsewhere that a different export might
+# phrase differently or omit.
+_CIGNA_MARKER_RE = re.compile(r"cigna", re.IGNORECASE)
+
+
+def looks_like_cigna_globalcare(rows: List[Dict[str, str]]) -> bool:
+    return any(_CIGNA_MARKER_RE.search(f"{row.get('label', '')} {row.get('value', '')}") for row in rows)
+
+
 # Bridges this 36-category master list onto the older, fixed 12-field
 # standard summary (app/scoring/rules/benefits_summary.py) used by the
 # per-case existing/quoted plan review - a single-tier document (e.g.
@@ -512,6 +566,13 @@ def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, st
             ]
             if itemized:
                 category_values["Maternity Annual Limit"] = "; ".join(f"{label}: {value}" for label, value in itemized)
+
+    if (
+        "Maternity Co-insurance" not in category_values
+        and "Maternity Annual Limit" in category_values
+        and looks_like_cigna_globalcare(rows)
+    ):
+        category_values["Maternity Co-insurance"] = "NIL"
 
     return {
         field: category_values[category_name]

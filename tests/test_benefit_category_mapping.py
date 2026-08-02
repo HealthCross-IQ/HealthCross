@@ -10,14 +10,16 @@ from app.reference.benefit_category_mapping import (
     MATCH_ORDER,
     build_standard_summary_from_rows,
     clean_category_value,
+    dental_class_coinsurance_from_rows,
+    looks_like_cigna_globalcare,
     map_label_to_category,
 )
 
 
 def test_display_and_match_order_cover_every_category_exactly_once():
     assert set(DISPLAY_ORDER) == set(MATCH_ORDER) == set(CATEGORIES.keys())
-    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 37
-    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 37
+    assert len(DISPLAY_ORDER) == len(set(DISPLAY_ORDER)) == 36
+    assert len(MATCH_ORDER) == len(set(MATCH_ORDER)) == 36
 
 
 def test_maps_differently_worded_annual_maximum_labels_onto_one_category():
@@ -97,3 +99,59 @@ def test_network_value_keeps_only_the_first_network_name():
     # first word is the actual network name callers want.
     value = "Edge CCAD IP: 20% OP (excluding Pharmacy): 20% Pharmacy: 10% Maternity IP: 10%"
     assert clean_category_value("Network / Provider Tier", value) == "Edge"
+
+
+def test_cigna_accommodation_bullet_maps_to_room_type():
+    # Cigna's own wording bundles the room type into a bullet list under
+    # the generic "Hospital charges for:" label ("Accommodation on a
+    # private room basis for in-patient treatment") rather than a phrase
+    # containing "room accommodation"/"hospital room" at all.
+    label = "Hospital charges for: Accommodation on a private room basis for in-patient treatment"
+    assert map_label_to_category("In-patient /day case healthcare benefits", label) == "Room Type / Accommodation"
+
+
+def test_cigna_complications_of_pregnancy_maps_to_maternity_complications():
+    assert map_label_to_category("Maternity benefits", "Complications of pregnancy and childbirth") == "Maternity Complications"
+
+
+def test_cigna_vision_expenses_row_maps_to_optical_annual_limit():
+    # Cigna's own "Annual Maximum" row under Vision benefits just covers
+    # the eye exam (paid in full) - the real dollar limit for frames/
+    # lenses sits on this separate, more specific row instead.
+    label = "Expenses for: Prescribed lenses to correct vision, Eyeglass frames"
+    assert map_label_to_category("Vision benefits", label) == "Optical Annual Limit"
+
+
+def test_dental_class_coinsurance_combines_in_class_order():
+    rows = [
+        {"section": "Dental benefits", "label": "Class one Investigative and Preventative treatment", "value": "NIL co-pay"},
+        {"section": "Dental benefits", "label": "Class three Major restorative treatment", "value": "50% co-pay"},
+        {"section": "Dental benefits", "label": "Class two Basic restorative treatment", "value": "20% co-pay"},
+    ]
+    assert dental_class_coinsurance_from_rows(rows) == "Class one: NIL co-pay; Class two: 20% co-pay; Class three: 50% co-pay"
+
+
+def test_dental_class_coinsurance_returns_none_without_class_rows():
+    rows = [{"section": "Dental benefits", "label": "Annual maximum", "value": "USD 3,750"}]
+    assert dental_class_coinsurance_from_rows(rows) is None
+
+
+def test_looks_like_cigna_globalcare_detects_network_column_header():
+    # "In-Cigna Healthcare network"/"Out-of-Cigna Healthcare network" is
+    # this document family's own network-tier column header, occurring in
+    # effectively every Cigna Global Care export.
+    rows = [{"section": "", "label": "In-Cigna Healthcare network", "value": "Out-of-Cigna Healthcare network"}]
+    assert looks_like_cigna_globalcare(rows) is True
+    assert looks_like_cigna_globalcare([{"section": "", "label": "Something else", "value": "Covered"}]) is False
+
+
+def test_cigna_maternity_coinsurance_defaults_to_nil_when_maternity_is_covered():
+    # Cigna Global Care never states a maternity co-insurance figure at
+    # all - it's always NIL for this insurer, so it has to be supplied as
+    # a known default rather than extracted from a row that doesn't exist.
+    rows = [
+        {"section": "", "label": "In-Cigna Healthcare network", "value": "Out-of-Cigna Healthcare network"},
+        {"section": "Maternity benefits", "label": "Complications of pregnancy and childbirth", "value": "Covered"},
+    ]
+    summary = build_standard_summary_from_rows(rows)
+    assert summary["maternity_coinsurance"] == "NIL"
