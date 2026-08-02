@@ -357,8 +357,6 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
         # This layout's row 13 only splits In Network/Out of Network, not
         # IP/OP/Pharmacy/Dental/Optical like format 1's row 14 does - so
         # there's no reliable source for a treatment-type breakdown here.
-        # Its member-type-by-relation rows (format 1's 8/9) aren't a
-        # confirmed part of this layout either.
         "treatment_type_breakdown": [],
         "claims_by_member_type_value": [],
         "claims_by_member_type_count": [],
@@ -403,6 +401,37 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
 
     result["opening_members"] = _population_total(["5a", "5b", "5c"])
     result["closing_members"] = _population_total(["6a", "6b", "6c"])
+
+    def _member_type_rows_format2(row_num: int, cast) -> List[dict]:
+        # This layout's rows 7/8 (format 1's 8/9) split Inpatient/Outpatient/
+        # Pharmacy/Dental/Optical/Totals - one column narrower than format
+        # 1's, which also carries a "Not Yet Classified" column this layout
+        # doesn't have; left at 0 rather than omitted so both formats'
+        # dicts share the same shape for the UI and burning-cost endpoint.
+        member_rows = []
+        for letter in "abcdefghij":
+            row = _find_row(rows, f"{row_num}{letter}")
+            if not row or len(row) < 8:
+                continue
+            label = _cell(row[1])
+            if label.strip().lower() == "totals":
+                continue
+            member_rows.append(
+                {
+                    "relation": label,
+                    "in_patient": cast(_cell_number(row[2])),
+                    "out_patient": cast(_cell_number(row[3])),
+                    "pharmacy": cast(_cell_number(row[4])),
+                    "dental": cast(_cell_number(row[5])),
+                    "optical": cast(_cell_number(row[6])),
+                    "not_yet_classified": cast(0),
+                    "total": cast(_cell_number(row[7])),
+                }
+            )
+        return member_rows
+
+    result["claims_by_member_type_value"] = _member_type_rows_format2(7, float)
+    result["claims_by_member_type_count"] = _member_type_rows_format2(8, int)
 
     counts_by_letter: Dict[str, dict] = {}
     for letter in "abcdefghij":

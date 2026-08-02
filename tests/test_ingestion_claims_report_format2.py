@@ -20,6 +20,20 @@ SAMPLE_ROWS = [
     ["6a", "Male", "21", "2", "7", "35", "6", "-"],
     ["6b", "Single female", "27", "4", "4", "3", "-", "-"],
     ["6c", "Married female", "-", "-", "9", "21", "4", "-"],
+    ["7", "Claims data by member type (Value AED)", "Inpatient", "Outpatient", "Pharmacy", "Dental", "Optical", "Totals"],
+    # Real exports from this insurer render some cells with PDF-inserted
+    # whitespace INSIDE the number itself (e.g. "5 2,479" for "52,479"),
+    # same artifact the module docstring already describes for the
+    # monthly-paid section - _cell_number must strip it per cell here too.
+    ["7a", "Employee", "5 2,479", "193,638", "2 3,024", "1 3,883", "3 ,376", "286,400"],
+    ["7b", "Spouse", "9 ,833", "9 3,968", "1 6,995", "4 ,836", "2 ,331", "127,963"],
+    ["7c", "Dependents", "1 6,313", "4 7,917", "1 3,777", "6 ,330", "1 ,611", "85,947"],
+    ["7d", "Totals", "7 8,625", "335,523", "5 3,796", "2 5,048", "7 ,318", "500,310"],
+    ["8", "Claims data by member type (Number)", "Inpatient", "Outpatient", "Pharmacy", "Dental", "Optical", "Totals"],
+    ["8a", "Employee", "4", "3 25", "1 26", "2 9", "3", "487"],
+    ["8b", "Spouse", "1", "1 40", "5 9", "7", "3", "210"],
+    ["8c", "Dependents", "2", "1 15", "9 3", "1 4", "3", "227"],
+    ["8d", "Totals", "7", "5 80", "2 78", "5 0", "9", "924"],
     ["9a", "Dental", "-", "120,972", "-", None, None, "120,972"],
     [
         "9h",
@@ -72,6 +86,34 @@ def test_sums_the_three_population_categories_per_period():
     # Male(73) + Single female(34) + Married female(36) = 143
     assert result["opening_members"] == 143
     assert result["closing_members"] == 143
+
+
+def test_parses_member_type_breakdown_stripping_embedded_whitespace_from_numbers():
+    result = _parse_format2_from_rows(SAMPLE_ROWS)
+    assert result["claims_by_member_type_value"] == [
+        {
+            "relation": "Employee", "in_patient": 52479.0, "out_patient": 193638.0, "pharmacy": 23024.0,
+            "dental": 13883.0, "optical": 3376.0, "not_yet_classified": 0.0, "total": 286400.0,
+        },
+        {
+            "relation": "Spouse", "in_patient": 9833.0, "out_patient": 93968.0, "pharmacy": 16995.0,
+            "dental": 4836.0, "optical": 2331.0, "not_yet_classified": 0.0, "total": 127963.0,
+        },
+        {
+            "relation": "Dependents", "in_patient": 16313.0, "out_patient": 47917.0, "pharmacy": 13777.0,
+            "dental": 6330.0, "optical": 1611.0, "not_yet_classified": 0.0, "total": 85947.0,
+        },
+    ]
+    # The report's own "Totals" row (7d/8d) is a cross-check value, not a
+    # real member-type category, and is dropped rather than kept as a
+    # fourth "relation".
+    assert {row["relation"] for row in result["claims_by_member_type_value"]} == {"Employee", "Spouse", "Dependents"}
+
+    count_row = next(r for r in result["claims_by_member_type_count"] if r["relation"] == "Employee")
+    assert count_row == {
+        "relation": "Employee", "in_patient": 4, "out_patient": 325, "pharmacy": 126,
+        "dental": 29, "optical": 3, "not_yet_classified": 0, "total": 487,
+    }
 
 
 def test_keeps_multiline_wrapped_diagnosis_labels_intact():
