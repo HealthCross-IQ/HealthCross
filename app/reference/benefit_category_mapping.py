@@ -77,7 +77,7 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Organ Transplant": {
         "group": "Inpatient",
-        "keywords": ["organ transplant"],
+        "keywords": ["organ transplant", "transplant services"],
     },
     "Cancer Treatment": {
         "group": "Inpatient",

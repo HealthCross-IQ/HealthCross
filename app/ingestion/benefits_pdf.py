@@ -250,6 +250,22 @@ def extract_all_rows_by_tier(file: BinaryIO, filename: str) -> Dict[str, List[Di
         for tier in tiers:
             by_tier[tier].append({"label": label.title(), "value": "Covered"})
 
+    # The "Mental health conditions:" section states its own limit as a
+    # generic "In-patient / day-case treatment" / "Out-patient treatment"
+    # pair (the same bare wording other sections could in principle use),
+    # rather than a label that itself says "psychiatric" or "mental
+    # health" - nothing in the row-by-row extraction above ties it back to
+    # that section at all (this document's structure never preserves
+    # which section a row belongs to). "out-patienttreatment" only occurs
+    # once in the whole document, uniquely identifying this row, and the
+    # broker wants the out-patient figure specifically, not the in-patient
+    # one - so it becomes its own synthetic "Psychiatric Treatment" row.
+    psychiatric_row = rows.get("out-patienttreatment")
+    if psychiatric_row:
+        for tier, value in psychiatric_row.items():
+            if value:
+                by_tier[tier].append({"label": "Psychiatric Treatment", "value": value})
+
     return by_tier
 
 

@@ -42,6 +42,10 @@ def test_section_text_resolves_a_row_whose_own_label_has_no_signal():
     assert map_label_to_category("Dental Benefit (Limits are inclusive of coinsurance) *1", "X-ray") == "Dental Annual Limit"
 
 
+def test_maps_bupa_transplant_services_wording_onto_organ_transplant():
+    assert map_label_to_category("", "Transplant Services") == "Organ Transplant"
+
+
 def test_unmatched_label_returns_none():
     assert map_label_to_category("", "Some Insurer-Specific Niche Benefit") is None
 
