@@ -68,3 +68,23 @@ def test_parse_census_derives_age_from_dob_when_age_missing():
     records = parse_census(_xlsx(df), "census.xlsx")
     assert records[0]["age"] is not None
     assert records[0]["age"] >= 34
+
+
+def test_parse_census_derives_age_as_of_policy_start_date_not_today():
+    df = pd.DataFrame(
+        [
+            {
+                "Gender": "M",
+                "DOB": "1990-06-15",
+                "Marital Status": "Single",
+                "Relation": "Employee",
+                "Nationality": "Indian",
+                "Eff Date": "2020-01-01",
+            }
+        ]
+    )
+    records = parse_census(_xlsx(df), "census.xlsx")
+    # Turns 30 on 2020-06-15; policy started before that, so age at
+    # policy start is 29, not the member's current-day age.
+    assert records[0]["age"] == 29
+    assert records[0]["policy_start_date"].isoformat() == "2020-01-01"

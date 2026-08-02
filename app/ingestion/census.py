@@ -37,9 +37,9 @@ _SPOUSE_RELATIONS = {"wife", "husband", "spouse"}
 _CHILD_RELATIONS = {"son", "daughter", "child", "children"}
 
 
-def _calc_age(dob: date) -> int:
-    today = date.today()
-    return today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
+def _calc_age(dob: date, as_of: date | None = None) -> int:
+    as_of = as_of or date.today()
+    return as_of.year - dob.year - ((as_of.month, as_of.day) < (dob.month, dob.day))
 
 
 def _classify_relation(relation: Any) -> str:
@@ -71,11 +71,22 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
 
     records = []
     for _, row in df.iterrows():
+        def _date_col(col_name):
+            if col_name not in df.columns:
+                return None
+            parsed = pd.to_datetime(row.get(col_name), errors="coerce")
+            return parsed.date() if pd.notna(parsed) else None
+
+        policy_start_date = _date_col("policy_start_date")
+
         age = row.get("age")
         if pd.isna(age) and "date_of_birth" in df.columns:
             dob = pd.to_datetime(row.get("date_of_birth"), errors="coerce")
             if pd.notna(dob):
-                age = _calc_age(dob.date())
+                # Age as of the scheme's own inception/renewal date, not
+                # today's date - underwriting age bands are fixed at
+                # policy start, not recomputed on every ingestion run.
+                age = _calc_age(dob.date(), policy_start_date)
 
         gender = row.get("gender")
         if isinstance(gender, str) and gender.strip():
@@ -95,12 +106,6 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
         nationality = row.get("nationality")
         nationality = str(nationality).strip() if pd.notna(nationality) else None
 
-        def _date_col(col_name):
-            if col_name not in df.columns:
-                return None
-            parsed = pd.to_datetime(row.get(col_name), errors="coerce")
-            return parsed.date() if pd.notna(parsed) else None
-
         records.append(
             {
                 "employee_ref": str(row.get("employee_ref")) if pd.notna(row.get("employee_ref")) else None,
@@ -115,7 +120,7 @@ def parse_census(file: BinaryIO, filename: str) -> List[dict]:
                 "nationality_zone": classify_zone(nationality) if nationality else None,
                 "dependents_count": dependents,
                 "join_date": join_date,
-                "policy_start_date": _date_col("policy_start_date"),
+                "policy_start_date": policy_start_date,
                 "policy_end_date": _date_col("policy_end_date"),
                 "member_start_date": _date_col("member_start_date"),
                 "member_end_date": _date_col("member_end_date"),
