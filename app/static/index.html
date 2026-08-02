@@ -99,6 +99,15 @@
     font-weight: 600;
   }
   .case-list { display: flex; flex-direction: column; gap: 3px; overflow-y: auto; }
+  .case-group-heading {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--ink-muted);
+    font-weight: 600;
+    margin: 10px 0 2px;
+  }
+  .case-group-heading:first-child { margin-top: 2px; }
   .case-item {
     text-align: left;
     background: none;
@@ -432,6 +441,15 @@ function svgScoreMeter(score, tier) {
 
 /* ---------------- cases sidebar ---------------- */
 
+function _caseItemHtml(c) {
+  return `
+    <button class="case-item ${currentCase && currentCase.id === c.id ? 'active' : ''}" onclick="selectCase(${c.id})">
+      <span class="company">${escapeHtml(c.company_name)}</span>
+      <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
+    </button>
+  `;
+}
+
 async function loadCases() {
   const cases = await api('/cases');
   const list = document.getElementById('caseList');
@@ -439,12 +457,12 @@ async function loadCases() {
     list.innerHTML = '<div class="empty-state" style="padding:8px 0;">No cases yet</div>';
     return;
   }
-  list.innerHTML = cases.map(c => `
-    <button class="case-item ${currentCase && currentCase.id === c.id ? 'active' : ''}" onclick="selectCase(${c.id})">
-      <span class="company">${escapeHtml(c.company_name)}</span>
-      <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
-    </button>
-  `).join('');
+  const renewals = cases.filter(c => c.business_type === 'existing');
+  const newBusiness = cases.filter(c => c.business_type !== 'existing');
+  list.innerHTML = `
+    ${newBusiness.length ? `<h3 class="case-group-heading">New Business</h3>${newBusiness.map(_caseItemHtml).join('')}` : ''}
+    ${renewals.length ? `<h3 class="case-group-heading">Renewal</h3>${renewals.map(_caseItemHtml).join('')}` : ''}
+  `;
 }
 
 function showNewCaseForm() {
