@@ -217,6 +217,7 @@
   table th { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-variant-numeric: normal; }
   td.cmp-cell-yes { background: rgba(46, 160, 67, 0.12); }
   td.cmp-cell-no { background: rgba(218, 54, 51, 0.10); color: var(--ink-muted); }
+  td.cmp-cell-neutral { color: inherit; }
 
   /* Tabs */
   .tab-bar { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 1px solid var(--border); }
@@ -637,9 +638,76 @@ function addComparisonColumn() {
 
 let lastComparisonResult = null;
 
-function comparisonCellHtml(value) {
+// A lower co-insurance/deductible/copay is the better benefit (less cost to
+// the member) - the opposite of every other numeric category here, where a
+// higher limit is the better benefit.
+const _LOWER_IS_BETTER_LABELS = new Set([
+  'Outpatient Co-insurance/Deductible', 'Dental Co-insurance', 'Optical Co-insurance',
+]);
+
+function _firstComparableNumber(value) {
+  if (!value) return null;
+  // Prefer the AED figure unify_currency_to_aed appended in parentheses, so
+  // an originally-USD limit and an originally-AED limit compare on the same
+  // scale rather than by coincidence of which currency was written first.
+  const aedMatch = value.match(/AED\s*([\d,]+(?:\.\d+)?)/i);
+  if (aedMatch) return parseFloat(aedMatch[1].replace(/,/g, ''));
+  const numMatch = value.match(/[\d,]+(?:\.\d+)?/);
+  return numMatch ? parseFloat(numMatch[0].replace(/,/g, '')) : null;
+}
+
+// Returns {planId: 'better'|'worse'|'neutral'|'missing'} for one comparison
+// row - so highlighting reflects which plan's benefit actually wins, not
+// merely which plans happen to have a matching row at all (two plans both
+// offering optical cover shouldn't both show green if one's limit is
+// clearly higher than the other's).
+function rankRowCells(label, planIds, values) {
+  const result = {};
+  const hasValue = (id) => values[id] !== null && values[id] !== undefined && values[id] !== '';
+
+  if (planIds.length < 2) {
+    // Nothing to compare against - fall back to plain presence.
+    planIds.forEach(id => { result[id] = hasValue(id) ? 'better' : 'missing'; });
+    return result;
+  }
+
+  planIds.forEach(id => { result[id] = 'missing'; });
+  const present = planIds.filter(hasValue);
+  if (present.length === 0) return result;
+  if (present.length === 1) {
+    result[present[0]] = 'neutral'; // only one plan even lists it - no other plan to be "better" than
+    return result;
+  }
+
+  const numbers = {};
+  const allNumeric = present.every(id => {
+    const n = _firstComparableNumber(values[id]);
+    numbers[id] = n;
+    return n !== null;
+  });
+  if (!allNumeric) {
+    // Can't safely rank text like "Worldwide" vs "Private room" against
+    // each other - leave present values unhighlighted, missing stays red.
+    present.forEach(id => { result[id] = 'neutral'; });
+    return result;
+  }
+
+  const lowerIsBetter = _LOWER_IS_BETTER_LABELS.has(label);
+  const vals = present.map(id => numbers[id]);
+  const best = lowerIsBetter ? Math.min(...vals) : Math.max(...vals);
+  const worst = lowerIsBetter ? Math.max(...vals) : Math.min(...vals);
+  present.forEach(id => {
+    if (best === worst) { result[id] = 'neutral'; return; } // tie - equal benefit
+    if (numbers[id] === best) result[id] = 'better';
+    else if (numbers[id] === worst) result[id] = 'worse';
+    else result[id] = 'neutral';
+  });
+  return result;
+}
+
+function comparisonCellHtml(value, rank) {
   const has = value !== null && value !== undefined && value !== '';
-  const cls = has ? 'cmp-cell-yes' : 'cmp-cell-no';
+  const cls = (rank === 'better') ? 'cmp-cell-yes' : (rank === 'neutral') ? 'cmp-cell-neutral' : 'cmp-cell-no';
   return `<td class="${cls}">${escapeHtml(has ? value : '—')}</td>`;
 }
 
@@ -657,7 +725,7 @@ async function runReferenceComparison() {
     area.innerHTML = `
       <div class="card">
         <h3>Detailed comparison</h3>
-        <div class="hint">Every plan's own wording is mapped onto this fixed 36-benefit list, so a "—" means the plan genuinely has no matching benefit - not that its wording didn't match. Green = covered, red = "—".</div>
+        <div class="hint">Every plan's own wording is mapped onto this fixed 36-benefit list, so a "—" means the plan genuinely has no matching benefit - not that its wording didn't match. Green = the better benefit in that row, red = the worse (or missing) benefit - not simply "has a value".</div>
         <div style="margin-bottom:12px;">
           <button onclick="exportComparisonPrintView()">Print / Save as PDF</button>
           <button onclick="exportComparisonCsv()">Export Excel (CSV)</button>
@@ -666,12 +734,16 @@ async function runReferenceComparison() {
           <h4>${escapeHtml(section.section || 'General')}</h4>
           <table>
             <tr><th>Benefit</th>${result.plans.map(p => `<th>${escapeHtml(p.insurer_name)}<br>${escapeHtml(p.plan_label)}</th>`).join('')}</tr>
-            ${section.rows.map(row => `
+            ${section.rows.map(row => {
+              const planIds = result.plans.map(p => p.id);
+              const ranks = rankRowCells(row.label, planIds, row.values);
+              return `
               <tr>
                 <td>${escapeHtml(row.label)}</td>
-                ${result.plans.map(p => comparisonCellHtml(row.values[p.id])).join('')}
+                ${result.plans.map(p => comparisonCellHtml(row.values[p.id], ranks[p.id])).join('')}
               </tr>
-            `).join('')}
+            `;
+            }).join('')}
           </table>
         `).join('')}
       </div>
@@ -713,6 +785,7 @@ function exportComparisonPrintView() {
   th { background: #4B2E5A; color: #fff; font-weight: 700; }
   .yes { background: #d9f2d9; }
   .no { background: #f8d7d7; color: #a33; }
+  .neutral { background: transparent; }
   @media print { body { margin: 8px; } }
 </style></head><body>
   <h1>Detailed Benefits Comparison</h1>
@@ -720,16 +793,22 @@ function exportComparisonPrintView() {
     <h2>${escapeHtml(section)}</h2>
     <table>
       <tr><th>Benefit</th>${planNames.map(n => `<th>${n}</th>`).join('')}</tr>
-      ${bySection[section].map(r => `
+      ${bySection[section].map(r => {
+        const planIds = result.plans.map(p => p.id);
+        const ranks = rankRowCells(r.label, planIds, r.values);
+        return `
         <tr>
           <td>${escapeHtml(r.label)}</td>
           ${result.plans.map(p => {
             const v = r.values[p.id];
             const has = v !== null && v !== undefined && v !== '';
-            return `<td class="${has ? 'yes' : 'no'}">${escapeHtml(has ? v : '—')}</td>`;
+            const rank = ranks[p.id];
+            const cls = (rank === 'better') ? 'yes' : (rank === 'neutral') ? 'neutral' : 'no';
+            return `<td class="${cls}">${escapeHtml(has ? v : '—')}</td>`;
           }).join('')}
         </tr>
-      `).join('')}
+      `;
+      }).join('')}
     </table>
   `).join('')}
   <script>window.onload = () => window.print();<\/script>

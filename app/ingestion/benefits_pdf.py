@@ -55,9 +55,115 @@ def _clean_cell(value: Optional[str]) -> str:
     return " ".join(value.replace("\n", " ").split())
 
 
+# Some rows' explanation text states a DIFFERENT percentage schedule per
+# tier group within the same shared cell (Bupa's dental co-insurance, in
+# particular: "For Business Select and Business Premier: ... For Business
+# Elite and Business Ultimate: ...") rather than one value for every tier.
+_TIER_GROUP_HEADER_RE = re.compile(r"for\s+business\s+([a-z]+(?:\s+and\s+business\s+[a-z]+)*)\s*:", re.IGNORECASE)
+
+# A percentage-of-treatment-type line ("100 percent of preventive
+# treatment...") - split on the start of each one rather than matched whole,
+# since these run on with no sentence-ending punctuation between them
+# (only the last one ends in a period) and a lazy "any character" match
+# has no other reliable stopping point. The negative lookbehind keeps a
+# multi-digit number ("100") from being treated as if it also matched
+# starting from its own trailing digits ("00 percent of...").
+_PERCENT_LINE_START_RE = re.compile(r"(?<!\d)\d+\s*percent of", re.IGNORECASE)
+_PERCENT_LINE_TRAILING_BOILERPLATE = (
+    "Follow up on", "Note:", "Dental and optical", "Please note", "Pre-authorisation",
+)
+
+
+def _split_note_by_tier(note: str, tiers: List[str]) -> Dict[str, str]:
+    markers = list(_TIER_GROUP_HEADER_RE.finditer(note or ""))
+    if not markers:
+        return {tier: note for tier in tiers}
+
+    result: Dict[str, str] = {}
+    for i, marker in enumerate(markers):
+        start = marker.end()
+        end = markers[i + 1].start() if i + 1 < len(markers) else len(note)
+        segment = note[start:end].strip()
+        named_tiers = {t.strip() for t in marker.group(1).lower().replace("business", "").split("and") if t.strip()}
+        for tier in tiers:
+            if tier.lower() in named_tiers:
+                result[tier] = segment
+    for tier in tiers:
+        result.setdefault(tier, note)  # not named in any group - the note applies to it as a whole
+    return result
+
+
+def _percent_lines(note: str) -> List[str]:
+    if not note:
+        return []
+    parts = re.split(f"(?={_PERCENT_LINE_START_RE.pattern})", note, flags=re.IGNORECASE)
+    lines = [p.strip().rstrip(".").strip() for p in parts if _PERCENT_LINE_START_RE.match(p.strip())]
+    cleaned = []
+    for line in lines:
+        for boilerplate in _PERCENT_LINE_TRAILING_BOILERPLATE:
+            idx = line.find(boilerplate)
+            if idx != -1:
+                line = line[:idx].strip()
+        if line:
+            cleaned.append(line)
+    return cleaned
+
+
+def _dental_coinsurance_from_note(note: str) -> Optional[str]:
+    lines = _percent_lines(note)
+    return "; ".join(lines) if lines else None
+
+
+_OPTICAL_PERCENT_RE = re.compile(r"(\d+)\s*percent of eligible costs", re.IGNORECASE)
+
+
+def _optical_coinsurance_from_note(note: str) -> Optional[str]:
+    """The note states the percentage of costs COVERED (e.g. "75 percent of
+    eligible costs..."), not the member's co-insurance share - this is the
+    complement of that figure (100% - 75% = 25% co-insurance)."""
+    match = _OPTICAL_PERCENT_RE.search(note or "")
+    if not match:
+        return None
+    return f"{100 - float(match.group(1)):.0f}%"
+
+
+# Some documents (Bupa's, in particular) state extra covered conditions as
+# a plain prose bullet list elsewhere in the document - "In addition to the
+# benefits detailed in the 'Table of Benefits' above, the following
+# benefits are also covered under this health plan: Chronic conditions -
+# any treatment for ... is covered. Pre-existing conditions - any treatment
+# for ... is covered." - rather than as a row in the tier-value table at
+# all, so the ordinary table-row extraction never sees them. These apply
+# uniformly to every tier (no tier breakdown is given in this bullet list).
+_ALSO_COVERED_BULLET_RE = re.compile(r"([A-Z][a-zA-Z /\-]{3,60}?)\s*[–-]\s*any treatment[^.]*?is covered")
+
+
+def _also_covered_bullets(pdf: "pdfplumber.PDF") -> List[str]:
+    full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+    return [m.group(1).strip() for m in _ALSO_COVERED_BULLET_RE.finditer(full_text)]
+
+
 def _extract_benefit_rows(pdf: "pdfplumber.PDF") -> Dict[str, Dict[str, str]]:
     """Returns {normalized_label: {tier_name: value_text}} across every page."""
+    rows, _ = _extract_benefit_rows_with_notes(pdf)
+    return rows
+
+
+def _extract_benefit_rows_with_notes(
+    pdf: "pdfplumber.PDF",
+) -> "tuple[Dict[str, Dict[str, str]], Dict[str, str]]":
+    """Same as `_extract_benefit_rows`, but also returns {normalized_label:
+    note_text} - the free-text "Explanation of benefits" column that sits
+    to the RIGHT of the tier-value table (this document's own explanation
+    column doesn't parse as part of the same bordered table pdfplumber
+    detects for the tier values themselves, same as how the label to the
+    LEFT of it needs its own separate region crop). Most rows' explanation
+    is generic filler, but some (e.g. dental/optical's co-insurance
+    percentage breakdown) carry real structured detail no other column
+    states at all.
+    """
     rows: Dict[str, Dict[str, str]] = {}
+    notes: Dict[str, str] = {}
 
     for page in pdf.pages:
         for table in page.find_tables():
@@ -87,7 +193,13 @@ def _extract_benefit_rows(pdf: "pdfplumber.PDF") -> Dict[str, Dict[str, str]]:
                 }
                 rows.setdefault(key, {}).update(tier_values)
 
-    return rows
+                if key not in notes:
+                    note_region = page.within_bbox((table.bbox[2], table_row.bbox[1], page.width, table_row.bbox[3]))
+                    note = _clean_cell(note_region.extract_text())
+                    if note:
+                        notes[key] = note
+
+    return rows, notes
 
 
 def parse_benefits_pdf(file: BinaryIO, filename: str) -> Dict[str, Dict[str, str]]:
@@ -103,7 +215,8 @@ def extract_all_rows_by_tier(file: BinaryIO, filename: str) -> Dict[str, List[Di
     international benefits comparison, which wants every row verbatim.
     """
     with pdfplumber.open(file) as pdf:
-        rows = _extract_benefit_rows(pdf)
+        rows, notes = _extract_benefit_rows_with_notes(pdf)
+        also_covered = _also_covered_bullets(pdf)
 
     tiers = sorted({tier for values in rows.values() for tier in values.keys()})
     by_tier: Dict[str, List[Dict[str, str]]] = {tier: [] for tier in tiers}
@@ -111,6 +224,32 @@ def extract_all_rows_by_tier(file: BinaryIO, filename: str) -> Dict[str, List[Di
         for tier, value in tier_values.items():
             if value:
                 by_tier[tier].append({"label": label.title(), "value": value})
+
+    # The dental/optical LIMIT rows only ever get the currency amount - the
+    # co-insurance percentage schedule lives entirely in each row's own
+    # explanation-column note, never as a value in the tier-value table
+    # itself, so it needs its own synthetic row per tier rather than
+    # relying on the generic label/value loop above to have found it.
+    for label, category_label in (("dental", "Dental Co-insurance"), ("optical", "Optical Co-insurance")):
+        note = notes.get(label)
+        if not note:
+            continue
+        per_tier_note = _split_note_by_tier(note, tiers)
+        for tier in tiers:
+            coinsurance = (
+                _dental_coinsurance_from_note(per_tier_note[tier])
+                if label == "dental"
+                else _optical_coinsurance_from_note(per_tier_note[tier])
+            )
+            if coinsurance:
+                by_tier[tier].append({"label": category_label, "value": coinsurance})
+
+    # Bullet-list "also covered" benefits (e.g. chronic/pre-existing
+    # conditions) stated once in prose, uniformly for every tier.
+    for label in also_covered:
+        for tier in tiers:
+            by_tier[tier].append({"label": label.title(), "value": "Covered"})
+
     return by_tier
 
 

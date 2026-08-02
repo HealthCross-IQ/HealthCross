@@ -22,6 +22,7 @@ from app.reference.benefit_category_mapping import (
     CATEGORIES,
     DISPLAY_ORDER,
     clean_category_value,
+    extract_maternity_complications_clause,
     map_label_to_category,
     unify_currency_to_aed,
 )
@@ -217,6 +218,20 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             # already-found value with a less specific later row.
             cleaned = clean_category_value(category, value)
             category_values[category].setdefault(plan.id, unify_currency_to_aed(cleaned))
+
+    # Some documents (HealthCROSS Global's, in particular) state one
+    # combined maternity in-patient limit rather than itemizing Normal
+    # Delivery and C-Section as their own rows - that one limit covers
+    # both, so both should show it too rather than a misleading "-" next
+    # to a plan whose Maternity Annual Limit row plainly does cover them.
+    for plan in ordered_plans:
+        maternity_value = category_values["Maternity Annual Limit"].get(plan.id)
+        if maternity_value:
+            category_values["Normal Delivery"].setdefault(plan.id, maternity_value)
+            category_values["C-Section"].setdefault(plan.id, maternity_value)
+            complications = extract_maternity_complications_clause(maternity_value)
+            if complications:
+                category_values["Maternity Complications"].setdefault(plan.id, complications)
 
     result_sections = []
     current_group = None

@@ -54,7 +54,7 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Network / Provider Tier": {
         "group": "General",
-        "keywords": ["medical providers network", "available network", "network in the uae"],
+        "keywords": ["medical providers network", "available network", "network in the uae", "medical network"],
     },
     "Room Type / Accommodation": {
         "group": "Inpatient",
@@ -92,7 +92,13 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": [
             "general practitioner", "specialist or consultant", "out-patient consultation",
             "outpatient consultation", "gp consultation", "gp/specialist", "gp / specialist",
-            "specialist consultation",
+            # Deliberately no bare "specialist consultation" - some documents
+            # (HealthCROSS Global's, in particular) also have an INPATIENT
+            # "Specialist Consultations" row of their own, and a loose match
+            # here would let that unrelated inpatient row claim this
+            # outpatient-only category before the real "GP/Specialist
+            # Consultations" row (further down the document) ever got a
+            # chance to (first match per plan wins).
         ],
     },
     "Diagnostics (Lab/X-ray/Imaging)": {
@@ -109,11 +115,28 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Outpatient Co-insurance/Deductible": {
         "group": "Outpatient",
-        "keywords": ["outpatient co-insurance", "out-patient co-insurance", "outpatient deductible", "outpatient coinsurance"],
+        "keywords": [
+            "outpatient co-insurance", "out-patient co-insurance", "outpatient deductible", "outpatient coinsurance",
+            # Some documents (HealthCROSS Global's) state an outpatient
+            # copay against a specific service line ("Laboratory, Radiology
+            # and Pathology Tests-Copay") rather than one general
+            # "Outpatient Co-insurance" row - the "-Copay" is what marks it
+            # as the co-payment figure rather than the service's own
+            # coverage/limit, which belongs to Diagnostics instead.
+            "-copay",
+        ],
     },
     "Antenatal Care": {
         "group": "Maternity",
-        "keywords": ["antenatal", "ante natal", "ante-natal"],
+        "keywords": [
+            "antenatal", "ante natal", "ante-natal",
+            # Some documents (HealthCROSS Global's, in particular) don't use
+            # the word "antenatal" at all - their maternity OUTPATIENT limit
+            # IS the antenatal-checkups benefit, as distinct from their
+            # maternity INPATIENT limit (the delivery/hospital-stay cost,
+            # mapped to Maternity Annual Limit below).
+            "maternity outpatient", "maternity out-patient",
+        ],
     },
     "Normal Delivery": {
         "group": "Maternity",
@@ -135,8 +158,7 @@ CATEGORIES: Dict[str, Dict] = {
         "group": "Maternity",
         "keywords": [
             "maternity and childbirth cover", "maternity limit", "maternity annual",
-            "maternity outpatient", "maternity inpatient", "maternity in-patient",
-            "maternity out-patient", "maternity benefit",
+            "maternity inpatient", "maternity in-patient", "maternity benefit",
             # Bare catch-all, checked last among the maternity categories -
             # every more specific one (Antenatal, Normal Delivery, C-Section,
             # Complications, Newborn) already gets first pick in MATCH_ORDER,
@@ -167,6 +189,10 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": [
             "health check-up", "health check up", "health check,", "health check/",
             "wellness health check", "routine health examination", "wellness package",
+            # Bupa's own wellness/screening benefit is worded as a "Wellness -"
+            # prefixed list of the specific tests it covers, rather than a
+            # phrase containing "health check" at all.
+            "wellness - mammogram",
         ],
     },
     "Adult Vaccinations": {
@@ -239,6 +265,12 @@ MATCH_ORDER: List[str] = [
     # category would never be reached.
     "Dental Co-insurance", "Dental Annual Limit",
     "Optical Co-insurance", "Optical Annual Limit",
+    # Checked before Diagnostics/GP-Specialist/Physiotherapy/Pharmacy for the
+    # same reason as Dental/Optical Co-insurance above - a service-specific
+    # copay row (e.g. "Laboratory, Radiology and Pathology Tests-Copay")
+    # would otherwise be claimed by Diagnostics' own "laboratory"/"pathology"
+    # keywords before this category ever got a chance.
+    "Outpatient Co-insurance/Deductible",
     "Alternative Medicine Limit",
     "Health Check-up", "Adult Vaccinations", "Cancer Screening",
     "Emergency Medical Evacuation & Repatriation",
@@ -247,7 +279,7 @@ MATCH_ORDER: List[str] = [
     "Room Type / Accommodation", "Companion / Parental Accommodation",
     "ICU / Intensive Care", "Organ Transplant", "Cancer Treatment", "Kidney Dialysis", "Surgery",
     "GP / Specialist Consultation", "Diagnostics (Lab/X-ray/Imaging)", "Physiotherapy",
-    "Prescribed Medicines / Pharmacy", "Outpatient Co-insurance/Deductible",
+    "Prescribed Medicines / Pharmacy",
     "Home Country Cover", "Area of Cover",
     "Network / Provider Tier",
     "Pre-existing & Chronic Conditions",
@@ -371,6 +403,28 @@ def clean_category_value(category: str, value: str) -> str:
         return value
     match = _NETWORK_COINSURANCE_MARKER_RE.search(value)
     return value[: match.start()].strip() if match else value
+
+
+# Some documents (Bupa's, in particular) never give "Maternity
+# Complications" its own row - it's one clause folded into the same combined
+# "Maternity and childbirth" value as the overall limit ("...Complications
+# of maternity and childbirth: Paid in full"), so a plain per-row category
+# match never reaches it (the whole value already belongs to Maternity
+# Annual Limit). Pulled out of that already-matched value instead of
+# requiring its own row.
+_MATERNITY_COMPLICATIONS_CLAUSE_RE = re.compile(
+    r"complications? of maternity(?: and childbirth)?\s*:?\s*([^.;]+)", re.IGNORECASE
+)
+
+
+def extract_maternity_complications_clause(maternity_annual_limit_value: Optional[str]) -> Optional[str]:
+    if not maternity_annual_limit_value:
+        return None
+    match = _MATERNITY_COMPLICATIONS_CLAUSE_RE.search(maternity_annual_limit_value)
+    if not match:
+        return None
+    clause = match.group(1).strip().rstrip(".")
+    return clause or None
 
 
 # Bridges this 38-category master list onto the older, fixed 11-field
