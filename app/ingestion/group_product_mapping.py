@@ -32,7 +32,6 @@ def parse_group_product_mapping(file: BinaryIO, filename: str) -> List[dict]:
         df = pd.read_csv(file)
     else:
         df = pd.read_excel(file)
-
     df = map_columns(df, GROUP_PRODUCT_ALIASES)
 
     rows = []

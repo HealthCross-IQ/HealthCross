@@ -408,6 +408,8 @@ class PortfolioSummaryRow(BaseModel):
     loss_ratio_vs_standard: Optional[float] = None
     loss_ratio_vs_actual: Optional[float] = None
     actual_vs_standard_pct: Optional[float] = None
+    earned_member_years: float = 0.0
+    burning_cost: Optional[float] = None  # actual claims per earned member-year (AED per member per annum)
 
 
 class PortfolioSummaryOut(BaseModel):
@@ -417,3 +419,11 @@ class PortfolioSummaryOut(BaseModel):
     out_of_scope_member_count: int
     unmapped_product_member_count: int
     unmapped_network_member_count: int
+
+
+class PortfolioDataAsOfIn(BaseModel):
+    data_as_of_date: date
+
+
+class PortfolioDataAsOfOut(BaseModel):
+    data_as_of_date: Optional[date] = None

@@ -281,6 +281,7 @@
     <button class="primary" onclick="showNewCaseForm()">+ New Case</button>
     <button onclick="showInternationalComparison()">International comparison</button>
     <button onclick="showPortfolioAnalysis()">Portfolio Analysis</button>
+    <button onclick="showPortfolioInsights()">Portfolio Insights</button>
     <h2>Cases</h2>
     <div class="case-list" id="caseList"></div>
   </aside>
@@ -2073,13 +2074,83 @@ function nbTierLadderHtml(categoryResult) {
 /* ---------------- Portfolio Analysis ---------------- */
 
 let paLastSummary = null;
+let paLastAgeGender = null;
 let paGroupBy = 'product';
+let paPolicyYear = '';
+let paSearchTerm = '';
+let paDataAsOf = null;
+let paFilters = { product: '', network: '', region: '', nationality_zone: '', gender: '', relation: '', master_client: '' };
+let paFilterOptions = { product: [], network: [], region: [], nationality_zone: [], gender: [], relation: [] };
+let paMasterClientList = [];
+
+async function paLoadFilterOptions() {
+  try {
+    const [options, masterClients] = await Promise.all([
+      api('/portfolio-analysis/filter-options'),
+      api('/portfolio-analysis/master-clients'),
+    ]);
+    paFilterOptions = options;
+    paMasterClientList = masterClients;
+  } catch (err) {
+    // Non-fatal - filters just show as empty dropdowns until data is uploaded.
+  }
+}
+
+function paFiltersRowHtml() {
+  return `
+    ${paFilterSelectHtml('pa-filter-master-client', 'Master client filter', paFilters.master_client, paMasterClientList, 200)}
+    ${paFilterSelectHtml('pa-filter-product', 'Product filter', paFilters.product, paFilterOptions.product, 130)}
+    ${paFilterSelectHtml('pa-filter-network', 'Network filter', paFilters.network, paFilterOptions.network, 160)}
+    ${paFilterSelectHtml('pa-filter-region', 'Region filter', paFilters.region, paFilterOptions.region, 140)}
+    ${paFilterSelectHtml('pa-filter-nationality_zone', 'Nationality zone filter', paFilters.nationality_zone, paFilterOptions.nationality_zone, 170)}
+    ${paFilterSelectHtml('pa-filter-gender', 'Gender filter', paFilters.gender, paFilterOptions.gender, 90)}
+    ${paFilterSelectHtml('pa-filter-relation', 'Relation filter', paFilters.relation, paFilterOptions.relation, 140)}
+  `;
+}
+
+async function paRefreshFilterOptionsUI() {
+  await paLoadFilterOptions();
+  const row = document.getElementById('pa-filters-row');
+  if (row) row.innerHTML = paFiltersRowHtml();
+}
+
+function paFilterSelectHtml(id, label, currentValue, options, width) {
+  return `
+    <div>
+      <label>${escapeHtml(label)}</label>
+      <select id="${id}" style="width:${width}px;">
+        <option value="">-- Any --</option>
+        ${options.map(v => `<option value="${escapeHtml(v)}" ${v === currentValue ? 'selected' : ''}>${escapeHtml(v)}</option>`).join('')}
+      </select>
+    </div>
+  `;
+}
+
+function paReadFilterInputs() {
+  paPolicyYear = document.getElementById('pa-policy-year-filter').value.trim();
+  paFilters = {
+    product: document.getElementById('pa-filter-product').value,
+    network: document.getElementById('pa-filter-network').value,
+    region: document.getElementById('pa-filter-region').value,
+    nationality_zone: document.getElementById('pa-filter-nationality_zone').value,
+    gender: document.getElementById('pa-filter-gender').value,
+    relation: document.getElementById('pa-filter-relation').value,
+    master_client: document.getElementById('pa-filter-master-client').value,
+  };
+}
+
+function paBuildFilterParams(base) {
+  const params = new URLSearchParams(base);
+  if (paPolicyYear) params.set('policy_year', paPolicyYear);
+  Object.entries(paFilters).forEach(([key, value]) => { if (value) params.set(key, value); });
+  return params;
+}
 
 function portfolioAnalysisPanelHtml() {
   return `
     <div class="card">
       <h3>Portfolio Analysis</h3>
-      <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone. Each upload wholesale-replaces the previous one.</div>
+      <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone/Client/Gender/Relation/Policy year. Each upload wholesale-replaces the previous one.</div>
       <div class="row" style="align-items:flex-end; flex-wrap:wrap;">
         <div>
           <label>Membership export</label>
@@ -2099,11 +2170,25 @@ function portfolioAnalysisPanelHtml() {
           <button onclick="paUploadFile('group-product-mapping')">Upload</button>
           <span id="pa-status-mapping" class="status-pending"></span>
         </div>
+        <div>
+          <label>Subgroup &rarr; Master Group mapping</label>
+          <input type="file" id="pa-file-subgroup-mapping" accept=".xlsx,.csv">
+          <button onclick="paUploadFile('subgroup-mapping')">Upload</button>
+          <span id="pa-status-subgroup-mapping" class="status-pending"></span>
+        </div>
+        <div>
+          <label>Data as of (production/extract date)</label>
+          <input type="date" id="pa-data-as-of">
+          <button onclick="paSetDataAsOf()">Save date</button>
+          <span id="pa-status-as-of" class="status-pending"></span>
+        </div>
       </div>
+      <div class="hint">Set this to the date the Members/Claims export was actually produced (e.g. "as of 15/07/2026") - earned premium proration measures elapsed policy time against this date by default, instead of whatever day you happen to click "Run analysis". Included automatically with your next Membership/Claims upload, or set it directly with "Save date" any time.</div>
+      <div class="hint">"Subgroup &rarr; Master Group mapping" is a plain two-column sheet (Subgroup, Group Name) - each subgroup's row names the master policy it actually belongs to (a master's own row maps to itself). This is the authoritative source for "Client (Master)" grouping/filtering, since the Membership export's own MASTERCONTRACT column isn't reliable for this.</div>
     </div>
     <div class="card">
       <h3>Run analysis</h3>
-      <div class="row" style="align-items:flex-end;">
+      <div class="row" style="align-items:flex-end; flex-wrap:wrap;">
         <div>
           <label>Group by</label>
           <select onchange="paSetGroupBy(this.value)">
@@ -2111,33 +2196,94 @@ function portfolioAnalysisPanelHtml() {
             <option value="network" ${paGroupBy === 'network' ? 'selected' : ''}>Network</option>
             <option value="region" ${paGroupBy === 'region' ? 'selected' : ''}>Region</option>
             <option value="nationality_zone" ${paGroupBy === 'nationality_zone' ? 'selected' : ''}>Nationality zone</option>
+            <option value="master_client" ${paGroupBy === 'master_client' ? 'selected' : ''}>Client (Master)</option>
+            <option value="client" ${paGroupBy === 'client' ? 'selected' : ''}>Client (Subgroup)</option>
+            <option value="gender" ${paGroupBy === 'gender' ? 'selected' : ''}>Gender</option>
+            <option value="relation" ${paGroupBy === 'relation' ? 'selected' : ''}>Relation</option>
+            <option value="policy_year" ${paGroupBy === 'policy_year' ? 'selected' : ''}>Policy year</option>
           </select>
+        </div>
+        <div>
+          <label>Policy year filter (optional)</label>
+          <input type="text" id="pa-policy-year-filter" placeholder="e.g. 2026" value="${escapeHtml(paPolicyYear)}" style="width:100px;">
         </div>
         <div><button class="primary" onclick="paRunAnalysis()">Run analysis</button></div>
       </div>
+      <div class="row" id="pa-filters-row" style="align-items:flex-end; flex-wrap:wrap;">
+        ${paFiltersRowHtml()}
+      </div>
+      <div class="hint">Master client shows one row per master policy, combining all its subgroups - pick one from the Master client filter, then switch Group by to "Client (Subgroup)" to see that master's own subgroups broken out. Use the policy year filter when a client has already renewed - some members may still show last year's policy alongside this year's in the same upload. Stack any of the filters above together (e.g. Product=Gold + Network=MSH Platinum) to drill into a specific slice - they combine with whatever's chosen for Group by. Filter dropdowns only list values actually present in your uploaded book.</div>
     </div>
     <div id="pa-result-area">${paLastSummary ? paSummaryHtml(paLastSummary) : ''}</div>
+    <div class="card">
+      <h3>Burning cost by age band &amp; gender</h3>
+      <div class="hint">Bucketed into the SAME age-band structure the standard pricing rate card itself uses, so each row lines up directly against a Male-Price/Female-Price row in the rate card for calibration.</div>
+      <div class="row"><button onclick="paLoadAgeGenderBurningCost()">Load</button></div>
+      <div id="pa-age-gender-area">${paLastAgeGender ? paAgeGenderHtml(paLastAgeGender) : ''}</div>
+    </div>
   `;
 }
 
 async function showPortfolioAnalysis() {
   currentCase = null;
   await loadCases();
+  await paLoadFilterOptions();
   document.getElementById('main').innerHTML = portfolioAnalysisPanelHtml();
+  paLoadDataAsOf();
+}
+
+async function paLoadDataAsOf() {
+  try {
+    const result = await api('/portfolio-analysis/data-as-of');
+    paDataAsOf = result.data_as_of_date;
+    const input = document.getElementById('pa-data-as-of');
+    const status = document.getElementById('pa-status-as-of');
+    if (input) input.value = paDataAsOf || '';
+    if (status) status.textContent = paDataAsOf ? `Currently: ${paDataAsOf}` : 'Not set - defaults to today';
+  } catch (err) { /* non-fatal */ }
+}
+
+async function paSetDataAsOf() {
+  const value = document.getElementById('pa-data-as-of').value;
+  if (!value) { toast('Choose a date first', true); return; }
+  try {
+    await api('/portfolio-analysis/data-as-of', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ data_as_of_date: value }),
+    });
+    paDataAsOf = value;
+    document.getElementById('pa-status-as-of').textContent = `Currently: ${value}`;
+    toast('Data-as-of date saved');
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 async function paUploadFile(kind) {
-  const inputId = { 'members': 'pa-file-members', 'claims': 'pa-file-claims', 'group-product-mapping': 'pa-file-mapping' }[kind];
-  const statusId = { 'members': 'pa-status-members', 'claims': 'pa-status-claims', 'group-product-mapping': 'pa-status-mapping' }[kind];
+  const inputId = {
+    'members': 'pa-file-members', 'claims': 'pa-file-claims',
+    'group-product-mapping': 'pa-file-mapping', 'subgroup-mapping': 'pa-file-subgroup-mapping',
+  }[kind];
+  const statusId = {
+    'members': 'pa-status-members', 'claims': 'pa-status-claims',
+    'group-product-mapping': 'pa-status-mapping', 'subgroup-mapping': 'pa-status-subgroup-mapping',
+  }[kind];
   const input = document.getElementById(inputId);
   const statusEl = document.getElementById(statusId);
   if (!input.files.length) { toast('Choose a file first', true); return; }
   const form = new FormData();
   form.append('file', input.files[0]);
+  if (kind === 'members' || kind === 'claims') {
+    const asOfValue = document.getElementById('pa-data-as-of').value;
+    if (asOfValue) form.append('data_as_of', asOfValue);
+  }
   try {
     const result = await api(`/portfolio-analysis/${kind}/upload`, { method: 'POST', body: form });
     statusEl.textContent = `${result.rows_ingested} rows`;
     toast(`${kind} uploaded (${result.rows_ingested} rows)`);
+    paLoadDataAsOf();
+    paRefreshFilterOptionsUI();
   } catch (err) {
     toast(err.message, true);
   }
@@ -2147,9 +2293,28 @@ function paSetGroupBy(value) {
   paGroupBy = value;
 }
 
+let paLastPolicyYearBreakdown = null;
+
 async function paRunAnalysis() {
+  paReadFilterInputs();
   try {
-    paLastSummary = await api(`/portfolio-analysis/summary?group_by=${encodeURIComponent(paGroupBy)}`);
+    const params = paBuildFilterParams({ group_by: paGroupBy });
+    paLastSummary = await api(`/portfolio-analysis/summary?${params.toString()}`);
+    paSearchTerm = '';
+
+    // A client/master filter combines every policy year present into one
+    // number by default - if one's picked and Group by isn't already
+    // "Policy year", automatically show the per-year split too, so a
+    // client with 2 years of data isn't silently blended without you
+    // having to remember to switch Group by yourself.
+    paLastPolicyYearBreakdown = null;
+    if (paFilters.master_client && paGroupBy !== 'policy_year' && !paPolicyYear) {
+      try {
+        const yearParams = paBuildFilterParams({ group_by: 'policy_year' });
+        paLastPolicyYearBreakdown = await api(`/portfolio-analysis/summary?${yearParams.toString()}`);
+      } catch (err) { /* non-fatal - main summary still shown */ }
+    }
+
     document.getElementById('pa-result-area').innerHTML = paSummaryHtml(paLastSummary);
     toast('Portfolio analysis computed');
   } catch (err) {
@@ -2157,8 +2322,74 @@ async function paRunAnalysis() {
   }
 }
 
+async function paLoadAgeGenderBurningCost() {
+  paReadFilterInputs();
+  try {
+    const params = paBuildFilterParams();
+    paLastAgeGender = await api(`/portfolio-analysis/burning-cost-by-age-gender?${params.toString()}`);
+    document.getElementById('pa-age-gender-area').innerHTML = paAgeGenderHtml(paLastAgeGender);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paFilterRows() {
+  paSearchTerm = document.getElementById('pa-search').value.trim().toLowerCase();
+  paRerenderSummaryTable();
+}
+
+function paVisibleRows() {
+  if (!paLastSummary) return [];
+  if (!paSearchTerm) return paLastSummary.rows;
+  return paLastSummary.rows.filter(r => String(r[paLastSummary.group_by]).toLowerCase().includes(paSearchTerm));
+}
+
+function paComputeTotals(rows) {
+  const totals = rows.reduce((acc, r) => {
+    acc.member_count += r.member_count;
+    acc.priced_member_count += r.priced_member_count;
+    acc.standard_premium += r.standard_premium;
+    acc.actual_premium += r.actual_premium;
+    acc.actual_claims += r.actual_claims;
+    acc.earned_member_years += r.earned_member_years;
+    return acc;
+  }, { member_count: 0, priced_member_count: 0, standard_premium: 0, actual_premium: 0, actual_claims: 0, earned_member_years: 0 });
+  totals.loss_ratio_vs_standard = totals.standard_premium ? totals.actual_claims / totals.standard_premium : null;
+  totals.loss_ratio_vs_actual = totals.actual_premium ? totals.actual_claims / totals.actual_premium : null;
+  totals.actual_vs_standard_pct = totals.standard_premium ? (totals.actual_premium - totals.standard_premium) / totals.standard_premium * 100 : null;
+  totals.burning_cost = totals.earned_member_years ? totals.actual_claims / totals.earned_member_years : null;
+  return totals;
+}
+
+function paRerenderSummaryTable() {
+  const area = document.getElementById('pa-result-area');
+  if (area && paLastSummary) area.innerHTML = paSummaryHtml(paLastSummary);
+}
+
+function paSummaryRowHtml(groupByField, r) {
+  return `
+    <tr>
+      <td>${escapeHtml(String(r[groupByField]))}</td>
+      <td>${r.member_count.toLocaleString()}</td>
+      <td>${r.priced_member_count.toLocaleString()}</td>
+      <td>${r.actual_premium.toLocaleString()}</td>
+      <td>${r.actual_claims.toLocaleString()}</td>
+      <td>${r.actual_vs_standard_pct != null ? (r.actual_vs_standard_pct > 0 ? '+' : '') + r.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
+      <td>${r.loss_ratio_vs_standard != null ? (r.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
+      <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+      <td>${r.earned_member_years.toLocaleString()}</td>
+      <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+    </tr>
+  `;
+}
+
 function paSummaryHtml(summary) {
-  const groupByLabel = { product: 'Product', network: 'Network', region: 'Region', nationality_zone: 'Nationality zone' }[summary.group_by] || summary.group_by;
+  const groupByLabel = {
+    product: 'Product', network: 'Network', region: 'Region', nationality_zone: 'Nationality zone',
+    client: 'Client (Subgroup)', master_client: 'Client (Master)', gender: 'Gender', relation: 'Relation', policy_year: 'Policy year',
+  }[summary.group_by] || summary.group_by;
+  const visibleRows = paVisibleRows();
+  const totals = paComputeTotals(visibleRows);
   return `
     <div class="card">
       <h3>Summary by ${escapeHtml(groupByLabel)}</h3>
@@ -2168,27 +2399,261 @@ function paSummaryHtml(summary) {
         <div class="kpi"><span class="label">Unmapped Product</span><span class="value">${summary.unmapped_product_member_count.toLocaleString()}</span></div>
         <div class="kpi"><span class="label">Unrecognized network</span><span class="value">${summary.unmapped_network_member_count.toLocaleString()}</span></div>
       </div>
-      <table>
-        <tr>
-          <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
-          <th>Standard premium</th><th>Actual premium</th><th>Actual claims</th>
-          <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th>
-        </tr>
-        ${summary.rows.map(r => `
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Search ${escapeHtml(groupByLabel)}</label>
+          <input type="text" id="pa-search" placeholder="e.g. a client name" value="${escapeHtml(paSearchTerm)}" oninput="paFilterRows()">
+        </div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table>
           <tr>
-            <td>${escapeHtml(String(r[summary.group_by]))}</td>
+            <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
+            <th>Actual premium</th><th>Actual claims</th>
+            <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th>
+            <th>Exposed (member-years)</th><th>Burning cost</th>
+          </tr>
+          ${visibleRows.map(r => paSummaryRowHtml(summary.group_by, r)).join('')}
+          <tr style="font-weight:600; border-top:2px solid var(--border, #ccc);">
+            <td>Total${paSearchTerm ? ' (filtered)' : ''}</td>
+            <td>${totals.member_count.toLocaleString()}</td>
+            <td>${totals.priced_member_count.toLocaleString()}</td>
+            <td>${totals.actual_premium.toLocaleString()}</td>
+            <td>${totals.actual_claims.toLocaleString()}</td>
+            <td>${totals.actual_vs_standard_pct != null ? (totals.actual_vs_standard_pct > 0 ? '+' : '') + totals.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
+            <td>${totals.loss_ratio_vs_standard != null ? (totals.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${totals.loss_ratio_vs_actual != null ? (totals.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${totals.earned_member_years.toLocaleString()}</td>
+            <td>${totals.burning_cost != null ? totals.burning_cost.toLocaleString() : '-'}</td>
+          </tr>
+        </table>
+      </div>
+      <div class="hint">Standard premium is hidden for now (not yet meaningful until Product mapping is fully uploaded) - "Loss ratio (standard)"/"Actual vs. standard" will populate once it's back. "Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet. "Burning cost" is actual claims per earned member-year (AED per member per annum) - the technical claims-cost rate underwriting uses to set required premium, independent of what was actually charged. Actual premium is earned (prorated by each member's elapsed policy term), not the full annual amount, so a group 3 months into its policy year is compared fairly rather than looking artificially cheap against claims. The Total row reflects whatever rows the search box currently shows.</div>
+    </div>
+    ${paPolicyYearBreakdownHtml()}
+  `;
+}
+
+function paPolicyYearBreakdownHtml() {
+  if (!paLastPolicyYearBreakdown || paLastPolicyYearBreakdown.rows.length < 2) return '';
+  return `
+    <div class="card">
+      <h3>Breakdown by policy year</h3>
+      <div class="hint">The summary above combines every policy year present for this selection into one total - since more than one is present here (e.g. a renewed client with last year's and this year's members both in the same upload), here's each year split out separately.</div>
+      <div style="overflow-x:auto;">
+        <table>
+          <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Actual claims</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
+          ${[...paLastPolicyYearBreakdown.rows].sort((a, b) => String(a.policy_year).localeCompare(String(b.policy_year))).map(r => `
+            <tr>
+              <td>${escapeHtml(String(r.policy_year))}</td>
+              <td>${r.member_count.toLocaleString()}</td>
+              <td>${r.actual_premium.toLocaleString()}</td>
+              <td>${r.actual_claims.toLocaleString()}</td>
+              <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+              <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function paAgeGenderHtml(rows) {
+  if (!rows.length) return '<div class="hint">No data yet - upload members/claims and a rate card, then click Load.</div>';
+  return `
+    <div style="overflow-x:auto;">
+      <table>
+        <tr><th>Age band</th><th>Gender</th><th>Members</th><th>Exposed (member-years)</th><th>Actual claims</th><th>Burning cost (AED/member/yr)</th></tr>
+        ${rows.map(r => `
+          <tr>
+            <td>${escapeHtml(r.age_band)}</td>
+            <td>${escapeHtml(r.gender)}</td>
             <td>${r.member_count.toLocaleString()}</td>
-            <td>${r.priced_member_count.toLocaleString()}</td>
-            <td>${r.standard_premium.toLocaleString()}</td>
-            <td>${r.actual_premium.toLocaleString()}</td>
+            <td>${r.earned_member_years.toLocaleString()}</td>
             <td>${r.actual_claims.toLocaleString()}</td>
-            <td>${r.actual_vs_standard_pct != null ? (r.actual_vs_standard_pct > 0 ? '+' : '') + r.actual_vs_standard_pct + '%' : '-'}</td>
-            <td>${r.loss_ratio_vs_standard != null ? (r.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
-            <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
           </tr>
         `).join('')}
       </table>
-      <div class="hint">"Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet.</div>
+    </div>
+  `;
+}
+
+/* ---------------- Portfolio Insights (dashboard, portfolio + client level) ---------------- */
+
+let piMasterClientList = [];
+let piSelectedMasterClient = '';
+
+async function showPortfolioInsights() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = `<div class="card"><div class="hint">Loading...</div></div>`;
+  try {
+    piMasterClientList = await api('/portfolio-analysis/master-clients');
+  } catch (err) {
+    piMasterClientList = [];
+  }
+  document.getElementById('main').innerHTML = piPanelShellHtml();
+  await piLoadAndRender();
+}
+
+function piPanelShellHtml() {
+  return `
+    <div class="card">
+      <h3>Portfolio Insights</h3>
+      <div class="hint">A dynamic view of the same Portfolio Analysis data - portfolio-wide by default, or scoped to one master client (combining all its subgroups) for a drill-down. Requires Members + Claims + a rate card already uploaded on the Portfolio Analysis screen.</div>
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Master client (leave blank for portfolio-wide)</label>
+          <select id="pi-client-select" onchange="piOnClientChange(this.value)">
+            <option value="">-- Portfolio-wide --</option>
+            ${piMasterClientList.map(c => `<option value="${escapeHtml(c)}" ${piSelectedMasterClient === c ? 'selected' : ''}>${escapeHtml(c)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+    <div id="pi-content"></div>
+  `;
+}
+
+function piOnClientChange(value) {
+  piSelectedMasterClient = value;
+  piLoadAndRender();
+}
+
+async function piFetchGroupBy(groupBy) {
+  const params = new URLSearchParams({ group_by: groupBy });
+  if (piSelectedMasterClient) params.set('master_client', piSelectedMasterClient);
+  return api(`/portfolio-analysis/summary?${params.toString()}`);
+}
+
+async function piFetchAgeGender() {
+  const params = new URLSearchParams();
+  if (piSelectedMasterClient) params.set('master_client', piSelectedMasterClient);
+  return api(`/portfolio-analysis/burning-cost-by-age-gender?${params.toString()}`);
+}
+
+async function piLoadAndRender() {
+  const content = document.getElementById('pi-content');
+  content.innerHTML = `<div class="card"><div class="hint">Computing...</div></div>`;
+  try {
+    const [byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, ageGender] = await Promise.all([
+      piFetchGroupBy('product'),
+      piFetchGroupBy('network'),
+      piFetchGroupBy('nationality_zone'),
+      piFetchGroupBy('relation'),
+      piFetchGroupBy('gender'),
+      piFetchGroupBy('policy_year'),
+      piFetchAgeGender(),
+    ]);
+    content.innerHTML = piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, ageGender });
+    content.querySelectorAll('.chart-svg').forEach(svg => bindChartTooltips(svg.parentElement));
+  } catch (err) {
+    content.innerHTML = `<div class="card"><div class="hint">${escapeHtml(err.message)}</div></div>`;
+  }
+}
+
+function piProportionItems(rows, groupByField) {
+  const total = rows.reduce((sum, r) => sum + r.member_count, 0) || 1;
+  return rows.map(r => ({ label: String(r[groupByField]), count: r.member_count, pct: r.member_count / total }));
+}
+
+function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, ageGender }) {
+  const lossRatioItems = byProduct.rows.map(r => ({
+    label: String(r.product), value: r.loss_ratio_vs_actual != null ? r.loss_ratio_vs_actual * 100 : 0,
+  }));
+  const burningCostItems = byNetwork.rows.map(r => ({ label: String(r.network), value: r.burning_cost || 0 }));
+
+  const maleAgeItems = ageGender.filter(r => r.gender === 'M').map(r => ({ label: r.age_band, value: r.member_count }));
+  const femaleAgeItems = ageGender.filter(r => r.gender === 'F').map(r => ({ label: r.age_band, value: r.member_count }));
+  const maleBurningItems = ageGender.filter(r => r.gender === 'M').map(r => ({ label: r.age_band, value: r.burning_cost || 0 }));
+  const femaleBurningItems = ageGender.filter(r => r.gender === 'F').map(r => ({ label: r.age_band, value: r.burning_cost || 0 }));
+
+  const policyYearRows = [...byPolicyYear.rows].sort((a, b) => String(a.policy_year).localeCompare(String(b.policy_year)));
+
+  const totalMembers = byProduct.total_members;
+
+  return `
+    <div class="card">
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total members</span><span class="value">${totalMembers.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Out of rate card scope</span><span class="value">${byProduct.out_of_scope_member_count.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Unmapped Product</span><span class="value">${byProduct.unmapped_product_member_count.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Unrecognized network</span><span class="value">${byProduct.unmapped_network_member_count.toLocaleString()}</span></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Production report by policy year</h3>
+      <div class="hint">Compares cohorts by the calendar year each member's own policy started - the same client can have last year's and this year's members both present in one upload if it's already renewed.</div>
+      <table>
+        <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Actual claims</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
+        ${policyYearRows.map(r => `
+          <tr>
+            <td>${escapeHtml(String(r.policy_year))}</td>
+            <td>${r.member_count.toLocaleString()}</td>
+            <td>${r.actual_premium.toLocaleString()}</td>
+            <td>${r.actual_claims.toLocaleString()}</td>
+            <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+          </tr>
+        `).join('')}
+      </table>
+    </div>
+
+    <div class="card">
+      <h3>Loss ratio (actual) by Product</h3>
+      ${lossRatioItems.length ? svgBarChart(lossRatioItems, { formatValue: v => v.toFixed(1) + '%' }) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Burning cost by Network</h3>
+      ${burningCostItems.length ? svgBarChart(burningCostItems, { color: 'var(--series-2)' }) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Nationality zone mix</h3>
+      ${byNationality.rows.length ? svgProportionBar(piProportionItems(byNationality.rows, 'nationality_zone')) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Relation mix (employee / spouse / child)</h3>
+      ${byRelation.rows.length ? svgProportionBar(piProportionItems(byRelation.rows, 'relation')) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Gender mix</h3>
+      ${byGender.rows.length ? svgProportionBar(piProportionItems(byGender.rows, 'gender')) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Membership by age band</h3>
+      <div class="hint">Bucketed into the same age bands the standard pricing rate card itself uses.</div>
+      <div class="row" style="align-items:flex-start; flex-wrap:wrap;">
+        <div style="flex:1; min-width:280px;">
+          <div class="hint">Male</div>
+          ${maleAgeItems.length ? svgBarChart(maleAgeItems) : '<div class="hint">No data.</div>'}
+        </div>
+        <div style="flex:1; min-width:280px;">
+          <div class="hint">Female</div>
+          ${femaleAgeItems.length ? svgBarChart(femaleAgeItems) : '<div class="hint">No data.</div>'}
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>Burning cost by age band</h3>
+      <div class="row" style="align-items:flex-start; flex-wrap:wrap;">
+        <div style="flex:1; min-width:280px;">
+          <div class="hint">Male</div>
+          ${maleBurningItems.length ? svgBarChart(maleBurningItems, { color: 'var(--series-3)' }) : '<div class="hint">No data.</div>'}
+        </div>
+        <div style="flex:1; min-width:280px;">
+          <div class="hint">Female</div>
+          ${femaleBurningItems.length ? svgBarChart(femaleBurningItems, { color: 'var(--series-3)' }) : '<div class="hint">No data.</div>'}
+        </div>
+      </div>
     </div>
   `;
 }

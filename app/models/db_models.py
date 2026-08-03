@@ -550,3 +550,40 @@ class GroupProductMapping(Base):
     product = Column(String, nullable=False)  # Platinum / Gold / Silver / Bronze
     source_filename = Column(String, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class SubgroupMasterMapping(Base):
+    """Which master policy/group a real subgroup belongs to - parsed from
+    the dedicated Subgroup -> Master Group mapping sheet underwriting
+    maintains separately (see app/ingestion/subgroup_mapping.py), since
+    PortfolioMember's own MASTERCONTRACT column on the system export isn't
+    a reliable source for this (observed in practice just duplicating the
+    subgroup's own name). Wholesale-replaced on each fresh upload.
+    """
+
+    __tablename__ = "subgroup_master_mappings"
+
+    id = Column(Integer, primary_key=True)
+    subgroup_name = Column(String, nullable=False)  # matches PortfolioMember.contract
+    master_name = Column(String, nullable=False)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PortfolioDataSnapshot(Base):
+    """Single-row setting remembering the book's own data-as-of (production/
+    extract) date - e.g. the real Members/Claims exports are each named
+    "as of 15072026", meaning that's when the data was actually pulled,
+    which can be weeks before an analysis is actually run. Earned-premium
+    proration (see app/scoring/rules/portfolio_analysis.py) should measure
+    elapsed policy time against THIS date, not the calendar day someone
+    happens to click "Run analysis" - otherwise a stale-but-unrefreshed
+    book looks more "earned" than the data can actually support. Captured
+    once (via upload or a direct set) and reused as the default for every
+    subsequent summary/member-detail call until updated again.
+    """
+
+    __tablename__ = "portfolio_data_snapshot"
+
+    id = Column(Integer, primary_key=True)
+    data_as_of_date = Column(Date, nullable=True)

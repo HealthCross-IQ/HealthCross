@@ -17,6 +17,7 @@ turns up a genuine NAS Neuron group, this assumption needs revisiting
 rather than silently mis-pricing it.
 """
 from collections import defaultdict
+from datetime import date as date_cls
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
@@ -34,15 +35,78 @@ def resolve_group_product(member: dict, group_product_by_name: Dict[str, str]) -
     return group_product_by_name.get(member.get("contract")) or group_product_by_name.get(member.get("master_contract"))
 
 
+def resolve_master_client(member: dict, subgroup_master_by_name: Optional[Dict[str, str]]) -> Optional[str]:
+    """Which master policy a member's own subgroup belongs to - the
+    uploaded Subgroup->Master mapping (from the same Group->Product
+    mapping file) is authoritative, since PortfolioMember's own
+    MASTERCONTRACT column on the system export isn't reliable for this.
+    Falls back to the raw master_contract/contract fields only when no
+    mapping entry exists, so a member is never silently dropped from every
+    master-level view just because the mapping hasn't been uploaded yet.
+    """
+    contract = member.get("contract")
+    if subgroup_master_by_name and contract in subgroup_master_by_name:
+        return subgroup_master_by_name[contract]
+    return member.get("master_contract") or contract
+
+
+def earned_premium_fraction(policy_start, policy_end, as_of: date_cls) -> float:
+    """How much of a member's policy period has actually elapsed as of
+    `as_of` - claims incurred so far only reflect this much exposure, so
+    comparing them against the FULL annual premium understates the true
+    loss ratio for any policy that hasn't run its whole term yet (e.g. a
+    group 3 months into a 12-month policy should only count 3/12 of its
+    annual premium as "earned"). Missing/invalid dates fall back to fully
+    earned (1.0) rather than dropping the member's premium entirely.
+    """
+    if not policy_start or not policy_end or policy_end <= policy_start:
+        return 1.0
+    total_days = (policy_end - policy_start).days
+    elapsed_days = (min(as_of, policy_end) - policy_start).days
+    if elapsed_days <= 0:
+        return 0.0
+    return min(1.0, elapsed_days / total_days)
+
+
+def _claim_matches_period(date_of_treatment, policy_start, policy_end) -> bool:
+    """A claim only counts against a member's OWN policy period, not just
+    their beneficiary ID - a renewed member appears as a SEPARATE row per
+    policy year (e.g. 2025 and 2026) sharing the SAME beneficiary ID, so
+    matching by ID alone would double count that person's claims into
+    every one of their policy years. Missing dates (on either side) fall
+    back to matching rather than silently dropping a real claim.
+    """
+    if not policy_start or not policy_end or not date_of_treatment:
+        return True
+    return policy_start <= date_of_treatment <= policy_end
+
+
+def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]]) -> float:
+    """Sums only the claim lines whose date_of_treatment falls within this
+    member's own policy period - see _claim_matches_period.
+    """
+    beneficiary_id = member.get("beneficiary_id")
+    policy_start = member.get("policy_start_date")
+    policy_end = member.get("policy_end_date")
+    total = 0.0
+    for c in claims_by_beneficiary.get(beneficiary_id, []):
+        if _claim_matches_period(c.get("date_of_treatment"), policy_start, policy_end):
+            total += c.get("final_amount") or 0.0
+    return total
+
+
 def analyze_portfolio_member(
     member: dict,
     group_product_by_name: Dict[str, str],
     rate_cards: List[dict],
     variant_rates: List[dict],
-    actual_claims_by_beneficiary: Dict[str, float],
+    claims_by_beneficiary: Dict[str, List[dict]],
+    as_of: Optional[date_cls] = None,
+    subgroup_master_by_name: Optional[Dict[str, str]] = None,
 ) -> dict:
     """member: one row from app/ingestion/portfolio_members.py."""
     beneficiary_id = member["beneficiary_id"]
+    as_of = as_of or date_cls.today()
 
     if is_out_of_scope_network_type(member.get("network_type_raw")):
         return {
@@ -60,6 +124,8 @@ def analyze_portfolio_member(
     if not product:
         warnings.append("No Product mapping found for this member's group")
 
+    earned_fraction = earned_premium_fraction(member.get("policy_start_date"), member.get("policy_end_date"), as_of)
+
     standard_premium = None
     if network and product:
         price_result = price_member(
@@ -74,8 +140,12 @@ def analyze_portfolio_member(
             rate_cards,
             variant_rates,
         )
-        standard_premium = price_result["net_total"]
+        if price_result["net_total"] is not None:
+            standard_premium = price_result["net_total"] * earned_fraction
         warnings.extend(price_result["warnings"])
+
+    actual_gross_premium = member.get("actual_gross_premium")
+    actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
 
     return {
         "beneficiary_id": beneficiary_id,
@@ -84,38 +154,74 @@ def analyze_portfolio_member(
         "network": network,
         "region": member.get("region"),
         "nationality_zone": member.get("nationality_zone"),
+        "client": member.get("contract") or member.get("master_contract"),
+        # Always the MASTER policy, regardless of whether this member also
+        # has its own subgroup (contract) - a master with 3 subgroups rolls
+        # all of them up into one row here, unlike "client" above which
+        # shows each subgroup separately. Lets loss ratio/burning cost be
+        # seen at the master level first, then drilled into subgroups via
+        # the master_client filter + group_by=client.
+        "master_client": resolve_master_client(member, subgroup_master_by_name),
+        "gender": member.get("gender"),
+        "relation": member.get("relation"),
+        "age": member.get("age"),
+        # The calendar year a member's own policy period started in - a
+        # client that's already renewed will have some members on last
+        # year's policy and some on this year's within the same upload;
+        # this is what lets those cohorts be told apart (group_by or the
+        # policy_year filter in _run_analysis).
+        "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
         "standard_premium": round(standard_premium, 2) if standard_premium is not None else None,
-        "actual_premium": member.get("actual_gross_premium"),
-        "actual_claims": round(actual_claims_by_beneficiary.get(beneficiary_id, 0.0), 2),
+        "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
+        "actual_claims": round(actual_claims_for_member(member, claims_by_beneficiary), 2),
+        "earned_premium_fraction": round(earned_fraction, 4),
         "warnings": warnings,
     }
 
 
-def claims_total_by_beneficiary(claims: List[dict]) -> Dict[str, float]:
-    totals: Dict[str, float] = defaultdict(float)
+def group_claims_by_beneficiary(claims: List[dict]) -> Dict[str, List[dict]]:
+    """Groups raw claim lines by patient_id, keeping each line's own
+    date_of_treatment + final_amount rather than pre-summing them - a
+    renewed member appears as a SEPARATE row per policy year sharing the
+    SAME beneficiary ID, so a flat per-ID total (with no date match) would
+    double count that person's claims into every one of their policy
+    years. See actual_claims_for_member for the date-matched total.
+    """
+    grouped: Dict[str, List[dict]] = defaultdict(list)
     for c in claims:
         patient_id = c.get("patient_id")
         if patient_id:
-            totals[patient_id] += c.get("final_amount") or 0.0
-    return dict(totals)
+            grouped[patient_id].append(c)
+    return dict(grouped)
 
 
-_GROUP_BY_FIELDS = {"product", "network", "region", "nationality_zone"}
+_GROUP_BY_FIELDS = {"product", "network", "region", "nationality_zone", "client", "master_client", "gender", "relation", "policy_year"}
 
 
 def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]:
     """Rolls up analyze_portfolio_member's per-member results by one
-    dimension (product/network/region/nationality_zone) - members outside
-    the rate card's scope are excluded entirely (see analyze_portfolio_member),
-    and a member missing that dimension's own value (e.g. no Product
-    mapping yet) rolls up under "Unmapped" rather than being dropped
-    silently.
+    dimension (product/network/region/nationality_zone/client/gender/
+    relation) - members outside the rate card's scope are excluded
+    entirely (see analyze_portfolio_member), and a member missing that
+    dimension's own value (e.g. no Product mapping yet) rolls up under
+    "Unmapped" rather than being dropped silently. "client" groups by the
+    member's own contract (sub-group), falling back to its master
+    contract. "gender"/"relation" (employee/spouse/child) let pricing see
+    burning cost by demographic segment, not just Product/Network-wide -
+    e.g. spouse burning cost typically running well above employee's.
     """
     if group_by not in _GROUP_BY_FIELDS:
         raise ValueError(f"group_by must be one of {sorted(_GROUP_BY_FIELDS)}")
 
     buckets: Dict[str, dict] = defaultdict(
-        lambda: {"member_count": 0, "priced_member_count": 0, "standard_premium": 0.0, "actual_premium": 0.0, "actual_claims": 0.0}
+        lambda: {
+            "member_count": 0,
+            "priced_member_count": 0,
+            "standard_premium": 0.0,
+            "actual_premium": 0.0,
+            "actual_claims": 0.0,
+            "earned_member_years": 0.0,
+        }
     )
     for r in member_results:
         if not r.get("in_scope", True):
@@ -126,6 +232,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         if r.get("actual_premium") is not None:
             bucket["actual_premium"] += r["actual_premium"]
         bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
         if r.get("standard_premium") is not None:
             bucket["standard_premium"] += r["standard_premium"]
             bucket["priced_member_count"] += 1
@@ -135,6 +242,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         standard_premium = bucket["standard_premium"]
         actual_premium = bucket["actual_premium"]
         actual_claims = bucket["actual_claims"]
+        earned_member_years = bucket["earned_member_years"]
         rows.append(
             {
                 group_by: key,
@@ -150,7 +258,71 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 "actual_vs_standard_pct": round((actual_premium - standard_premium) / standard_premium * 100, 2)
                 if standard_premium
                 else None,
+                "earned_member_years": round(earned_member_years, 4),
+                # Claims cost per earned member-year (AED per member per
+                # annum) - the technical "burning cost" rate underwriters
+                # use to set a required premium independent of what was
+                # actually charged, unlike the premium-relative loss ratios above.
+                "burning_cost": round(actual_claims / earned_member_years, 2) if earned_member_years else None,
             }
         )
     rows.sort(key=lambda r: r[group_by])
+    return rows
+
+
+def age_bands_from_rate_cards(rate_cards: List[dict]) -> List[tuple]:
+    """The distinct (from_age, to_age) bands the CURRENTLY loaded rate card
+    actually prices by - not a hardcoded assumption, since the real UAE
+    rate card's bands could change over time. Burning cost is bucketed
+    into these same bands so it lines up directly, row-for-row, against
+    the Male/Female price columns in the standard pricing tool.
+    """
+    return sorted({(r["from_age"], r["to_age"]) for r in rate_cards if r.get("from_age") is not None and r.get("to_age") is not None})
+
+
+def _matching_age_band(age: Optional[int], bands: List[tuple]) -> Optional[tuple]:
+    if age is None:
+        return None
+    for from_age, to_age in bands:
+        if from_age <= age <= to_age:
+            return (from_age, to_age)
+    return None
+
+
+def summarize_burning_cost_by_age_gender(member_results: List[dict], rate_cards: List[dict]) -> List[dict]:
+    """Burning cost bucketed by the SAME (age-band x gender) structure the
+    standard pricing rate card itself uses - each row here lines up with
+    one Male-Price/Female-Price row in the rate card, so underwriting can
+    directly compare "the card charges X for this band" against "actual
+    burning cost for this band is Y" and recalibrate from there.
+    """
+    bands = age_bands_from_rate_cards(rate_cards)
+    buckets: Dict[tuple, dict] = defaultdict(lambda: {"member_count": 0, "actual_claims": 0.0, "earned_member_years": 0.0})
+
+    for r in member_results:
+        if not r.get("in_scope", True):
+            continue
+        band = _matching_age_band(r.get("age"), bands)
+        band_label = f"{band[0]}-{band[1]}" if band else "Unmapped age"
+        gender = r.get("gender") or "Unmapped"
+        key = (band_label, gender)
+        bucket = buckets[key]
+        bucket["member_count"] += 1
+        bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
+
+    rows = []
+    for (band_label, gender), bucket in buckets.items():
+        earned_member_years = bucket["earned_member_years"]
+        rows.append(
+            {
+                "age_band": band_label,
+                "gender": gender,
+                "member_count": bucket["member_count"],
+                "actual_claims": round(bucket["actual_claims"], 2),
+                "earned_member_years": round(earned_member_years, 4),
+                "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+            }
+        )
+    rows.sort(key=lambda r: (r["age_band"], r["gender"]))
     return rows
