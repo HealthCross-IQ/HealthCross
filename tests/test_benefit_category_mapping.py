@@ -8,9 +8,12 @@ from app.reference.benefit_category_mapping import (
     CATEGORIES,
     DISPLAY_ORDER,
     MATCH_ORDER,
+    antenatal_care_covered_from_rows,
     build_standard_summary_from_rows,
     clean_category_value,
     dental_class_coinsurance_from_rows,
+    extract_copay_clause,
+    healthcross_global_maternity_coinsurance_from_rows,
     looks_like_cigna_globalcare,
     map_label_to_category,
 )
@@ -155,3 +158,135 @@ def test_cigna_maternity_coinsurance_defaults_to_nil_when_maternity_is_covered()
     ]
     summary = build_standard_summary_from_rows(rows)
     assert summary["maternity_coinsurance"] == "NIL"
+
+
+def test_cigna_oncology_label_maps_to_cancer_treatment():
+    # Cigna's own label/section is "Oncology treatment", never a phrase
+    # containing "cancer treatment" at all.
+    label = "Oncology treatment in-patient and out-patient"
+    assert map_label_to_category("Oncology treatment", label) == "Cancer Treatment"
+
+
+def test_cigna_routine_out_patient_maps_to_antenatal_care():
+    # The word "antenatal" only appears in this row's clarification note,
+    # never its label ("Routine out-patient") or section ("Maternity
+    # benefits") - map_label_to_category never sees the note.
+    assert map_label_to_category("Maternity benefits", "Routine out-patient") == "Antenatal Care"
+
+
+def test_cigna_routine_adult_physical_exam_maps_to_health_check_up():
+    assert map_label_to_category("Wellbeing benefits", "Routine adult physical examinations") == "Health Check-up"
+
+
+def test_cigna_international_emergency_services_maps_to_evacuation_category():
+    label = "International emergency services"
+    assert map_label_to_category("In-patient /day case healthcare benefits", label) == "Emergency Medical Evacuation & Repatriation"
+
+
+def test_extract_copay_clause_pulls_trailing_copay_out_of_a_limit_value():
+    # Cigna states the co-pay inline in the same cell as the dollar limit
+    # ("US $500 per year of insurance Co-pay: NIL") rather than as its own
+    # row, so there's no separate row a normal category match could find.
+    assert extract_copay_clause("US $ 500 per year of insurance Co-pay: NIL") == "NIL"
+    assert extract_copay_clause("Paid in full Co-pay: NIL") == "NIL"
+    assert extract_copay_clause("USD 3,750 per Year of Insurance") is None
+    assert extract_copay_clause(None) is None
+
+
+def test_extract_copay_clause_also_pulls_a_trailing_coinsurance_clause():
+    # Cigna Smart Care states this as "Co-insurance: 20%" rather than
+    # Global Care's "Co-pay: NIL" - same inline-clause shape, different word.
+    assert extract_copay_clause("Option 1: AED 1,000 per year of insurance Co-insurance: 20%") == "20%"
+
+
+def test_cigna_smart_care_accommodation_costs_bullet_maps_to_room_type():
+    # Smart Care's own wording is "Accommodation costs for..." rather than
+    # Global Care's "Accommodation on a private room basis...".
+    label = "Hospital charges for: Accommodation costs for in-patient treatment"
+    assert map_label_to_category("In-patient / day case healthcare benefits", label) == "Room Type / Accommodation"
+
+
+def test_hyphen_wrap_normalization_matches_a_line_wrapped_compound_word():
+    # A PDF line wrap inside a hyphenated compound re-extracts as the
+    # hyphen followed by a stray space ("work- related") rather than the
+    # clean "work-related" a keyword is written against.
+    assert map_label_to_category("Other benefits", "Non-emergency work- related injuries") == "Work-related Injuries"
+
+
+def test_hyphen_wrap_normalization_does_not_break_the_wellness_mammogram_keyword():
+    # "wellness - mammogram" legitimately has spaces around its hyphen in
+    # the keyword list itself - normalizing "-\s+" to "-" on both sides
+    # must not stop this from still matching.
+    assert map_label_to_category("", "Wellness - Mammogram screening") == "Health Check-up"
+
+
+def test_cigna_smart_care_routine_out_patient_coinsurance_maps_to_maternity_coinsurance():
+    # Requires the word "routine" - a bare "out-patient co-insurance" also
+    # exists elsewhere in the same document as its own generic, unrelated
+    # row (the plan's overall out-patient co-insurance).
+    assert map_label_to_category("Maternity benefits", "Routine out-patient co-insurance") == "Maternity Co-insurance"
+    assert map_label_to_category("Maternity benefits", "Routine out-patient co- insurance") == "Maternity Co-insurance"
+
+
+def test_generic_out_patient_coinsurance_row_is_not_hijacked_by_maternity():
+    assert map_label_to_category("", "Out-patient co-insurance") == "Outpatient Co-insurance/Deductible"
+
+
+def test_antenatal_care_covered_from_rows_reads_the_pregnancy_note():
+    # Cigna Smart Care never gives out-patient antenatal care its own row
+    # (that row is claimed by Maternity Co-insurance instead) - the only
+    # signal is this distinctive clarification note text on some other row.
+    rows = [
+        {
+            "section": "Maternity benefits",
+            "label": "Routine out-patient co-insurance",
+            "value": "10%",
+            "note": "Pregnancy benefits and services as per DHA mandate",
+        },
+    ]
+    assert antenatal_care_covered_from_rows(rows) == "Covered"
+
+
+def test_antenatal_care_covered_from_rows_returns_none_without_the_note():
+    rows = [{"section": "", "label": "Something else", "value": "Covered", "note": ""}]
+    assert antenatal_care_covered_from_rows(rows) is None
+
+
+def test_healthcross_global_maternity_inpatient_copay_maps_to_maternity_coinsurance():
+    # HealthCROSS Global's own label is "Maternity inpatient- Copay",
+    # separate from "Maternity Inpatient- Limit" (which is the real
+    # in-patient maternity ceiling and rightly stays on Maternity Annual
+    # Limit) sitting right next to it in the same section.
+    section = "Maternity Benefits (For Married Females):"
+    assert map_label_to_category(section, "Maternity Inpatient- Limit") == "Maternity Annual Limit"
+    assert map_label_to_category(section, "Maternity inpatient- Copay") == "Maternity Co-insurance"
+
+
+def test_healthcross_global_maternity_outpatient_deductible_maps_to_maternity_coinsurance():
+    # "Maternity outpatient- Limit" is the real antenatal-checkups coverage
+    # (rightly Antenatal Care), while "Maternity Outpatient Deductible"
+    # sitting right next to it is the co-insurance-equivalent figure, not
+    # a second coverage-status row - it must not be swallowed by Antenatal
+    # Care's own "maternity outpatient" keyword.
+    section = "Maternity Benefits (For Married Females):"
+    assert map_label_to_category(section, "Maternity outpatient- Limit") == "Antenatal Care"
+    assert map_label_to_category(section, "Maternity Outpatient Deductible") == "Maternity Co-insurance"
+
+
+def test_healthcross_global_maternity_coinsurance_combines_inpatient_and_outpatient_rows():
+    # Neither row alone states a maternity co-insurance percentage - the
+    # document only ever gives these two split copay/deductible rows, so
+    # both need to be surfaced together rather than one silently winning
+    # over the other as the first match found.
+    rows = [
+        {"section": "Maternity Benefits (For Married Females):", "label": "Maternity Inpatient- Limit", "value": "USD 14,000", "note": ""},
+        {"section": "Maternity Benefits (For Married Females):", "label": "Maternity inpatient- Copay", "value": "NIL Copay", "note": ""},
+        {"section": "Maternity Benefits (For Married Females):", "label": "Maternity outpatient- Limit", "value": "Covered", "note": ""},
+        {"section": "Maternity Benefits (For Married Females):", "label": "Maternity Outpatient Deductible", "value": "NIL Deductible", "note": ""},
+    ]
+    assert healthcross_global_maternity_coinsurance_from_rows(rows) == "Inpatient Copay: NIL Copay; Outpatient Deductible: NIL Deductible"
+
+
+def test_healthcross_global_maternity_coinsurance_returns_none_without_those_rows():
+    rows = [{"section": "", "label": "Something else", "value": "Covered", "note": ""}]
+    assert healthcross_global_maternity_coinsurance_from_rows(rows) is None

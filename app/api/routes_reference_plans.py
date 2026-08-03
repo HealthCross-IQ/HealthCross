@@ -21,9 +21,12 @@ from app.models import schemas
 from app.reference.benefit_category_mapping import (
     CATEGORIES,
     DISPLAY_ORDER,
+    antenatal_care_covered_from_rows,
     clean_category_value,
     dental_class_coinsurance_from_rows,
+    extract_copay_clause,
     extract_maternity_complications_clause,
+    healthcross_global_maternity_coinsurance_from_rows,
     looks_like_cigna_globalcare,
     map_label_to_category,
     unify_currency_to_aed,
@@ -247,6 +250,16 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
             if complications:
                 category_values["Maternity Complications"].setdefault(plan.id, complications)
 
+    # Cigna's own optical limit states its co-pay inline in the same cell
+    # ("US $500 per year of insurance Co-pay: NIL") rather than as its own
+    # row - see extract_copay_clause.
+    for plan in ordered_plans:
+        if plan.id not in category_values["Optical Co-insurance"]:
+            optical_value = category_values["Optical Annual Limit"].get(plan.id)
+            copay = extract_copay_clause(optical_value)
+            if copay:
+                category_values["Optical Co-insurance"][plan.id] = copay
+
     for plan in ordered_plans:
         rows = plan.benefit_rows or []
         # Cigna's dental table only ever breaks co-insurance down per
@@ -260,6 +273,19 @@ def compare_reference_plans(ids: str = Query(..., description="Comma-separated r
         # all (it's always NIL for this insurer) - see looks_like_cigna_globalcare.
         if category_values["Maternity Annual Limit"].get(plan.id) and looks_like_cigna_globalcare(rows):
             category_values["Maternity Co-insurance"].setdefault(plan.id, "NIL")
+        # Cigna Smart Care never gives out-patient antenatal care its own
+        # limit row - see antenatal_care_covered_from_rows.
+        if plan.id not in category_values["Antenatal Care"]:
+            antenatal = antenatal_care_covered_from_rows(rows)
+            if antenatal:
+                category_values["Antenatal Care"][plan.id] = antenatal
+        # HealthCROSS Global splits this across two rows (in-patient copay,
+        # out-patient deductible) rather than one figure - the ordinary
+        # per-row match above already picked up whichever row it saw
+        # first, so this replaces that partial value with both combined.
+        healthcross_coinsurance = healthcross_global_maternity_coinsurance_from_rows(rows)
+        if healthcross_coinsurance:
+            category_values["Maternity Co-insurance"][plan.id] = healthcross_coinsurance
 
     result_sections = []
     current_group = None

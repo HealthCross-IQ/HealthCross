@@ -59,9 +59,14 @@ CATEGORIES: Dict[str, Dict] = {
             "room type", "hospital room",
             # Cigna's own wording never pairs "room" directly with
             # "accommodation" or "hospital" - it's "Accommodation on a
-            # private room basis for in-patient treatment", bundled into a
-            # bullet list under the generic "Hospital charges for:" label.
-            "private room basis",
+            # private room basis for in-patient treatment" (Global Care)
+            # or "Accommodation costs for in-patient treatment" (Smart
+            # Care), bundled into a bullet list under the generic
+            # "Hospital charges for:" label - which also contains a
+            # "Prescribed medicines..." bullet, so without a keyword here
+            # this whole row instead falls through to Prescribed
+            # Medicines / Pharmacy's own keyword further down.
+            "private room basis", "accommodation costs for",
         ],
     },
     "Companion / Parental Accommodation": {
@@ -82,7 +87,12 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Cancer Treatment": {
         "group": "Inpatient",
-        "keywords": ["cancer treatment", "cancer support"],
+        "keywords": [
+            "cancer treatment", "cancer support",
+            # Cigna's own label/section is "Oncology treatment", never a
+            # phrase containing "cancer treatment" at all.
+            "oncology",
+        ],
     },
     "Kidney Dialysis": {
         "group": "Inpatient",
@@ -137,6 +147,11 @@ CATEGORIES: Dict[str, Dict] = {
             # maternity INPATIENT limit (the delivery/hospital-stay cost,
             # mapped to Maternity Annual Limit below).
             "maternity outpatient", "maternity out-patient",
+            # Cigna's own label is the bare "Routine out-patient" (paired
+            # with "Routine in-patient" for the delivery/hospital-stay
+            # side) - the word "antenatal" only appears in its
+            # clarification note, never the label or section itself.
+            "routine out-patient",
         ],
     },
     "Normal Delivery": {
@@ -160,7 +175,29 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Maternity Co-insurance": {
         "group": "Maternity",
-        "keywords": ["inpatient maternity", "maternity co-insurance", "maternity coinsurance"],
+        "keywords": [
+            "inpatient maternity", "maternity co-insurance", "maternity coinsurance",
+            # Cigna Smart Care's own label is "Routine out-patient
+            # co-insurance" (paired with "Routine in-patient" for the
+            # limit itself) - checked ahead of Antenatal Care in
+            # MATCH_ORDER, whose own "routine out-patient" keyword would
+            # otherwise claim this co-insurance row before this more
+            # specific one got a chance. Requires "routine" - a bare
+            # "out-patient co-insurance" also exists as its own generic,
+            # unrelated row in the same document (the plan's overall
+            # out-patient co-insurance, nothing to do with maternity).
+            "routine out-patient co-insurance",
+            # HealthCROSS Global's own template splits this into two rows,
+            # one per side, rather than stating a single co-insurance
+            # figure - "Maternity inpatient- Copay" and "Maternity
+            # Outpatient Deductible" (both under "Maternity Benefits (For
+            # Married Females):"). Both contain "maternity inpatient"/
+            # "maternity outpatient", which Maternity Annual Limit and
+            # Antenatal Care's own keywords would otherwise claim first,
+            # so these need to be specific enough to intercept only the
+            # copay/deductible row, not the limit/coverage row next to it.
+            "maternity inpatient- copay", "maternity outpatient deductible",
+        ],
     },
     "Maternity Annual Limit": {
         "group": "Maternity",
@@ -210,6 +247,10 @@ CATEGORIES: Dict[str, Dict] = {
             # prefixed list of the specific tests it covers, rather than a
             # phrase containing "health check" at all.
             "wellness - mammogram",
+            # Cigna's own label is "Routine adult physical examinations",
+            # under a "Wellbeing benefits" section - neither says "health
+            # check" or "wellness" at all.
+            "routine adult physical exam",
         ],
     },
     "Adult Vaccinations": {
@@ -232,7 +273,13 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Emergency Medical Evacuation & Repatriation": {
         "group": "Assistance",
-        "keywords": ["emergency medical evacuation", "medical evacuation", "repatriation", "second medical opinion"],
+        "keywords": [
+            "emergency medical evacuation", "medical evacuation", "repatriation", "second medical opinion",
+            # Cigna's own label is the bare "International emergency
+            # services" - the actual evacuation/repatriation wording only
+            # appears in its lettered sub-list clarification, not the label.
+            "international emergency services",
+        ],
     },
     "Work-related Injuries": {
         "group": "Additional Benefits",
@@ -273,17 +320,22 @@ DISPLAY_ORDER: List[str] = [
 # claims a row before a more generic one (e.g. "Annual/Indemnity Maximum",
 # checked last) gets a chance to swallow it.
 MATCH_ORDER: List[str] = [
+    # Checked before Antenatal Care/Maternity Annual Limit - Maternity
+    # Annual Limit's own bare "maternity" catch-all keyword is especially
+    # greedy (it matches ANY maternity-adjacent row, e.g. Sukoon's
+    # "Inpatient Maternity: 10%" co-insurance line), and Cigna Smart
+    # Care's own "Routine out-patient co-insurance" row would otherwise be
+    # claimed by Antenatal Care's own "routine out-patient" keyword before
+    # this more specific co-insurance category ever got a chance.
+    "Maternity Co-insurance",
     "Antenatal Care", "Normal Delivery", "C-Section", "Maternity Complications",
     "Newborn Cover",
     # Co-insurance checked before its matching Annual Limit category - the
     # limit's own keywords (e.g. "dental benefit") match the whole section
     # a co-insurance row also sits in, so checking the limit first would
     # claim every row in that section for the limit and the co-insurance
-    # category would never be reached. Maternity Annual Limit's own bare
-    # "maternity" catch-all keyword is especially greedy (it matches ANY
-    # maternity-adjacent row, e.g. Sukoon's "Inpatient Maternity: 10%"
-    # co-insurance line), so Maternity Co-insurance must get first pick.
-    "Maternity Co-insurance", "Maternity Annual Limit",
+    # category would never be reached.
+    "Maternity Annual Limit",
     "Dental Co-insurance", "Dental Annual Limit",
     "Optical Co-insurance", "Optical Annual Limit",
     # Checked before Diagnostics/GP-Specialist/Physiotherapy/Pharmacy for the
@@ -350,6 +402,22 @@ _BARE_LIMIT_LABELS = {
 _LIMIT_LABEL_PREFIXES = [("optical", "Optical Annual Limit"), ("dental", "Dental Annual Limit")]
 
 
+# A word wrapping across a line inside a hyphenated compound (e.g.
+# "Non-emergency work-\nrelated injuries", "Routine out-patient co-\n
+# insurance") re-extracts as the hyphen followed by a stray space
+# ("work- related", "co- insurance") rather than the clean "work-related"/
+# "co-insurance" a keyword is written against - collapsing "-\s+" to "-"
+# on both the search text and each keyword before comparing closes this
+# whole class of mismatch regardless of exactly where a given document
+# happens to wrap, rather than needing a new keyword variant hand-added
+# every time a fresh real-world example turns up.
+_HYPHEN_WRAP_RE = re.compile(r"-\s+")
+
+
+def _normalize_hyphen_wrap(text: str) -> str:
+    return _HYPHEN_WRAP_RE.sub("-", text)
+
+
 def map_label_to_category(section: Optional[str], label: Optional[str]) -> Optional[str]:
     """Returns the canonical category name this row belongs to, or None if
     it doesn't match any of the fixed categories (kept per-plan in an
@@ -364,9 +432,9 @@ def map_label_to_category(section: Optional[str], label: Optional[str]) -> Optio
     if normalized_label in _BARE_LIMIT_LABELS:
         return _BARE_LIMIT_LABELS[normalized_label]
 
-    search_text = f"{section or ''} {label or ''}".lower()
+    search_text = _normalize_hyphen_wrap(f"{section or ''} {label or ''}".lower())
     for name in MATCH_ORDER:
-        if any(keyword in search_text for keyword in CATEGORIES[name]["keywords"]):
+        if any(_normalize_hyphen_wrap(keyword) in search_text for keyword in CATEGORIES[name]["keywords"]):
             return name
 
     # Nothing matched a specific phrase - fall back to a prefix check
@@ -457,6 +525,26 @@ def extract_maternity_complications_clause(maternity_annual_limit_value: Optiona
     return clause or None
 
 
+# Cigna's own optical (and some other benefit) limits state the co-pay
+# inline in the same cell as the dollar limit itself ("US $500 per year of
+# insurance Co-pay: NIL", or "...Co-insurance: 20%" on Cigna Smart Care's
+# own documents) rather than as its own row, so a plain per-row category
+# match never reaches a distinct "Optical Co-insurance" value - the whole
+# cell already belongs to Optical Annual Limit. Pulled out of that
+# already-matched value instead of requiring its own row.
+_COPAY_CLAUSE_RE = re.compile(r"co-?(?:pay|insurance):\s*([^.;\n]+)", re.IGNORECASE)
+
+
+def extract_copay_clause(limit_value: Optional[str]) -> Optional[str]:
+    if not limit_value:
+        return None
+    match = _COPAY_CLAUSE_RE.search(limit_value)
+    if not match:
+        return None
+    clause = match.group(1).strip().rstrip(".")
+    return clause or None
+
+
 # Cigna's own dental table never states one flat co-insurance percentage -
 # only a per-class breakdown ("Class one Investigative and Preventative
 # treatment: NIL co-pay", "Class two ...: 20% co-pay", "Class three ...:
@@ -496,6 +584,46 @@ _CIGNA_MARKER_RE = re.compile(r"cigna", re.IGNORECASE)
 
 def looks_like_cigna_globalcare(rows: List[Dict[str, str]]) -> bool:
     return any(_CIGNA_MARKER_RE.search(f"{row.get('label', '')} {row.get('value', '')}") for row in rows)
+
+
+# Cigna Smart Care never gives out-patient antenatal care its own limit
+# row at all (unlike Global Care's plain "Routine out-patient" row) - the
+# only row mentioning it is "Routine out-patient co-insurance", which
+# rightly belongs to Maternity Co-insurance instead (see MATCH_ORDER), so
+# a plain per-row category match never gives Antenatal Care a value of
+# its own. "Pregnancy benefits and services as per DHA mandate" is this
+# document family's own distinctive clarification wording for exactly
+# this benefit, buried in that row's note rather than its label/section.
+_ANTENATAL_NOTE_RE = re.compile(r"pregnancy benefits and services", re.IGNORECASE)
+
+
+def antenatal_care_covered_from_rows(rows: List[Dict[str, str]]) -> Optional[str]:
+    if any(_ANTENATAL_NOTE_RE.search(row.get("note") or "") for row in rows):
+        return "Covered"
+    return None
+
+
+# HealthCROSS Global's own template splits Maternity Co-insurance across
+# two separate rows rather than stating one figure - "Maternity inpatient-
+# Copay" and "Maternity Outpatient Deductible" - so a plain per-row
+# category match (first match per plan wins) would silently drop whichever
+# one it saw second. Combines both into one descriptive value instead,
+# same approach as dental_class_coinsurance_from_rows.
+_MATERNITY_INPATIENT_COPAY_RE = re.compile(r"maternity\s+inpatient-?\s*copay", re.IGNORECASE)
+_MATERNITY_OUTPATIENT_DEDUCTIBLE_RE = re.compile(r"maternity\s+outpatient\s+deductible", re.IGNORECASE)
+
+
+def healthcross_global_maternity_coinsurance_from_rows(rows: List[Dict[str, str]]) -> Optional[str]:
+    parts = []
+    for row in rows:
+        label = (row.get("label") or "").strip()
+        if _MATERNITY_INPATIENT_COPAY_RE.search(label):
+            parts.append(f"Inpatient Copay: {row.get('value') or ''}")
+        elif _MATERNITY_OUTPATIENT_DEDUCTIBLE_RE.search(label):
+            parts.append(f"Outpatient Deductible: {row.get('value') or ''}")
+    if not parts:
+        return None
+    return "; ".join(parts)
 
 
 # Bridges this 36-category master list onto the older, fixed 12-field

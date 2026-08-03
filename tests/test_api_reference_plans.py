@@ -202,3 +202,103 @@ def test_compare_combines_cigna_dental_classes_and_defaults_maternity_coinsuranc
     assert all_rows["Dental Co-insurance"] == "Class one: NIL co-pay; Class two: 20% co-pay; Class three: 50% co-pay"
     assert all_rows["Maternity Co-insurance"] == "NIL"
     assert all_rows["Maternity Complications"] == "Covered"
+
+
+def test_compare_extracts_cigna_optical_copay_from_the_limit_row(client):
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    plan = models.ReferenceBenefitPlan(
+        insurer_name="Cigna",
+        plan_label="GlobalCare Flexible 1",
+        benefit_rows=[
+            {
+                "section": "Vision benefits",
+                "label": "Expenses for: Prescribed lenses to correct vision, Eyeglass frames",
+                "value": "US $ 500 per year of insurance Co-pay: NIL",
+                "note": "",
+            },
+        ],
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    plan_id = plan.id
+    db.close()
+
+    resp = client.get(f"/reference-plans/compare?ids={plan_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    all_rows = {row["label"]: row["values"][str(plan_id)] for section in body["sections"] for row in section["rows"]}
+
+    assert all_rows["Optical Annual Limit"] == "US $ 500 (AED 1,836) per year of insurance Co-pay: NIL"
+    assert all_rows["Optical Co-insurance"] == "NIL"
+
+
+def test_compare_cigna_smart_care_antenatal_falls_back_to_the_pregnancy_note(client):
+    # Cigna Smart Care's only maternity-related out-patient row is "Routine
+    # out-patient co-insurance", which rightly maps to Maternity
+    # Co-insurance (not Antenatal Care) - Antenatal Care instead has to
+    # come from this row's own clarification note.
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    plan = models.ReferenceBenefitPlan(
+        insurer_name="Cigna",
+        plan_label="SmartCare Plan 1",
+        benefit_rows=[
+            {
+                "section": "Maternity benefits",
+                "label": "Routine out-patient co-insurance",
+                "value": "10%",
+                "note": "Pregnancy benefits and services as per DHA mandate.",
+            },
+        ],
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    plan_id = plan.id
+    db.close()
+
+    resp = client.get(f"/reference-plans/compare?ids={plan_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    all_rows = {row["label"]: row["values"][str(plan_id)] for section in body["sections"] for row in section["rows"]}
+
+    assert all_rows["Maternity Co-insurance"] == "10%"
+    assert all_rows["Antenatal Care"] == "Covered"
+
+
+def test_compare_combines_healthcross_global_maternity_copay_and_deductible_rows(client):
+    # HealthCROSS Global's own template splits Maternity Co-insurance
+    # across two rows (in-patient copay, out-patient deductible) instead
+    # of stating one figure - both need to show up combined, not just
+    # whichever one the per-row match happened to see first.
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    plan = models.ReferenceBenefitPlan(
+        insurer_name="HealthCROSS Global",
+        plan_label="Gold - CAT A",
+        benefit_rows=[
+            {"section": "Maternity Benefits (For Married Females):", "label": "Maternity Inpatient- Limit", "value": "USD 14,000", "note": ""},
+            {"section": "Maternity Benefits (For Married Females):", "label": "Maternity inpatient- Copay", "value": "NIL Copay", "note": ""},
+            {"section": "Maternity Benefits (For Married Females):", "label": "Maternity outpatient- Limit", "value": "Covered", "note": ""},
+            {"section": "Maternity Benefits (For Married Females):", "label": "Maternity Outpatient Deductible", "value": "NIL Deductible", "note": ""},
+        ],
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    plan_id = plan.id
+    db.close()
+
+    resp = client.get(f"/reference-plans/compare?ids={plan_id}")
+    assert resp.status_code == 200
+    body = resp.json()
+    all_rows = {row["label"]: row["values"][str(plan_id)] for section in body["sections"] for row in section["rows"]}
+
+    assert all_rows["Maternity Annual Limit"] == "USD 14,000 (AED 51,415)"
+    assert all_rows["Antenatal Care"] == "Covered"
+    assert all_rows["Maternity Co-insurance"] == "Inpatient Copay: NIL Copay; Outpatient Deductible: NIL Deductible"
