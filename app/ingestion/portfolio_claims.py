@@ -39,17 +39,24 @@ def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
 
     df = map_columns(df, PORTFOLIO_CLAIMS_ALIASES)
 
+    # Parsed one column at a time (vectorized) rather than value-by-value -
+    # with tens of thousands of claim rows across 5 date columns, a
+    # per-value pd.to_datetime() call in a Python loop is dramatically
+    # slower than parsing each whole column in one vectorized call.
+    for date_col in (
+        "policy_start_date", "policy_end_date", "member_start_date", "member_end_date", "date_of_treatment",
+    ):
+        if date_col in df.columns:
+            if pd.api.types.is_numeric_dtype(df[date_col]):
+                # .xlsb (unlike .xlsx via openpyxl) hands back raw Excel serial
+                # date numbers rather than real datetimes - 1899-12-30 is
+                # Excel's own epoch (already accounts for its leap-year bug).
+                df[date_col] = pd.to_datetime(df[date_col], unit="D", origin="1899-12-30", errors="coerce")
+            else:
+                df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
     def _date_or_none(value: Any):
-        if pd.isna(value):
-            return None
-        if isinstance(value, (int, float)):
-            # .xlsb (unlike .xlsx via openpyxl) hands back raw Excel serial
-            # date numbers rather than real datetimes - 1899-12-30 is
-            # Excel's own epoch (already accounts for its leap-year bug).
-            parsed_date = pd.to_datetime(value, unit="D", origin="1899-12-30", errors="coerce")
-        else:
-            parsed_date = pd.to_datetime(value, errors="coerce")
-        return parsed_date.date() if pd.notna(parsed_date) else None
+        return value.date() if pd.notna(value) else None
 
     def _str_or_none(value: Any) -> Any:
         return str(value).strip() if pd.notna(value) else None
@@ -58,7 +65,7 @@ def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
         return float(value) if pd.notna(value) else None
 
     records = []
-    for _, row in df.iterrows():
+    for row in df.to_dict("records"):
         records.append(
             {
                 "patient_id": _str_or_none(row.get("patient_id")),

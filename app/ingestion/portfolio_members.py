@@ -18,8 +18,7 @@ from app.reference.nationality_zones import classify_zone
 
 
 def _date_or_none(value) -> Optional[date]:
-    parsed = pd.to_datetime(value, errors="coerce")
-    return parsed.date() if pd.notna(parsed) else None
+    return value.date() if pd.notna(value) else None
 
 
 def _str_or_none(value) -> Optional[str]:
@@ -33,8 +32,14 @@ def _float_or_none(value) -> Optional[float]:
 def parse_portfolio_members(file: BinaryIO, filename: str) -> List[Dict]:
     df = pd.read_excel(file)
 
+    # Parsed one column at a time (vectorized) rather than value-by-value -
+    # much faster than calling pd.to_datetime() per cell in the row loop below.
+    for date_col in ("DOB", "Eff Date", "Exp Date", "EndoDate (Member Start Date)", "EndoDate (Member End Date)"):
+        if date_col in df.columns:
+            df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
+
     rows = []
-    for _, row in df.iterrows():
+    for row in df.to_dict("records"):
         beneficiary_id = _str_or_none(row.get("BENEFICIARYID"))
         if not beneficiary_id:
             continue

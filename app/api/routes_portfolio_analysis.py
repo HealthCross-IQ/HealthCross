@@ -29,7 +29,7 @@ def upload_portfolio_members(file: UploadFile = File(...), db: Session = Depends
         raise HTTPException(status_code=400, detail="No member rows found in this file")
 
     db.query(models.PortfolioMember).delete()
-    db.add_all([models.PortfolioMember(**row) for row in rows])
+    db.bulk_insert_mappings(models.PortfolioMember, rows)
     db.commit()
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
@@ -41,7 +41,7 @@ def upload_portfolio_claims(file: UploadFile = File(...), db: Session = Depends(
         raise HTTPException(status_code=400, detail="No claim rows found in this file")
 
     db.query(models.PortfolioClaimEntry).delete()
-    db.add_all([models.PortfolioClaimEntry(**row) for row in rows])
+    db.bulk_insert_mappings(models.PortfolioClaimEntry, rows)
     db.commit()
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
@@ -53,7 +53,7 @@ def upload_group_product_mapping(file: UploadFile = File(...), db: Session = Dep
         raise HTTPException(status_code=400, detail="No group/product rows found in this file")
 
     db.query(models.GroupProductMapping).delete()
-    db.add_all([models.GroupProductMapping(**row) for row in rows])
+    db.bulk_insert_mappings(models.GroupProductMapping, rows)
     db.commit()
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
@@ -120,7 +120,12 @@ def _run_analysis(db: Session) -> List[dict]:
         raise HTTPException(status_code=400, detail="No rate card uploaded yet")
     variant_rates = _variant_rate_dicts(db)
 
-    claims = [{"patient_id": c.patient_id, "final_amount": c.final_amount} for c in db.query(models.PortfolioClaimEntry).all()]
+    claims = [
+        {"patient_id": patient_id, "final_amount": final_amount}
+        for patient_id, final_amount in db.query(
+            models.PortfolioClaimEntry.patient_id, models.PortfolioClaimEntry.final_amount
+        ).all()
+    ]
     claims_by_beneficiary = claims_total_by_beneficiary(claims)
 
     group_product_by_name: Dict[str, str] = {
