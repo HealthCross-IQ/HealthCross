@@ -450,3 +450,103 @@ class InsurerTierPreference(Base):
     insurer_name = Column(String, nullable=False, unique=True)
     suggested_product = Column(String, nullable=False)  # Platinum / Gold / Silver / Bronze
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class PortfolioMember(Base):
+    """One member row from HealthCross's own book-wide membership export
+    (see app/ingestion/portfolio_members.py) - powers Portfolio Analysis
+    (app/scoring/rules/portfolio_analysis.py), which checks the already-
+    booked $50M+ book's real experience against the New Business rate
+    card, rather than a single case's own census. Wholesale-replaced on
+    each fresh upload, like RateCard/BenefitVariantRate - this is a
+    point-in-time snapshot ("as of" a given date), not a history to
+    accumulate.
+
+    `contract`/`master_contract` are this book's own sub-group/master-group
+    names (e.g. "VL Consulting DWC-LLC" under master "VALUELABS - VL
+    CONSULTING") - the join key into GroupProductMapping, since Product
+    isn't captured on the membership export itself.
+    """
+
+    __tablename__ = "portfolio_members"
+
+    id = Column(Integer, primary_key=True)
+    beneficiary_id = Column(String, nullable=False)  # joins to PortfolioClaimEntry.patient_id
+    contract = Column(String, nullable=True)
+    master_contract = Column(String, nullable=True)
+    policy_number = Column(String, nullable=True)
+    msh_policy_number = Column(String, nullable=True)
+    category = Column(String, nullable=True)  # this book's own raw category code, e.g. "QIC/HC/BR/FDG/DXB/A"
+    network_type_raw = Column(String, nullable=True)  # see app/reference/network_type_mapping.py
+    age = Column(Integer, nullable=True)
+    gender = Column(String, nullable=True)
+    marital_status = Column(String, nullable=True)
+    relation = Column(String, nullable=True)
+    nationality = Column(String, nullable=True)
+    nationality_zone = Column(String, nullable=True)
+    residence_emirate = Column(String, nullable=True)
+    region = Column(String, nullable=True)  # Dubai / Abu Dhabi / Northern Emirates - see emirate_regions.py
+    policy_start_date = Column(Date, nullable=True)
+    policy_end_date = Column(Date, nullable=True)
+    member_start_date = Column(Date, nullable=True)
+    member_end_date = Column(Date, nullable=True)
+    gross_premium = Column(Float, nullable=True)
+    actual_gross_premium = Column(Float, nullable=True)
+    net_premium = Column(Float, nullable=True)
+    actual_net_premium = Column(Float, nullable=True)
+    tpa_fee = Column(Float, nullable=True)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PortfolioClaimEntry(Base):
+    """One claim line from HealthCross's own book-wide claims export (see
+    app/ingestion/portfolio_claims.py) - same per-claim-line shape as
+    ClaimsLedgerEntry, but book-wide rather than scoped to one case, and
+    carrying the group/policy identifiers a book-wide export needs
+    (ClaimsLedgerEntry has no case-independent group identity to carry,
+    since it's always attached to the one case it was uploaded for).
+    Wholesale-replaced on each fresh upload, like PortfolioMember.
+    """
+
+    __tablename__ = "portfolio_claim_entries"
+
+    id = Column(Integer, primary_key=True)
+    patient_id = Column(String, nullable=True)  # joins to PortfolioMember.beneficiary_id
+    claim_id = Column(String, nullable=True)
+    claim_status = Column(String, nullable=True)
+    group_name = Column(String, nullable=True)
+    client_name = Column(String, nullable=True)
+    msh_policy_number = Column(String, nullable=True)
+    policy_start_date = Column(Date, nullable=True)
+    policy_end_date = Column(Date, nullable=True)
+    member_start_date = Column(Date, nullable=True)
+    member_end_date = Column(Date, nullable=True)
+    date_of_treatment = Column(Date, nullable=True)
+    relation = Column(String, nullable=True)
+    ip_op_maternity = Column(String, nullable=True)
+    medical_category = Column(String, nullable=True)
+    provider_name = Column(String, nullable=True)
+    diagnosis_code = Column(String, nullable=True)
+    diagnosis_description = Column(String, nullable=True)
+    claimed_amount = Column(Float, nullable=True)
+    final_amount = Column(Float, nullable=True)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class GroupProductMapping(Base):
+    """Which New Business Product (Platinum/Gold/Silver/Bronze) a real
+    booked group is actually on - not captured on the membership export
+    itself (PRODUCTNAME is blank in practice), so underwriting supplies it
+    separately, keyed by this book's own contract/master-contract name.
+    Wholesale-replaced on each fresh upload, like PortfolioMember.
+    """
+
+    __tablename__ = "group_product_mappings"
+
+    id = Column(Integer, primary_key=True)
+    group_name = Column(String, nullable=False)  # matches PortfolioMember.contract or .master_contract
+    product = Column(String, nullable=False)  # Platinum / Gold / Silver / Bronze
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)

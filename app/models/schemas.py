@@ -391,3 +391,29 @@ class NewBusinessQuoteOut(BaseModel):
     result: Dict[str, Any]
     opportunity_assessment: Optional[Dict[str, Any]] = None
     created_at: datetime
+
+
+class PortfolioUploadOut(BaseModel):
+    rows_ingested: int
+
+
+class PortfolioSummaryRow(BaseModel):
+    model_config = ConfigDict(extra="allow")  # the group-by key itself is a dynamic field name
+
+    member_count: int
+    priced_member_count: int
+    standard_premium: float
+    actual_premium: float
+    actual_claims: float
+    loss_ratio_vs_standard: Optional[float] = None
+    loss_ratio_vs_actual: Optional[float] = None
+    actual_vs_standard_pct: Optional[float] = None
+
+
+class PortfolioSummaryOut(BaseModel):
+    group_by: str
+    rows: List[PortfolioSummaryRow]
+    total_members: int
+    out_of_scope_member_count: int
+    unmapped_product_member_count: int
+    unmapped_network_member_count: int

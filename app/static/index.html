@@ -280,6 +280,7 @@
   <aside>
     <button class="primary" onclick="showNewCaseForm()">+ New Case</button>
     <button onclick="showInternationalComparison()">International comparison</button>
+    <button onclick="showPortfolioAnalysis()">Portfolio Analysis</button>
     <h2>Cases</h2>
     <div class="case-list" id="caseList"></div>
   </aside>
@@ -2065,6 +2066,129 @@ function nbTierLadderHtml(categoryResult) {
         `).join('')}
       </table>
       ${ladderWarnings.length ? `<div class="hint">${ladderWarnings.map(escapeHtml).join('<br>')}</div>` : ''}
+    </div>
+  `;
+}
+
+/* ---------------- Portfolio Analysis ---------------- */
+
+let paLastSummary = null;
+let paGroupBy = 'product';
+
+function portfolioAnalysisPanelHtml() {
+  return `
+    <div class="card">
+      <h3>Portfolio Analysis</h3>
+      <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone. Each upload wholesale-replaces the previous one.</div>
+      <div class="row" style="align-items:flex-end; flex-wrap:wrap;">
+        <div>
+          <label>Membership export</label>
+          <input type="file" id="pa-file-members" accept=".xlsx">
+          <button onclick="paUploadFile('members')">Upload</button>
+          <span id="pa-status-members" class="status-pending"></span>
+        </div>
+        <div>
+          <label>Claims export (.xlsx or .xlsb)</label>
+          <input type="file" id="pa-file-claims" accept=".xlsx,.xlsb">
+          <button onclick="paUploadFile('claims')">Upload</button>
+          <span id="pa-status-claims" class="status-pending"></span>
+        </div>
+        <div>
+          <label>Group &rarr; Product mapping</label>
+          <input type="file" id="pa-file-mapping" accept=".xlsx,.csv">
+          <button onclick="paUploadFile('group-product-mapping')">Upload</button>
+          <span id="pa-status-mapping" class="status-pending"></span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Run analysis</h3>
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Group by</label>
+          <select onchange="paSetGroupBy(this.value)">
+            <option value="product" ${paGroupBy === 'product' ? 'selected' : ''}>Product</option>
+            <option value="network" ${paGroupBy === 'network' ? 'selected' : ''}>Network</option>
+            <option value="region" ${paGroupBy === 'region' ? 'selected' : ''}>Region</option>
+            <option value="nationality_zone" ${paGroupBy === 'nationality_zone' ? 'selected' : ''}>Nationality zone</option>
+          </select>
+        </div>
+        <div><button class="primary" onclick="paRunAnalysis()">Run analysis</button></div>
+      </div>
+    </div>
+    <div id="pa-result-area">${paLastSummary ? paSummaryHtml(paLastSummary) : ''}</div>
+  `;
+}
+
+async function showPortfolioAnalysis() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = portfolioAnalysisPanelHtml();
+}
+
+async function paUploadFile(kind) {
+  const inputId = { 'members': 'pa-file-members', 'claims': 'pa-file-claims', 'group-product-mapping': 'pa-file-mapping' }[kind];
+  const statusId = { 'members': 'pa-status-members', 'claims': 'pa-status-claims', 'group-product-mapping': 'pa-status-mapping' }[kind];
+  const input = document.getElementById(inputId);
+  const statusEl = document.getElementById(statusId);
+  if (!input.files.length) { toast('Choose a file first', true); return; }
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  try {
+    const result = await api(`/portfolio-analysis/${kind}/upload`, { method: 'POST', body: form });
+    statusEl.textContent = `${result.rows_ingested} rows`;
+    toast(`${kind} uploaded (${result.rows_ingested} rows)`);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paSetGroupBy(value) {
+  paGroupBy = value;
+}
+
+async function paRunAnalysis() {
+  try {
+    paLastSummary = await api(`/portfolio-analysis/summary?group_by=${encodeURIComponent(paGroupBy)}`);
+    document.getElementById('pa-result-area').innerHTML = paSummaryHtml(paLastSummary);
+    toast('Portfolio analysis computed');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paSummaryHtml(summary) {
+  const groupByLabel = { product: 'Product', network: 'Network', region: 'Region', nationality_zone: 'Nationality zone' }[summary.group_by] || summary.group_by;
+  return `
+    <div class="card">
+      <h3>Summary by ${escapeHtml(groupByLabel)}</h3>
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total members</span><span class="value">${summary.total_members.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Out of rate card scope</span><span class="value">${summary.out_of_scope_member_count.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Unmapped Product</span><span class="value">${summary.unmapped_product_member_count.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Unrecognized network</span><span class="value">${summary.unmapped_network_member_count.toLocaleString()}</span></div>
+      </div>
+      <table>
+        <tr>
+          <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
+          <th>Standard premium</th><th>Actual premium</th><th>Actual claims</th>
+          <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th>
+        </tr>
+        ${summary.rows.map(r => `
+          <tr>
+            <td>${escapeHtml(String(r[summary.group_by]))}</td>
+            <td>${r.member_count.toLocaleString()}</td>
+            <td>${r.priced_member_count.toLocaleString()}</td>
+            <td>${r.standard_premium.toLocaleString()}</td>
+            <td>${r.actual_premium.toLocaleString()}</td>
+            <td>${r.actual_claims.toLocaleString()}</td>
+            <td>${r.actual_vs_standard_pct != null ? (r.actual_vs_standard_pct > 0 ? '+' : '') + r.actual_vs_standard_pct + '%' : '-'}</td>
+            <td>${r.loss_ratio_vs_standard != null ? (r.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+          </tr>
+        `).join('')}
+      </table>
+      <div class="hint">"Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet.</div>
     </div>
   `;
 }
