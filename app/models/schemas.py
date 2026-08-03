@@ -291,3 +291,59 @@ class PlanDetailsOut(BaseModel):
     renewal_date: Optional[date] = None
     region: Optional[str] = None
     updated_fields: List[str]
+
+
+class RateCardUploadOut(BaseModel):
+    rows_ingested: int
+    products: List[str]
+    regions: List[str]
+    networks: List[str]
+
+
+class BenefitVariantRateUploadOut(BaseModel):
+    rows_ingested: int
+    variant_names: List[str]
+
+
+class NetworkOptionOut(BaseModel):
+    network: str
+    tpa: str
+
+
+class RateCardOptionsOut(BaseModel):
+    products: List[str]
+    regions: List[str]
+    # Product -> the networks/TPAs a case on that product can use.
+    product_networks: Dict[str, List[NetworkOptionOut]]
+
+
+class VariantOptionOut(BaseModel):
+    option_value: str
+    direction: str
+    impact_type: str
+    impact_value: float
+
+
+class CategoryRatingInput(BaseModel):
+    category: str
+    product: str
+    network: str
+    tpa: str
+    commission_pct: Optional[float] = None
+    variant_selections: Dict[str, str] = {}
+
+
+class NewBusinessQuoteRequest(BaseModel):
+    categories: List[CategoryRatingInput]
+
+
+class NewBusinessQuoteOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    case_id: int
+    categories: List[Dict[str, Any]]
+    case_gross_annual_premium: float
+    result: Dict[str, Any]
+    opportunity_assessment: Optional[Dict[str, Any]] = None
+    created_at: datetime

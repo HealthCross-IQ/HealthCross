@@ -881,6 +881,7 @@ const TABS = [
   { id: 'claims', label: 'Claims' },
   { id: 'comparison', label: 'Comparison' },
   { id: 'scorecard', label: 'Scorecard' },
+  { id: 'new-business', label: 'New Business Quote' },
 ];
 
 function switchTab(id) {
@@ -989,6 +990,10 @@ function renderCaseWorkspace() {
       ${comparisonPanelHtml()}
     </div>
 
+    <div class="tab-panel" data-tab="new-business">
+      <div id="new-business-rating-area"></div>
+    </div>
+
     <div class="tab-panel" data-tab="scorecard">
       <div class="card">
         <h3>Compute risk scorecard</h3>
@@ -1031,6 +1036,7 @@ function renderCaseWorkspace() {
   loadRenewalRating();
   loadReferencePlans();
   renderComparisonColumnPickers();
+  loadNewBusinessRating();
 }
 
 async function saveCaseDetails() {
@@ -1086,7 +1092,7 @@ async function uploadFile(kind) {
       toast(`${kind} report parsed`);
     }
     statusEl.className = 'status-ok';
-    if (kind === 'census') await loadCensusSummary();
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) { await loadClaimsProjection(); await loadClaimsReportBreakdown(); await loadDiagnosisExposure(); }
@@ -1739,6 +1745,282 @@ async function recordOutcome(event) {
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+/* ---------------- New Business rate-card quoting ---------------- */
+
+let nbRateCardOptions = null;
+let nbCategories = [];
+let nbLastQuote = null;
+
+const NB_OPPORTUNITY_CLASS = { Good: 'tier-Preferred', Marginal: 'tier-Substandard', Poor: 'tier-DeclineRefer', Unknown: 'tier-Standard' };
+
+async function loadNewBusinessRating() {
+  const area = document.getElementById('new-business-rating-area');
+  try {
+    nbRateCardOptions = await api('/new-business/rate-card-options');
+  } catch (err) {
+    nbRateCardOptions = null;
+  }
+
+  let censusCategories = { categories: [], uncategorized_member_count: 0 };
+  try {
+    censusCategories = await api(`/cases/${currentCase.id}/census-categories`);
+  } catch (err) { /* no census yet */ }
+
+  try {
+    nbLastQuote = await api(`/cases/${currentCase.id}/new-business-quote`);
+  } catch (err) {
+    nbLastQuote = null;
+  }
+
+  const priorByCategory = {};
+  if (nbLastQuote) {
+    (nbLastQuote.categories || []).forEach(c => { priorByCategory[c.category] = c; });
+  }
+
+  nbCategories = censusCategories.categories.map(c => {
+    const prior = priorByCategory[c.category];
+    return {
+      category: c.category,
+      member_count: c.member_count,
+      product: prior ? prior.product : '',
+      network: prior ? prior.network : '',
+      tpa: prior ? prior.tpa : '',
+      commission_pct: prior && prior.commission_pct != null ? prior.commission_pct * 100 : '',
+      variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
+      previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
+      variantOptions: null,
+    };
+  });
+
+  nbCensusUncategorized = censusCategories.uncategorized_member_count;
+  await Promise.all(nbCategories.map((cat, idx) => cat.network ? nbFetchVariantOptions(idx) : Promise.resolve()));
+  await nbRenderArea();
+}
+
+let nbCensusUncategorized = 0;
+
+async function nbRenderArea() {
+  const area = document.getElementById('new-business-rating-area');
+  if (!area) return;
+
+  const uploadCard = `
+    <div class="card">
+      <h3>Rate card data</h3>
+      <div class="hint">Upload HealthCross's own New Business rate card once - every case reuses it. A fresh upload wholesale-replaces the previous one.</div>
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Product pricing list (Product &times; Region &times; Network &times; age band)</label>
+          <input type="file" id="nb-file-pricing" accept=".xlsx">
+          <button onclick="nbUploadFile('pricing')">Upload</button>
+          <span id="nb-status-pricing" class="status-pending"></span>
+        </div>
+        <div>
+          <label>Benefit variant option list (Annual Limit, Deductible, co-pays, ...)</label>
+          <input type="file" id="nb-file-variants" accept=".xlsx">
+          <button onclick="nbUploadFile('variants')">Upload</button>
+          <span id="nb-status-variants" class="status-pending"></span>
+        </div>
+      </div>
+      ${nbRateCardOptions ? `<div class="hint">Loaded: ${nbRateCardOptions.products.length} products, ${Object.values(nbRateCardOptions.product_networks).reduce((n, arr) => n + arr.length, 0)} product/network combinations, regions: ${nbRateCardOptions.regions.join(', ')}.</div>` : `<div class="hint">No rate card uploaded yet.</div>`}
+    </div>
+  `;
+
+  if (!nbRateCardOptions || !nbCategories.length) {
+    area.innerHTML = uploadCard + (nbCategories.length ? '' : `<div class="card"><div class="hint">${nbCensusUncategorized ? 'Census has no category values set on any member yet - upload a census with a Category column to quote by category.' : 'Upload a census for this case first.'}</div></div>`);
+    return;
+  }
+
+  const categoryCards = nbCategories.map((cat, idx) => nbCategoryCardHtml(cat, idx)).join('');
+
+  area.innerHTML = `
+    ${uploadCard}
+    <div class="card">
+      <h3>Quote by category</h3>
+      <div class="hint">Most cases use one Product for the whole group - some split different categories onto different Products. Each category's benefit-variant choices apply to every member in it; HealthCross's own rate card resolves each member's own Region/age/gender automatically.</div>
+      ${nbCensusUncategorized ? `<div class="hint">${nbCensusUncategorized} census member(s) have no Category set and won't be priced.</div>` : ''}
+    </div>
+    ${categoryCards}
+    <div class="card">
+      <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
+    </div>
+    <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
+  `;
+}
+
+function nbCategoryCardHtml(cat, idx) {
+  const products = nbRateCardOptions.products;
+  const networksForProduct = cat.product ? (nbRateCardOptions.product_networks[cat.product] || []) : [];
+  const variantSelects = cat.variantOptions ? Object.keys(cat.variantOptions).sort().map(variantName => {
+    const options = cat.variantOptions[variantName];
+    const selected = cat.variant_selections[variantName] || '';
+    return `
+      <div>
+        <label>${escapeHtml(variantName)}</label>
+        <select onchange="nbSetVariantSelection(${idx}, '${escapeHtml(variantName).replace(/'/g, "\\'")}', this.value)">
+          <option value="">Base (included)</option>
+          ${options.map(o => `<option value="${escapeHtml(o.option_value)}" ${selected === o.option_value ? 'selected' : ''}>${escapeHtml(o.option_value)}${o.direction !== 'Base' ? ` (${o.direction} ${o.impact_type === 'Percent' ? (o.direction === 'Upgrade' ? '+' : '-') + o.impact_value + '%' : 'AED ' + o.impact_value})` : ''}</option>`).join('')}
+        </select>
+      </div>
+    `;
+  }).join('') : '';
+
+  return `
+    <div class="card">
+      <h3>Category ${escapeHtml(cat.category)} <span style="color:var(--ink-muted); font-weight:400;">(${cat.member_count} members)</span></h3>
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Product</label>
+          <select onchange="nbSetProduct(${idx}, this.value)">
+            <option value="">Select product</option>
+            ${products.map(p => `<option value="${escapeHtml(p)}" ${cat.product === p ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Network</label>
+          <select onchange="nbSetNetwork(${idx}, this.value)" ${!cat.product ? 'disabled' : ''}>
+            <option value="">Select network</option>
+            ${networksForProduct.map(n => `<option value="${escapeHtml(n.network)}|${escapeHtml(n.tpa)}" ${cat.network === n.network ? 'selected' : ''}>${escapeHtml(n.network)} (${escapeHtml(n.tpa)})</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Commission % (optional, default 10%)</label>
+          <input type="number" step="0.1" value="${cat.commission_pct}" onchange="nbSetCommission(${idx}, this.value)">
+        </div>
+        <div>
+          <label>Preview variant options for region</label>
+          <select onchange="nbSetPreviewRegion(${idx}, this.value)">
+            ${(nbRateCardOptions.regions || []).map(r => `<option value="${escapeHtml(r)}" ${cat.previewRegion === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+      ${variantSelects ? `<div class="row" style="flex-wrap:wrap; margin-top:8px;">${variantSelects}</div>` : (cat.network ? '<div class="hint">No priced variants found for this Region/TPA/Network combination.</div>' : '')}
+    </div>
+  `;
+}
+
+function nbSetProduct(idx, product) {
+  nbCategories[idx].product = product;
+  nbCategories[idx].network = '';
+  nbCategories[idx].tpa = '';
+  nbCategories[idx].variantOptions = null;
+  nbCategories[idx].variant_selections = {};
+  nbRenderArea();
+}
+
+async function nbSetNetwork(idx, value) {
+  if (!value) { nbCategories[idx].network = ''; nbCategories[idx].tpa = ''; nbCategories[idx].variantOptions = null; nbRenderArea(); return; }
+  const [network, tpa] = value.split('|');
+  nbCategories[idx].network = network;
+  nbCategories[idx].tpa = tpa;
+  nbCategories[idx].variant_selections = {};
+  await nbFetchVariantOptions(idx);
+  nbRenderArea();
+}
+
+async function nbSetPreviewRegion(idx, region) {
+  nbCategories[idx].previewRegion = region;
+  await nbFetchVariantOptions(idx);
+  nbRenderArea();
+}
+
+async function nbFetchVariantOptions(idx) {
+  const cat = nbCategories[idx];
+  if (!cat.network) return;
+  try {
+    cat.variantOptions = await api(`/new-business/variant-options?region=${encodeURIComponent(cat.previewRegion)}&tpa=${encodeURIComponent(cat.tpa)}&network=${encodeURIComponent(cat.network)}`);
+  } catch (err) {
+    cat.variantOptions = {};
+  }
+}
+
+function nbSetVariantSelection(idx, variantName, value) {
+  if (value) {
+    nbCategories[idx].variant_selections[variantName] = value;
+  } else {
+    delete nbCategories[idx].variant_selections[variantName];
+  }
+}
+
+function nbSetCommission(idx, value) {
+  nbCategories[idx].commission_pct = value;
+}
+
+async function nbUploadFile(kind) {
+  const input = document.getElementById(kind === 'pricing' ? 'nb-file-pricing' : 'nb-file-variants');
+  const statusEl = document.getElementById(kind === 'pricing' ? 'nb-status-pricing' : 'nb-status-variants');
+  if (!input.files.length) { toast('Choose a file first', true); return; }
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  const path = kind === 'pricing' ? '/admin/rate-cards/upload' : '/admin/benefit-variant-rates/upload';
+  try {
+    const result = await api(path, { method: 'POST', body: form });
+    statusEl.textContent = `${result.rows_ingested} rows`;
+    toast('Rate card uploaded');
+    await loadNewBusinessRating();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function nbComputeQuote() {
+  const categories = nbCategories.filter(c => c.product && c.network).map(c => ({
+    category: c.category,
+    product: c.product,
+    network: c.network,
+    tpa: c.tpa,
+    commission_pct: c.commission_pct !== '' && c.commission_pct != null ? Number(c.commission_pct) / 100 : null,
+    variant_selections: c.variant_selections,
+  }));
+  if (!categories.length) { toast('Pick a Product and Network for at least one category', true); return; }
+
+  try {
+    const quote = await api(`/cases/${currentCase.id}/new-business-quote`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ categories }),
+    });
+    nbLastQuote = quote;
+    document.getElementById('nb-result-area').innerHTML = nbResultHtml(quote);
+    toast('Quote computed');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function nbResultHtml(quote) {
+  const opp = quote.opportunity_assessment;
+  const oppClass = opp ? (NB_OPPORTUNITY_CLASS[opp.verdict] || 'tier-Standard') : 'tier-Standard';
+  const warnings = [];
+  quote.result.categories.forEach(c => (c.warnings || []).forEach(w => warnings.push(`Category ${c.category}: ${w}`)));
+
+  return `
+    <div class="card">
+      <h3>Quote result ${opp ? `<span class="tier-pill ${oppClass}">${escapeHtml(opp.verdict)} opportunity</span>` : ''}</h3>
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Case gross annual premium</span><span class="value">AED ${quote.case_gross_annual_premium.toLocaleString()}</span></div>
+        ${opp && opp.target_premium != null ? `<div class="kpi"><span class="label">Target premium</span><span class="value">AED ${opp.target_premium.toLocaleString()}</span></div>` : ''}
+        ${opp && opp.target_vs_rated_variance_pct != null ? `<div class="kpi"><span class="label">Target vs. rated variance</span><span class="value">${opp.target_vs_rated_variance_pct > 0 ? '+' : ''}${opp.target_vs_rated_variance_pct}%</span></div>` : ''}
+        ${opp && opp.risk_tier ? `<div class="kpi"><span class="label">Risk tier</span><span class="value">${escapeHtml(opp.risk_tier)}</span></div>` : ''}
+      </div>
+      <table>
+        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
+        ${quote.result.categories.map(c => `
+          <tr>
+            <td>${escapeHtml(c.category)}</td>
+            <td>${escapeHtml(c.product)}</td>
+            <td>${escapeHtml(c.network)}</td>
+            <td>${c.member_count}</td>
+            <td>${c.net_annual_premium.toLocaleString()}</td>
+            <td>${(c.loading_pct * 100).toFixed(1)}%</td>
+            <td>${c.gross_annual_premium.toLocaleString()}</td>
+          </tr>
+        `).join('')}
+      </table>
+      ${warnings.length ? `<div class="hint">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
+    </div>
+  `;
 }
 
 showNewCaseForm();

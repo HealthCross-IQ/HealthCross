@@ -326,3 +326,103 @@ class ReferenceBenefitPlan(Base):
     # [{"section": "In-patient", "label": "Hospital accommodation", "value": "Full Refund"}, ...]
     benefit_rows = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RateCard(Base):
+    """HealthCross's own New Business manual/book rate card - one row per
+    Product x Region x Network x age band, giving the annual base price per
+    member before any benefit-variant loading (see BenefitVariantRate) or
+    commission/fee gross-up (see app/scoring/rules/new_business_rating.py).
+
+    Uploaded wholesale from an internal rate-card spreadsheet (see
+    app/ingestion/rate_cards.py) - a fresh upload replaces the whole table
+    rather than merging, since this is a single point-in-time rate sheet,
+    not a history to accumulate.
+
+    male_price/female_price carry a different meaning depending on region:
+    for Dubai/Northern Emirates they're the literal Male/Female price; for
+    Abu Dhabi the same two columns instead price Employee/Dependant (Abu
+    Dhabi's own regulated scheme rates by membership role, not gender) -
+    this is exactly how the source spreadsheet itself reuses the columns,
+    so it's kept as-is rather than invented as two separately-named fields.
+    """
+
+    __tablename__ = "rate_cards"
+
+    id = Column(Integer, primary_key=True)
+    product = Column(String, nullable=False)  # Platinum / Gold / Silver / Bronze
+    region = Column(String, nullable=False)  # Dubai / Abu Dhabi / Northern Emirates
+    network = Column(String, nullable=False)
+    tpa = Column(String, nullable=False)  # MSH MENA / NAS Neuron
+    from_age = Column(Integer, nullable=False)
+    to_age = Column(Integer, nullable=False)
+    male_price = Column(Float, nullable=False)  # Employee price, for Abu Dhabi
+    female_price = Column(Float, nullable=False)  # Dependant price, for Abu Dhabi
+    # Flat AED maternity surcharge for a married female aged 18-50 - None
+    # where the source sheet says "Not Applicable" (outside that age band),
+    # 0 where it says so explicitly (still "applicable" as a concept, just
+    # priced at nil - e.g. Dubai/Northern Emirates today).
+    married_female_surcharge = Column(Float, nullable=True)
+    zone = Column(String, nullable=True)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class BenefitVariantRate(Base):
+    """One selectable option for one benefit variant (Annual Limit,
+    Deductible, OP Copay, Pharmacy Copay/Limit, Dental Copay/Limit, Optical
+    Copay/Limit, Maternity Limit, Alternative Medicine, Pre-existing &
+    Chronic Conditions), scoped by Region x TPA x Network - a network's
+    variant pricing is the same regardless of which Product tier is using
+    it, so this table has no Product column of its own (see RateCard for
+    the Product-level base price).
+
+    Each (region, tpa, network, variant_name) group has exactly one "Base"
+    row (the option already included in the product's base rate, zero
+    impact) plus Upgrade/Downgrade rows, each carrying a signed impact on
+    top of that member's own base rate - see
+    app/scoring/rules/new_business_rating.py for how impact_type/direction
+    combine into an actual AED adjustment.
+
+    Uploaded wholesale the same way as RateCard - a fresh upload replaces
+    the whole table.
+    """
+
+    __tablename__ = "benefit_variant_rates"
+
+    id = Column(Integer, primary_key=True)
+    variant_name = Column(String, nullable=False)
+    option_value = Column(String, nullable=False)
+    direction = Column(String, nullable=False)  # Base / Upgrade / Downgrade
+    impact_type = Column(String, nullable=False)  # Percent / Fixed / Currency / Text
+    impact_value = Column(Float, nullable=False)
+    is_default = Column(Boolean, default=False)
+    region = Column(String, nullable=False)
+    tpa = Column(String, nullable=False)
+    network = Column(String, nullable=False)
+    zone = Column(String, nullable=True)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class NewBusinessQuote(Base):
+    """One computed New Business rate-card quote for a case - see
+    app/scoring/rules/new_business_rating.py. `categories` is the broker's
+    own input (Product/Network/TPA + variant selections per category)
+    verbatim, and `result` is the full price_case() output, so a past quote
+    can be displayed or re-derived without needing to replay the broker's
+    choices against whatever the rate card looks like today.
+    """
+
+    __tablename__ = "new_business_quotes"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=False)
+    categories = Column(JSON, nullable=False)
+    case_gross_annual_premium = Column(Float, nullable=False)
+    result = Column(JSON, nullable=False)
+    opportunity_assessment = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    case = relationship("Case")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
