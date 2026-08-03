@@ -120,3 +120,43 @@ def test_zone_network_multiplier_is_scaled_by_network_tier_score():
     assert loaded_cheap_network["score"] == neutral["score"]
     # A rich (score=1.0) network should fully apply the zone-network multiplier.
     assert loaded_rich_network["score"] > loaded_cheap_network["score"]
+
+
+def test_overage_loading_is_distinct_from_the_age_band_multiplier():
+    # Two members with the same age-band multiplier (both fall in 41-59),
+    # but only one is actually over the overage threshold (50) - the older
+    # one should score higher despite sharing an age band, because the
+    # overage loading is a separate signal layered on top.
+    just_over_threshold = [_employee(51, "M")]
+    under_threshold_same_band = [_employee(45, "M")]
+
+    assert demographic_risk(just_over_threshold)["score"] > demographic_risk(under_threshold_same_band)["score"]
+
+
+def test_overage_loading_scales_with_the_fraction_of_the_census_over_the_threshold():
+    all_over = [_employee(55, "M"), _employee(60, "M")]
+    half_over = [_employee(55, "M"), _employee(30, "M")]
+    none_over = [_employee(30, "M"), _employee(35, "M")]
+
+    all_over_result = demographic_risk(all_over)
+    half_over_result = demographic_risk(half_over)
+    none_over_result = demographic_risk(none_over)
+
+    assert all_over_result["overage_fraction"] == 1.0
+    assert half_over_result["overage_fraction"] == 0.5
+    assert none_over_result["overage_fraction"] == 0.0
+    assert all_over_result["overage_loading"] > half_over_result["overage_loading"] > none_over_result["overage_loading"] == 0.0
+
+
+def test_overage_threshold_and_cap_are_caller_adjustable():
+    member = [_employee(45, "M")]
+
+    default_result = demographic_risk(member)
+    assert default_result["overage_count"] == 0  # 45 is not over the default threshold of 50
+
+    lowered_threshold_result = demographic_risk(member, overage_age_threshold=40)
+    assert lowered_threshold_result["overage_count"] == 1
+    assert lowered_threshold_result["score"] > default_result["score"]
+
+    higher_cap_result = demographic_risk(member, overage_age_threshold=40, overage_loading_cap=0.5)
+    assert higher_cap_result["score"] > lowered_threshold_result["score"]

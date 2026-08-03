@@ -280,6 +280,13 @@ class ScoringWeightSet(Base):
     zone_2_middle_east_network_multiplier = Column(Float, default=1.0)
     zone_3_europe_americas_network_multiplier = Column(Float, default=1.0)
 
+    # A member older than this age carries an extra loading on top of their
+    # own age-band multiplier, scaled by what fraction of the census is over
+    # it - a distinct signal from the age bands themselves (see
+    # app/scoring/rules/demographic.py), tunable without changing the bands.
+    overage_age_threshold = Column(Integer, default=50)
+    overage_loading_cap = Column(Float, default=0.15)
+
     is_active = Column(Boolean, default=False)
     trained_sample_size = Column(Integer, default=0)
     training_metrics = Column(JSON, nullable=True)
@@ -425,4 +432,21 @@ class NewBusinessQuote(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     case = relationship("Case")
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class InsurerTierPreference(Base):
+    """Which New Business Product tier an existing insurer's book typically
+    suggests as a starting point for the tier-ladder comparison (see
+    app/reference/product_tiers.py) - e.g. a group currently with Allianz/
+    Cigna Global Care/BUPA is usually worth quoting from Platinum first.
+    Admin-editable (not a hardcoded table) so underwriting can retune which
+    insurer maps to which tier as portfolio experience accumulates, without
+    a code change.
+    """
+
+    __tablename__ = "insurer_tier_preferences"
+
+    id = Column(Integer, primary_key=True)
+    insurer_name = Column(String, nullable=False, unique=True)
+    suggested_product = Column(String, nullable=False)  # Platinum / Gold / Silver / Bronze
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)

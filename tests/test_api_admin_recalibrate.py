@@ -56,6 +56,50 @@ def test_recalibrate_endpoint_succeeds_with_legacy_zone_4_column(client):
     assert body["new_weight_set"]["zone_4_other_multiplier"] == active_zone_4_other_multiplier
 
 
+def test_recalibrate_endpoint_carries_forward_overage_settings_unchanged(client):
+    """Regression test: overage_age_threshold/overage_loading_cap aren't
+    part of what /admin/recalibrate learns (see
+    app/scoring/rules/demographic.py's overage loading), so a recalibration
+    run must carry them forward from the previous active weight set rather
+    than silently resetting them to the ScoringWeightSet column defaults.
+    """
+    db = client.db_session_local()
+    active = db.query(models.ScoringWeightSet).filter_by(is_active=True).first()
+    active.overage_age_threshold = 55
+    active.overage_loading_cap = 0.33
+    db.commit()
+
+    random.seed(7)
+    for _ in range(25):
+        case = models.Case(broker_name="Broker", company_name="Co", industry="trading")
+        db.add(case)
+        db.flush()
+        scorecard = models.Scorecard(
+            case_id=case.id,
+            weight_set_id=active.id,
+            demographic_risk=random.uniform(0.8, 1.5),
+            claims_experience_risk=random.uniform(0.8, 2.0),
+            benefit_richness_risk=random.uniform(0.8, 1.3),
+            industry_risk=random.uniform(0.85, 1.3),
+            composite_score=50.0,
+            risk_tier="Standard",
+            suggested_loading_pct=10.0,
+            details={},
+        )
+        db.add(scorecard)
+        db.flush()
+        db.add(models.Outcome(case_id=case.id, scorecard_id=scorecard.id, bound=True, profitable=random.random() < 0.5))
+    db.commit()
+    db.close()
+
+    resp = client.post("/admin/recalibrate")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["recalibrated"] is True
+    assert body["new_weight_set"]["overage_age_threshold"] == 55
+    assert body["new_weight_set"]["overage_loading_cap"] == 0.33
+
+
 def test_recalibrate_endpoint_also_learns_zone_maternity_and_network_interactions(client):
     """End-to-end regression test for the zone x maternity and zone x
     network learned interaction effects: drives outcomes carrying

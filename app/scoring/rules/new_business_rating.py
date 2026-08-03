@@ -34,9 +34,10 @@ division-based gross-up used everywhere else in this codebase
 Case total is the sum of every category's gross_total.
 """
 from collections import defaultdict
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from app.reference.emirate_regions import REGION_ABU_DHABI, region_for_emirate
+from app.reference.product_tiers import NETWORK_RICHNESS_ORDER, tier_ladder
 
 MATERNITY_AGE_MIN, MATERNITY_AGE_MAX = 18, 50
 
@@ -267,6 +268,64 @@ def price_case(census: List[dict], categories: List[dict], rate_cards: List[dict
         "priced_member_count": len(census) - uncategorized_count,
         "uncategorized_member_count": uncategorized_count,
     }
+
+
+def _networks_offered(rate_cards: List[dict], product: str, tpa: str) -> Set[str]:
+    return {row["network"] for row in rate_cards if row["product"] == product and row["tpa"] == tpa}
+
+
+def _network_sort_key(tpa: str, network: str):
+    order = NETWORK_RICHNESS_ORDER.get(tpa, [])
+    return (order.index(network), network) if network in order else (len(order), network)
+
+
+def price_tier_ladder(
+    census: List[dict],
+    category: dict,
+    rate_cards: List[dict],
+    variant_rates: List[dict],
+) -> List[dict]:
+    """Prices the SAME plan design (same variant selections) as `category`
+    under every network belonging to category["tpa"] - never a different
+    TPA's networks - across the tier ladder around category["product"]
+    (one tier above, one tier below, bounded at Platinum/Bronze). E.g. a
+    broker who chose an MSH network sees every MSH network's price under
+    Gold, Platinum, and Silver at once, not just the one they picked,
+    rather than a single substituted "closest equivalent" per tier.
+
+    Returns one entry per product, each with a `networks` list (empty,
+    with a warning, if this TPA offers nothing at all under that product)
+    ordered richest-to-leanest per NETWORK_RICHNESS_ORDER where known.
+    """
+    members = [m for m in census if m.get("category") == category["category"]]
+    tpa = category["tpa"]
+
+    ladder_results = []
+    for product in tier_ladder(category["product"]):
+        networks = sorted(_networks_offered(rate_cards, product, tpa), key=lambda n: _network_sort_key(tpa, n))
+        if not networks:
+            ladder_results.append(
+                {"product": product, "networks": [], "warnings": [f"No {tpa} networks offered for {product}"]}
+            )
+            continue
+
+        network_rows = []
+        for network in networks:
+            ladder_category = {**category, "product": product, "network": network}
+            case_result = price_case(members, [ladder_category], rate_cards, variant_rates)
+            cat_result = case_result["categories"][0]
+            network_rows.append(
+                {
+                    "network": network,
+                    "is_chosen": product == category["product"] and network == category["network"],
+                    "net_annual_premium": cat_result["net_annual_premium"],
+                    "loading_pct": cat_result["loading_pct"],
+                    "gross_annual_premium": cat_result["gross_annual_premium"],
+                    "warnings": cat_result["warnings"],
+                }
+            )
+        ladder_results.append({"product": product, "networks": network_rows, "warnings": []})
+    return ladder_results
 
 
 # Thresholds for how far a broker's target premium can sit above/below the

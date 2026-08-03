@@ -15,7 +15,7 @@ from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
 from app.models import schemas
-from app.scoring.rules.new_business_rating import assess_opportunity, price_case
+from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_tier_ladder
 
 router = APIRouter(tags=["new-business-rating"])
 
@@ -177,9 +177,16 @@ def census_categories(case_id: int, db: Session = Depends(get_db)):
             counts[c.category] += 1
         else:
             uncategorized += 1
+
+    suggested_product = None
+    if case.existing_insurer:
+        pref = db.query(models.InsurerTierPreference).filter_by(insurer_name=case.existing_insurer).first()
+        suggested_product = pref.suggested_product if pref else None
+
     return {
         "categories": [{"category": k, "member_count": v} for k, v in sorted(counts.items())],
         "uncategorized_member_count": uncategorized,
+        "suggested_product": suggested_product,
     }
 
 
@@ -200,6 +207,8 @@ def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRe
 
     categories = [c.model_dump() for c in payload.categories]
     result = price_case(census, categories, rate_cards, variant_rates)
+    for cat_result, cat_input in zip(result["categories"], categories):
+        cat_result["tier_ladder"] = price_tier_ladder(census, cat_input, rate_cards, variant_rates)
 
     latest_scorecard = (
         db.query(models.Scorecard)

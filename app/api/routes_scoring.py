@@ -96,6 +96,8 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
             "zone_2_middle_east": weight_set.zone_2_middle_east_network_multiplier,
             "zone_3_europe_americas": weight_set.zone_3_europe_americas_network_multiplier,
         },
+        overage_age_threshold=weight_set.overage_age_threshold,
+        overage_loading_cap=weight_set.overage_loading_cap,
     )
 
     result = compute_scorecard(

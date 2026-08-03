@@ -238,11 +238,55 @@ class WeightSetOut(BaseModel):
     zone_1_asia_network_multiplier: float
     zone_2_middle_east_network_multiplier: float
     zone_3_europe_americas_network_multiplier: float
+    overage_age_threshold: int
+    overage_loading_cap: float
     is_active: bool
     trained_sample_size: int
     training_metrics: Optional[Dict[str, Any]] = None
     notes: Optional[str] = None
     created_at: datetime
+
+
+class WeightSetUpdate(BaseModel):
+    """Manual adjustment of the active weight set - e.g. after reviewing
+    portfolio outcomes and deciding a factor should move without waiting
+    for (or instead of) the automatic recalibration loop. Any field left
+    unset carries the current active value forward unchanged. Always
+    creates a new version (never edits in place) so the adjustment history
+    stays auditable the same way automatic recalibration already is.
+    """
+
+    w_demographic: Optional[float] = None
+    w_claims_experience: Optional[float] = None
+    w_benefit_richness: Optional[float] = None
+    w_industry: Optional[float] = None
+    zone_1_asia_multiplier: Optional[float] = None
+    zone_2_middle_east_multiplier: Optional[float] = None
+    zone_3_europe_americas_multiplier: Optional[float] = None
+    zone_4_other_multiplier: Optional[float] = None
+    zone_1_asia_maternity_multiplier: Optional[float] = None
+    zone_2_middle_east_maternity_multiplier: Optional[float] = None
+    zone_3_europe_americas_maternity_multiplier: Optional[float] = None
+    zone_1_asia_network_multiplier: Optional[float] = None
+    zone_2_middle_east_network_multiplier: Optional[float] = None
+    zone_3_europe_americas_network_multiplier: Optional[float] = None
+    overage_age_threshold: Optional[int] = None
+    overage_loading_cap: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class InsurerTierPreferenceOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    insurer_name: str
+    suggested_product: str
+    updated_at: datetime
+
+
+class InsurerTierPreferenceUpsert(BaseModel):
+    insurer_name: str
+    suggested_product: str
 
 
 class RecalibrationResult(BaseModel):

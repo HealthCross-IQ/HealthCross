@@ -1779,12 +1779,18 @@ async function loadNewBusinessRating() {
     (nbLastQuote.categories || []).forEach(c => { priorByCategory[c.category] = c; });
   }
 
+  nbSuggestedProduct = censusCategories.suggested_product || null;
+
   nbCategories = censusCategories.categories.map(c => {
     const prior = priorByCategory[c.category];
     return {
       category: c.category,
       member_count: c.member_count,
-      product: prior ? prior.product : '',
+      // A suggested product (from the case's existing insurer, see
+      // InsurerTierPreference) only pre-fills when nothing's been chosen
+      // yet - it's a starting point, never overrides what a broker (or a
+      // prior quote) already picked.
+      product: prior ? prior.product : (nbSuggestedProduct || ''),
       network: prior ? prior.network : '',
       tpa: prior ? prior.tpa : '',
       commission_pct: prior && prior.commission_pct != null ? prior.commission_pct * 100 : '',
@@ -1800,6 +1806,7 @@ async function loadNewBusinessRating() {
 }
 
 let nbCensusUncategorized = 0;
+let nbSuggestedProduct = null;
 
 async function nbRenderArea() {
   const area = document.getElementById('new-business-rating-area');
@@ -1869,6 +1876,7 @@ function nbCategoryCardHtml(cat, idx) {
   return `
     <div class="card">
       <h3>Category ${escapeHtml(cat.category)} <span style="color:var(--ink-muted); font-weight:400;">(${cat.member_count} members)</span></h3>
+      ${nbSuggestedProduct ? `<div class="hint">Suggested starting Product based on the case's existing insurer: <strong>${escapeHtml(nbSuggestedProduct)}</strong> - the tier ladder below also shows one tier above and below whatever's picked.</div>` : ''}
       <div class="row" style="align-items:flex-end;">
         <div>
           <label>Product</label>
@@ -2019,6 +2027,44 @@ function nbResultHtml(quote) {
         `).join('')}
       </table>
       ${warnings.length ? `<div class="hint">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
+    </div>
+    ${quote.result.categories.map(nbTierLadderHtml).join('')}
+  `;
+}
+
+function nbTierLadderHtml(categoryResult) {
+  const ladder = categoryResult.tier_ladder;
+  if (!ladder || ladder.length < 2) return '';
+
+  const ladderWarnings = [];
+  ladder.forEach(productRow => {
+    (productRow.warnings || []).forEach(w => ladderWarnings.push(`${productRow.product}: ${w}`));
+    (productRow.networks || []).forEach(n => (n.warnings || []).forEach(w => ladderWarnings.push(`${productRow.product} / ${n.network}: ${w}`)));
+  });
+
+  const rows = ladder.flatMap(productRow =>
+    (productRow.networks.length ? productRow.networks : [null]).map(n => ({ product: productRow.product, n }))
+  );
+
+  return `
+    <div class="card">
+      <h3>Category ${escapeHtml(categoryResult.category)} - tier &amp; network comparison</h3>
+      <div class="hint">Same variant selections priced under every ${escapeHtml(categoryResult.tpa)} network, one Product tier above and below the one chosen - never a different TPA's networks.</div>
+      <table>
+        <tr><th>Product</th><th>Network</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
+        ${rows.map(({ product, n }) => n ? `
+          <tr ${n.is_chosen ? 'style="font-weight:600;"' : ''}>
+            <td>${escapeHtml(product)}</td>
+            <td>${escapeHtml(n.network)}${n.is_chosen ? ' (chosen)' : ''}</td>
+            <td>${n.net_annual_premium != null ? n.net_annual_premium.toLocaleString() : '-'}</td>
+            <td>${n.loading_pct != null ? (n.loading_pct * 100).toFixed(1) + '%' : '-'}</td>
+            <td>${n.gross_annual_premium != null ? n.gross_annual_premium.toLocaleString() : '-'}</td>
+          </tr>
+        ` : `
+          <tr><td>${escapeHtml(product)}</td><td colspan="4" style="color:var(--ink-muted);">No networks available for this TPA</td></tr>
+        `).join('')}
+      </table>
+      ${ladderWarnings.length ? `<div class="hint">${ladderWarnings.map(escapeHtml).join('<br>')}</div>` : ''}
     </div>
   `;
 }

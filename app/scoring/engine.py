@@ -4,7 +4,7 @@ from typing import List, Optional
 from app.reference.network_tiers import DEFAULT_NETWORK_TIER_SCORE, network_tier_score as _network_tier_score
 from app.scoring.rules.benefit_richness import benefit_richness_risk
 from app.scoring.rules.claims_experience import claims_experience_risk
-from app.scoring.rules.demographic import demographic_risk
+from app.scoring.rules.demographic import DEFAULT_OVERAGE_AGE_THRESHOLD, DEFAULT_OVERAGE_LOADING_CAP, demographic_risk
 from app.scoring.rules.industry import industry_risk
 
 
@@ -17,6 +17,8 @@ class ScoringWeights:
     zone_multipliers: Optional[dict] = None
     zone_maternity_multipliers: Optional[dict] = None
     zone_network_multipliers: Optional[dict] = None
+    overage_age_threshold: int = DEFAULT_OVERAGE_AGE_THRESHOLD
+    overage_loading_cap: float = DEFAULT_OVERAGE_LOADING_CAP
 
 
 def _case_network_tier_score(benefit_plans: List[dict]) -> float:
@@ -71,6 +73,8 @@ def compute_scorecard(
         zone_maternity_multipliers=weights.zone_maternity_multipliers,
         zone_network_multipliers=weights.zone_network_multipliers,
         network_tier_score=case_network_tier_score,
+        overage_age_threshold=weights.overage_age_threshold,
+        overage_loading_cap=weights.overage_loading_cap,
     )
     benefits = benefit_richness_risk(benefit_plans)
     claims_exp = claims_experience_risk(claims, member_count=len(census), estimated_annual_premium=estimated_annual_premium)

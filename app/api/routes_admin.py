@@ -12,8 +12,17 @@ from app.feedback.recalibration import (
 )
 from app.models import db_models as models
 from app.models import schemas
+from app.reference.product_tiers import PRODUCT_TIER_ORDER
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+_WEIGHT_SET_FIELDS = [
+    "w_demographic", "w_claims_experience", "w_benefit_richness", "w_industry",
+    "zone_1_asia_multiplier", "zone_2_middle_east_multiplier", "zone_3_europe_americas_multiplier", "zone_4_other_multiplier",
+    "zone_1_asia_maternity_multiplier", "zone_2_middle_east_maternity_multiplier", "zone_3_europe_americas_maternity_multiplier",
+    "zone_1_asia_network_multiplier", "zone_2_middle_east_network_multiplier", "zone_3_europe_americas_network_multiplier",
+    "overage_age_threshold", "overage_loading_cap",
+]
 
 
 @router.get("/weights", response_model=List[schemas.WeightSetOut])
@@ -137,6 +146,11 @@ def recalibrate(db: Session = Depends(get_db)):
         zone_1_asia_network_multiplier=new_zone_network_multipliers["zone_1_asia"],
         zone_2_middle_east_network_multiplier=new_zone_network_multipliers["zone_2_middle_east"],
         zone_3_europe_americas_network_multiplier=new_zone_network_multipliers["zone_3_europe_americas"],
+        # Not part of automatic recalibration's scope (see WeightSetUpdate
+        # for manually adjusting these) - carried forward unchanged rather
+        # than silently resetting to the column default.
+        overage_age_threshold=active.overage_age_threshold,
+        overage_loading_cap=active.overage_loading_cap,
     )
     db.add(new_version)
     db.commit()
@@ -152,3 +166,66 @@ def recalibrate(db: Session = Depends(get_db)):
             "zone_network_multipliers": zone_network_result.get("metrics"),
         },
     )
+
+
+@router.patch("/weights/active", response_model=schemas.WeightSetOut)
+def update_active_weights(payload: schemas.WeightSetUpdate, db: Session = Depends(get_db)):
+    """Manually move any weight-set factor - e.g. after reviewing portfolio
+    outcomes and deciding a multiplier should change without waiting for
+    (or instead of) the automatic /recalibrate loop. Same
+    deactivate-and-create-a-new-version pattern as recalibration, so the
+    history of adjustments (automatic or manual) stays in one place.
+    """
+    active = db.query(models.ScoringWeightSet).filter_by(is_active=True).first()
+    if not active:
+        raise HTTPException(status_code=500, detail="No active weight set configured")
+
+    fields = {name: getattr(active, name) for name in _WEIGHT_SET_FIELDS}
+    fields.update(payload.model_dump(exclude={"notes"}, exclude_unset=True))
+
+    active.is_active = False
+    new_version = models.ScoringWeightSet(
+        version=active.version + 1,
+        is_active=True,
+        trained_sample_size=active.trained_sample_size,
+        notes=payload.notes or "Manual adjustment",
+        **fields,
+    )
+    db.add(new_version)
+    db.commit()
+    db.refresh(new_version)
+    return new_version
+
+
+@router.get("/insurer-tier-preferences", response_model=List[schemas.InsurerTierPreferenceOut])
+def list_insurer_tier_preferences(db: Session = Depends(get_db)):
+    return db.query(models.InsurerTierPreference).order_by(models.InsurerTierPreference.insurer_name).all()
+
+
+@router.post("/insurer-tier-preferences", response_model=schemas.InsurerTierPreferenceOut)
+def upsert_insurer_tier_preference(payload: schemas.InsurerTierPreferenceUpsert, db: Session = Depends(get_db)):
+    if payload.suggested_product not in PRODUCT_TIER_ORDER:
+        raise HTTPException(status_code=400, detail=f"suggested_product must be one of {PRODUCT_TIER_ORDER}")
+
+    existing = db.query(models.InsurerTierPreference).filter_by(insurer_name=payload.insurer_name).first()
+    if existing:
+        existing.suggested_product = payload.suggested_product
+        db.commit()
+        db.refresh(existing)
+        return existing
+
+    new_pref = models.InsurerTierPreference(insurer_name=payload.insurer_name, suggested_product=payload.suggested_product)
+    db.add(new_pref)
+    db.commit()
+    db.refresh(new_pref)
+    return new_pref
+
+
+@router.delete("/insurer-tier-preferences/{insurer_name}")
+def delete_insurer_tier_preference(insurer_name: str, db: Session = Depends(get_db)):
+    existing = db.query(models.InsurerTierPreference).filter_by(insurer_name=insurer_name).first()
+    if not existing:
+        raise HTTPException(status_code=404, detail="No preference found for this insurer")
+    db.delete(existing)
+    db.commit()
+    return {"deleted": insurer_name}

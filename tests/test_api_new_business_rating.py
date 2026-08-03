@@ -192,3 +192,74 @@ def test_census_categories_reports_member_counts_and_uncategorized(client):
     body = resp.json()
     assert body["categories"] == [{"category": "A", "member_count": 2}]
     assert body["uncategorized_member_count"] == 1
+
+
+def test_census_categories_suggests_a_product_tier_from_the_existing_insurer(client):
+    from app.models import db_models as models
+
+    db = client.db_session_local()
+    db.add(models.InsurerTierPreference(insurer_name="Allianz", suggested_product="Platinum"))
+    case = models.Case(broker_name="Broker", company_name="Acme", industry="trading", existing_insurer="Allianz")
+    db.add(case)
+    db.commit()
+    db.refresh(case)
+    db.add(models.CensusRecord(case_id=case.id, category="A", age=30, gender="M", marital_status="single", relation="employee", emirates="Dubai"))
+    db.commit()
+    case_id = case.id
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/census-categories")
+    assert resp.status_code == 200
+    assert resp.json()["suggested_product"] == "Platinum"
+
+
+def test_census_categories_suggested_product_is_none_for_an_unmapped_insurer(client):
+    case_id = _make_case(client)
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    case = db.get(models.Case, case_id)
+    case.existing_insurer = "Some Insurer Not In The Table"
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/census-categories")
+    assert resp.status_code == 200
+    assert resp.json()["suggested_product"] is None
+
+
+def test_quote_includes_a_tier_ladder_per_category(client, tmp_path):
+    pricing_path = _write_xlsx(
+        tmp_path,
+        "pricing_ladder.xlsx",
+        PRODUCT_PRICING_HEADER,
+        [
+            ["Bronze", 18, 40, 2000, 2200, "0 (Applicable only for age band 18-50)", "Dubai", "MSH Regular", "MSH MENA", "Worldwide", "2025-01-01", ""],
+            ["Silver", 18, 40, 3000, 3300, "0 (Applicable only for age band 18-50)", "Dubai", "MSH Premium", "MSH MENA", "Worldwide", "2025-01-01", ""],
+            ["Silver", 18, 40, 3200, 3500, "0 (Applicable only for age band 18-50)", "Dubai", "MSH Enhanced", "MSH MENA", "Worldwide", "2025-01-01", ""],
+        ],
+    )
+    with open(pricing_path, "rb") as f:
+        resp = client.post("/admin/rate-cards/upload", files={"file": ("pricing_ladder.xlsx", f, "application/octet-stream")})
+    assert resp.status_code == 200
+
+    case_id = _make_case(client)
+    resp = client.post(
+        f"/cases/{case_id}/new-business-quote",
+        json={"categories": [{"category": "A", "product": "Bronze", "network": "MSH Regular", "tpa": "MSH MENA", "variant_selections": {}}]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    ladder = body["result"]["categories"][0]["tier_ladder"]
+    products_in_ladder = [row["product"] for row in ladder]
+    assert products_in_ladder == ["Silver", "Bronze"]  # Bronze is the floor - nothing below it
+
+    silver = next(r for r in ladder if r["product"] == "Silver")
+    # Every MSH network offered under Silver shows up, not just one.
+    assert {n["network"] for n in silver["networks"]} == {"MSH Premium", "MSH Enhanced"}
+    premium_row = next(n for n in silver["networks"] if n["network"] == "MSH Premium")
+    assert premium_row["net_annual_premium"] == 3000.0 + 3300.0  # both census members priced under Silver too
+
+    bronze = next(r for r in ladder if r["product"] == "Bronze")
+    chosen_row = next(n for n in bronze["networks"] if n["is_chosen"])
+    assert chosen_row["network"] == "MSH Regular"

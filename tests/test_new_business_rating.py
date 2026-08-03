@@ -10,6 +10,7 @@ from app.scoring.rules.new_business_rating import (
     gross_up,
     price_case,
     price_member,
+    price_tier_ladder,
 )
 
 RATE_CARDS = [
@@ -209,3 +210,101 @@ def test_assess_opportunity_marginal_within_the_5pct_band():
 def test_assess_opportunity_unknown_without_a_target_premium():
     result = assess_opportunity(rated_premium=10000, target_premium=None, risk_tier="Standard")
     assert result["verdict"] == "Unknown"
+
+
+# Real TPA/network names (matching app/reference/product_tiers.py's
+# NETWORK_RICHNESS_ORDER) - Gold and Silver each carry more than one MSH
+# network so the "every network under this TPA" grid has something real
+# to show, not just one row per product.
+TIER_LADDER_RATE_CARDS = [
+    {"product": "Platinum", "region": "Dubai", "network": "MSH Platinum", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 5000.0, "female_price": 5500.0, "married_female_surcharge": 0.0},
+    {"product": "Gold", "region": "Dubai", "network": "MSH Platinum", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 4000.0, "female_price": 4500.0, "married_female_surcharge": 0.0},
+    {"product": "Gold", "region": "Dubai", "network": "MSH Comprehensive + Mediclinic", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 3800.0, "female_price": 4300.0, "married_female_surcharge": 0.0},
+    {"product": "Gold", "region": "Dubai", "network": "MSH Comprehensive", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 3600.0, "female_price": 4100.0, "married_female_surcharge": 0.0},
+    {"product": "Silver", "region": "Dubai", "network": "MSH Premium", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 3000.0, "female_price": 3300.0, "married_female_surcharge": 0.0},
+    {"product": "Silver", "region": "Dubai", "network": "MSH Enhanced", "tpa": "MSH MENA",
+     "from_age": 18, "to_age": 40, "male_price": 2800.0, "female_price": 3100.0, "married_female_surcharge": 0.0},
+]
+
+TIER_LADDER_CENSUS = [
+    {"category": "A", "age": 30, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"},
+]
+
+
+def test_price_tier_ladder_shows_one_tier_either_side_of_the_chosen_product():
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, TIER_LADDER_RATE_CARDS, [])
+    assert [r["product"] for r in ladder] == ["Platinum", "Gold", "Silver"]
+
+
+def test_price_tier_ladder_shows_every_network_under_the_chosen_tpa_for_each_product():
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, TIER_LADDER_RATE_CARDS, [])
+    gold = next(r for r in ladder if r["product"] == "Gold")
+    # Ordered richest to leanest, not just the one network originally chosen.
+    assert [n["network"] for n in gold["networks"]] == [
+        "MSH Platinum", "MSH Comprehensive + Mediclinic", "MSH Comprehensive",
+    ]
+
+
+def test_price_tier_ladder_flags_the_originally_chosen_product_and_network():
+    category = {"category": "A", "product": "Gold", "network": "MSH Comprehensive", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, TIER_LADDER_RATE_CARDS, [])
+    gold = next(r for r in ladder if r["product"] == "Gold")
+    chosen = [n for n in gold["networks"] if n["is_chosen"]]
+    assert len(chosen) == 1
+    assert chosen[0]["network"] == "MSH Comprehensive"
+    # Every other network/product combination is NOT flagged as chosen.
+    platinum = next(r for r in ladder if r["product"] == "Platinum")
+    assert all(not n["is_chosen"] for n in platinum["networks"])
+
+
+def test_price_tier_ladder_prices_each_network_independently():
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, TIER_LADDER_RATE_CARDS, [])
+    gold = next(r for r in ladder if r["product"] == "Gold")
+    by_network = {n["network"]: n["net_annual_premium"] for n in gold["networks"]}
+    assert by_network == {
+        "MSH Platinum": 4000.0,
+        "MSH Comprehensive + Mediclinic": 3800.0,
+        "MSH Comprehensive": 3600.0,
+    }
+
+
+def test_price_tier_ladder_flags_a_tier_with_no_networks_of_this_tpa_at_all():
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    rate_cards_without_silver = [r for r in TIER_LADDER_RATE_CARDS if r["product"] != "Silver"]
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, rate_cards_without_silver, [])
+    silver = next(r for r in ladder if r["product"] == "Silver")
+    assert silver["networks"] == []
+    assert silver["warnings"]
+
+
+def test_price_tier_ladder_never_shows_a_different_tpas_networks():
+    # A network belonging to NAS Neuron shouldn't appear just because it's
+    # priced under the same Gold product - only MSH MENA networks are shown
+    # when the category's own tpa is MSH MENA.
+    rate_cards_with_other_tpa = TIER_LADDER_RATE_CARDS + [
+        {"product": "Gold", "region": "Dubai", "network": "GN", "tpa": "NAS Neuron",
+         "from_age": 18, "to_age": 40, "male_price": 3500.0, "female_price": 3900.0, "married_female_surcharge": 0.0},
+    ]
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(TIER_LADDER_CENSUS, category, rate_cards_with_other_tpa, [])
+    gold = next(r for r in ladder if r["product"] == "Gold")
+    assert "GN" not in [n["network"] for n in gold["networks"]]
+
+
+def test_price_tier_ladder_only_prices_members_in_that_category():
+    census = TIER_LADDER_CENSUS + [
+        {"category": "B", "age": 30, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"},
+    ]
+    category = {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}
+    ladder = price_tier_ladder(census, category, TIER_LADDER_RATE_CARDS, [])
+    gold = next(r for r in ladder if r["product"] == "Gold")
+    platinum_network = next(n for n in gold["networks"] if n["network"] == "MSH Platinum")
+    assert platinum_network["net_annual_premium"] == 4000.0  # only the one Category A member, not both

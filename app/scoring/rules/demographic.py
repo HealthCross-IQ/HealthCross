@@ -64,6 +64,17 @@ MAX_GROUP_FAVORABILITY_DISCOUNT = 0.20
 SMALL_GROUP_THRESHOLD = 50
 SMALL_GROUP_LOADING_CAP = 0.15  # loading at the smallest group sizes, phasing out to 0 at the threshold
 
+# Distinct from the age bands above: an additional loading scaled by what
+# fraction of the census sits above this age, stacked on top of each
+# member's own age-band multiplier rather than replacing it. Defaults here
+# only apply when the caller doesn't pass its own (see ScoringWeightSet's
+# overage_age_threshold/overage_loading_cap, which is the normal path via
+# app/scoring/engine.py) - kept adjustable rather than asserted, per the
+# same underwriting-judgment-as-a-starting-point pattern as the zone
+# multipliers below.
+DEFAULT_OVERAGE_AGE_THRESHOLD = 50
+DEFAULT_OVERAGE_LOADING_CAP = 0.15
+
 
 def _age_band_multiplier(age: int) -> float:
     for low, high, multiplier in AGE_BANDS:
@@ -119,6 +130,8 @@ def demographic_risk(
     zone_maternity_multipliers: Optional[Dict[str, float]] = None,
     zone_network_multipliers: Optional[Dict[str, float]] = None,
     network_tier_score: float = 0.5,
+    overage_age_threshold: int = DEFAULT_OVERAGE_AGE_THRESHOLD,
+    overage_loading_cap: float = DEFAULT_OVERAGE_LOADING_CAP,
 ) -> dict:
     if not census:
         return {"score": 1.0, "group_size": 0}
@@ -151,7 +164,11 @@ def demographic_risk(
 
     small_group_loading = SMALL_GROUP_LOADING_CAP * max(0.0, (SMALL_GROUP_THRESHOLD - group_size) / SMALL_GROUP_THRESHOLD)
 
-    score = avg_member_risk * (1 - group_favorability_discount) * (1 + small_group_loading)
+    overage_count = sum(1 for m in census if m.get("age") is not None and m["age"] > overage_age_threshold)
+    overage_fraction = overage_count / len(census)
+    overage_loading = overage_loading_cap * overage_fraction
+
+    score = avg_member_risk * (1 - group_favorability_discount) * (1 + small_group_loading) * (1 + overage_loading)
 
     ages = [m["age"] for m in census if m.get("age") is not None]
     infants = sum(1 for m in census if (m.get("relation") or "").lower() == "child" and (m.get("age") or 0) <= INFANT_AGE_MAX)
@@ -199,6 +216,9 @@ def demographic_risk(
         "male_ratio_employees": round(male_ratio, 3),
         "group_favorability_discount": round(group_favorability_discount, 4),
         "small_group_loading": round(small_group_loading, 4),
+        "overage_count": overage_count,
+        "overage_fraction": round(overage_fraction, 4),
+        "overage_loading": round(overage_loading, 4),
         "infant_count": infants,
         "favorable_children_count": favorable_children,
         "maternity_risk_count": maternity_risk_count,
