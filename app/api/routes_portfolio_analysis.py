@@ -19,9 +19,12 @@ from app.ingestion.portfolio_members import parse_portfolio_members
 from app.ingestion.subgroup_mapping import parse_subgroup_mapping
 from app.models import db_models as models
 from app.models import schemas
+from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
     group_claims_by_beneficiary,
+    normalize_subgroup_key,
+    resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
     summarize_portfolio,
@@ -212,11 +215,17 @@ def _run_analysis(
     variant_rates = _variant_rate_dicts(db)
 
     claims = [
-        {"patient_id": patient_id, "date_of_treatment": date_of_treatment, "final_amount": final_amount}
-        for patient_id, date_of_treatment, final_amount in db.query(
+        {
+            "patient_id": patient_id,
+            "date_of_treatment": date_of_treatment,
+            "final_amount": final_amount,
+            "claim_status": claim_status,
+        }
+        for patient_id, date_of_treatment, final_amount, claim_status in db.query(
             models.PortfolioClaimEntry.patient_id,
             models.PortfolioClaimEntry.date_of_treatment,
             models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
         ).all()
     ]
     claims_by_beneficiary = group_claims_by_beneficiary(claims)
@@ -225,7 +234,7 @@ def _run_analysis(
         gp.group_name: gp.product for gp in db.query(models.GroupProductMapping).all()
     }
     subgroup_master_by_name: Dict[str, str] = {
-        sm.subgroup_name: sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
     }
 
     results = [
@@ -377,7 +386,7 @@ def list_master_clients(db: Session = Depends(get_db)):
     master_contract/contract fields only where no mapping entry exists.
     """
     subgroup_master_by_name: Dict[str, str] = {
-        sm.subgroup_name: sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
     }
     rows = db.query(models.PortfolioMember.contract, models.PortfolioMember.master_contract).all()
     masters = {
@@ -389,18 +398,51 @@ def list_master_clients(db: Session = Depends(get_db)):
 
 
 @router.get("/filter-options", response_model=Dict[str, List[str]])
-def portfolio_filter_options(
-    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of"),
-    db: Session = Depends(get_db),
-):
+def portfolio_filter_options(db: Session = Depends(get_db)):
     """Distinct values actually present in the current book for each
     filterable dimension (product/network/region/nationality_zone/gender/
     relation) - powers dropdown filters that can only ever be set to a
     real, matchable value instead of free-text that silently matches
     nothing on a typo or case mismatch.
+
+    Deliberately does NOT run the full rate-card-pricing + claims-matching
+    analysis (_run_analysis) - none of these 6 fields need that (no
+    standard_premium or actual_claims involved), and this endpoint fires
+    on every Portfolio Analysis page load plus after every upload, so
+    running the expensive full pipeline here made the whole screen feel
+    like it hung on a real multi-thousand-member book.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db))
-    options: Dict[str, List[str]] = {}
-    for field in ("product", "network", "region", "nationality_zone", "gender", "relation"):
-        options[field] = sorted({str(r[field]) for r in results if r.get("in_scope", True) and r.get(field)})
-    return options
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    group_product_by_name: Dict[str, str] = {
+        gp.group_name: gp.product for gp in db.query(models.GroupProductMapping).all()
+    }
+
+    products, networks, regions, zones, genders, relations = set(), set(), set(), set(), set(), set()
+    for m in members:
+        if is_out_of_scope_network_type(m.get("network_type_raw")):
+            continue
+        network = map_network_type(m.get("network_type_raw"))
+        if network:
+            networks.add(network)
+        product = resolve_group_product(m, group_product_by_name)
+        if product:
+            products.add(product)
+        if m.get("region"):
+            regions.add(m["region"])
+        if m.get("nationality_zone"):
+            zones.add(m["nationality_zone"])
+        if m.get("gender"):
+            genders.add(m["gender"])
+        if m.get("relation"):
+            relations.add(m["relation"])
+
+    return {
+        "product": sorted(products),
+        "network": sorted(networks),
+        "region": sorted(regions),
+        "nationality_zone": sorted(zones),
+        "gender": sorted(genders),
+        "relation": sorted(relations),
+    }

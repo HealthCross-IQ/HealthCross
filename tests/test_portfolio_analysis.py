@@ -8,6 +8,7 @@ from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
     earned_premium_fraction,
     group_claims_by_beneficiary,
+    normalize_subgroup_key,
     resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
@@ -99,6 +100,27 @@ def test_analyze_portfolio_member_defaults_actual_claims_to_zero_without_a_match
     assert result["actual_claims"] == 0.0
 
 
+def test_analyze_portfolio_member_segregates_paid_and_outstanding_claims():
+    claims_by_ben = {
+        "ACM0001": [
+            {"date_of_treatment": None, "final_amount": 900.0, "claim_status": "Paid Claims"},
+            {"date_of_treatment": None, "final_amount": 300.0, "claim_status": "Outstanding Claims"},
+        ]
+    }
+    result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
+    assert result["actual_claims_paid"] == 900.0
+    assert result["actual_claims_outstanding"] == 300.0
+    # Total always reconciles back to paid + outstanding.
+    assert result["actual_claims"] == 1200.0
+
+
+def test_analyze_portfolio_member_treats_unrecognized_status_as_outstanding():
+    claims_by_ben = {"ACM0001": [{"date_of_treatment": None, "final_amount": 500.0, "claim_status": "Pending Review"}]}
+    result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
+    assert result["actual_claims_paid"] == 0.0
+    assert result["actual_claims_outstanding"] == 500.0
+
+
 def test_analyze_portfolio_member_only_counts_claims_within_its_own_policy_period():
     # A renewed member appears as TWO separate rows (one per policy year)
     # sharing the SAME beneficiary ID - claims dated in 2025 must only
@@ -183,6 +205,27 @@ def test_summarize_portfolio_rolls_up_by_product_and_computes_loss_ratios():
     assert bronze["burning_cost"] == round(4000.0 / 2.0, 2)
 
 
+def test_summarize_portfolio_segregates_paid_and_outstanding_claims_and_reconciles():
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [
+                {"date_of_treatment": None, "final_amount": 1000.0, "claim_status": "Paid Claims"},
+                {"date_of_treatment": None, "final_amount": 400.0, "claim_status": "Outstanding Claims"},
+            ]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": None, "final_amount": 3000.0, "claim_status": "Paid Claims"}]},
+        ),
+    ]
+    rows = summarize_portfolio(results, "product")
+    bronze = next(r for r in rows if r["product"] == "Bronze")
+    assert bronze["actual_claims_paid"] == 4000.0
+    assert bronze["actual_claims_outstanding"] == 400.0
+    assert bronze["actual_claims"] == bronze["actual_claims_paid"] + bronze["actual_claims_outstanding"]
+
+
 def test_summarize_portfolio_excludes_out_of_scope_members():
     results = [
         analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
@@ -203,6 +246,8 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "standard_premium": 0.0,
             "actual_premium": 2500.0,
             "actual_claims": 0.0,
+            "actual_claims_paid": 0.0,
+            "actual_claims_outstanding": 0.0,
             "loss_ratio_vs_standard": None,
             "loss_ratio_vs_actual": 0.0,
             "actual_vs_standard_pct": None,
@@ -350,8 +395,18 @@ def test_resolve_master_client_prefers_the_uploaded_mapping_over_the_raw_field()
     # The real PortfolioMember.master_contract field is often blank/unreliable
     # on the system export - the uploaded Subgroup->Master mapping (from the
     # same file as Group->Product) is the authoritative source when present.
-    mapping = {"Acme Sub LLC": "Acme Holdings (correct)"}
+    mapping = {normalize_subgroup_key("Acme Sub LLC"): "Acme Holdings (correct)"}
     member = {"contract": "Acme Sub LLC", "master_contract": "Acme Sub LLC"}  # raw field wrongly duplicates the subgroup
+    assert resolve_master_client(member, mapping) == "Acme Holdings (correct)"
+
+
+def test_resolve_master_client_matches_despite_whitespace_and_case_differences():
+    # Real spreadsheets prepared by hand aren't perfectly consistent about
+    # this - a stray trailing space or different capitalization between the
+    # membership export's CONTRACT column and the manually-typed mapping
+    # sheet shouldn't silently break the roll-up.
+    mapping = {normalize_subgroup_key("Acme  Sub LLC "): "Acme Holdings (correct)"}
+    member = {"contract": "acme sub llc", "master_contract": "acme sub llc"}
     assert resolve_master_client(member, mapping) == "Acme Holdings (correct)"
 
 
@@ -365,7 +420,7 @@ def test_analyze_portfolio_member_master_client_uses_the_uploaded_mapping():
     result = analyze_portfolio_member(
         _member(contract="Acme Sub LLC", master_contract="Acme Sub LLC"),  # raw field wrongly duplicates subgroup
         {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
-        subgroup_master_by_name={"Acme Sub LLC": "Acme Holdings (correct)"},
+        subgroup_master_by_name={normalize_subgroup_key("Acme Sub LLC"): "Acme Holdings (correct)"},
     )
     assert result["master_client"] == "Acme Holdings (correct)"
 

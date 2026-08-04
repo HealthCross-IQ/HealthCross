@@ -35,18 +35,36 @@ def resolve_group_product(member: dict, group_product_by_name: Dict[str, str]) -
     return group_product_by_name.get(member.get("contract")) or group_product_by_name.get(member.get("master_contract"))
 
 
+def normalize_subgroup_key(name: Optional[str]) -> str:
+    """Collapses whitespace and case so a subgroup name typed slightly
+    differently between the membership export's own CONTRACT column and
+    the manually-maintained Subgroup->Master mapping sheet (a stray
+    trailing space, extra internal spacing, different capitalization)
+    still matches - real spreadsheets prepared by hand aren't perfectly
+    consistent about this, and a silent non-match would leave that
+    subgroup showing as its own separate master rather than rolling up
+    correctly. Callers building a subgroup_master_by_name dict for
+    resolve_master_client must key it with this same normalization.
+    """
+    return " ".join((name or "").split()).casefold()
+
+
 def resolve_master_client(member: dict, subgroup_master_by_name: Optional[Dict[str, str]]) -> Optional[str]:
     """Which master policy a member's own subgroup belongs to - the
-    uploaded Subgroup->Master mapping (from the same Group->Product
-    mapping file) is authoritative, since PortfolioMember's own
-    MASTERCONTRACT column on the system export isn't reliable for this.
-    Falls back to the raw master_contract/contract fields only when no
-    mapping entry exists, so a member is never silently dropped from every
-    master-level view just because the mapping hasn't been uploaded yet.
+    uploaded Subgroup->Master mapping (see app/ingestion/subgroup_mapping.py,
+    a dedicated Subgroup/Group Name sheet) is authoritative, since
+    PortfolioMember's own MASTERCONTRACT column on the system export isn't
+    reliable for this. Falls back to the raw master_contract/contract
+    fields only when no mapping entry exists, so a member is never
+    silently dropped from every master-level view just because the
+    mapping hasn't been uploaded yet. `subgroup_master_by_name` must be
+    keyed by normalize_subgroup_key(subgroup_name), not the raw name.
     """
     contract = member.get("contract")
-    if subgroup_master_by_name and contract in subgroup_master_by_name:
-        return subgroup_master_by_name[contract]
+    if subgroup_master_by_name and contract:
+        key = normalize_subgroup_key(contract)
+        if key in subgroup_master_by_name:
+            return subgroup_master_by_name[key]
     return member.get("master_contract") or contract
 
 
@@ -81,18 +99,36 @@ def _claim_matches_period(date_of_treatment, policy_start, policy_end) -> bool:
     return policy_start <= date_of_treatment <= policy_end
 
 
-def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]]) -> float:
+def _is_paid_claim_status(claim_status: Optional[str]) -> bool:
+    """The real claims export carries a Claim Status of either "Paid
+    Claims" or "Outstanding Claims" (reserved/reported but not yet
+    settled) - anything not explicitly "paid" is treated as outstanding,
+    so a future status value doesn't silently get miscounted as paid.
+    """
+    return bool(claim_status) and "paid" in claim_status.lower()
+
+
+def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]]) -> Dict[str, float]:
     """Sums only the claim lines whose date_of_treatment falls within this
-    member's own policy period - see _claim_matches_period.
+    member's own policy period (see _claim_matches_period), split into
+    paid vs outstanding - "total" always equals paid + outstanding, so the
+    two segments reconcile back to the same grand total callers already
+    relied on.
     """
     beneficiary_id = member.get("beneficiary_id")
     policy_start = member.get("policy_start_date")
     policy_end = member.get("policy_end_date")
-    total = 0.0
+    paid = 0.0
+    outstanding = 0.0
     for c in claims_by_beneficiary.get(beneficiary_id, []):
-        if _claim_matches_period(c.get("date_of_treatment"), policy_start, policy_end):
-            total += c.get("final_amount") or 0.0
-    return total
+        if not _claim_matches_period(c.get("date_of_treatment"), policy_start, policy_end):
+            continue
+        amount = c.get("final_amount") or 0.0
+        if _is_paid_claim_status(c.get("claim_status")):
+            paid += amount
+        else:
+            outstanding += amount
+    return {"total": paid + outstanding, "paid": paid, "outstanding": outstanding}
 
 
 def analyze_portfolio_member(
@@ -146,6 +182,7 @@ def analyze_portfolio_member(
 
     actual_gross_premium = member.get("actual_gross_premium")
     actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
+    claims_breakdown = actual_claims_for_member(member, claims_by_beneficiary)
 
     return {
         "beneficiary_id": beneficiary_id,
@@ -173,7 +210,9 @@ def analyze_portfolio_member(
         "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
         "standard_premium": round(standard_premium, 2) if standard_premium is not None else None,
         "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
-        "actual_claims": round(actual_claims_for_member(member, claims_by_beneficiary), 2),
+        "actual_claims": round(claims_breakdown["total"], 2),
+        "actual_claims_paid": round(claims_breakdown["paid"], 2),
+        "actual_claims_outstanding": round(claims_breakdown["outstanding"], 2),
         "earned_premium_fraction": round(earned_fraction, 4),
         "warnings": warnings,
     }
@@ -220,6 +259,8 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "standard_premium": 0.0,
             "actual_premium": 0.0,
             "actual_claims": 0.0,
+            "actual_claims_paid": 0.0,
+            "actual_claims_outstanding": 0.0,
             "earned_member_years": 0.0,
         }
     )
@@ -232,6 +273,8 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         if r.get("actual_premium") is not None:
             bucket["actual_premium"] += r["actual_premium"]
         bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["actual_claims_paid"] += r.get("actual_claims_paid") or 0.0
+        bucket["actual_claims_outstanding"] += r.get("actual_claims_outstanding") or 0.0
         bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
         if r.get("standard_premium") is not None:
             bucket["standard_premium"] += r["standard_premium"]
@@ -251,6 +294,11 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 "standard_premium": round(standard_premium, 2),
                 "actual_premium": round(actual_premium, 2),
                 "actual_claims": round(actual_claims, 2),
+                # These two always sum back to "actual_claims" above -
+                # segregated so paid (settled) claims can be told apart
+                # from outstanding (reserved/reported but not yet paid).
+                "actual_claims_paid": round(bucket["actual_claims_paid"], 2),
+                "actual_claims_outstanding": round(bucket["actual_claims_outstanding"], 2),
                 "loss_ratio_vs_standard": round(actual_claims / standard_premium, 4) if standard_premium else None,
                 "loss_ratio_vs_actual": round(actual_claims / actual_premium, 4) if actual_premium else None,
                 # Positive = actual premium sits above standard (charging
