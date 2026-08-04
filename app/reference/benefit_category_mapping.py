@@ -42,7 +42,16 @@ CATEGORIES: Dict[str, Dict] = {
     },
     "Pre-existing & Chronic Conditions": {
         "group": "General",
-        "keywords": ["pre-existing condition", "pre existing condition", "chronic condition"],
+        "keywords": [
+            "pre-existing condition", "pre existing condition", "chronic condition",
+            # Cigna Smart Care's own label for this row is rendered as an
+            # icon graphic rather than real text, so it's recovered via OCR
+            # (app/ingestion/international_tob.py's _text_then_ocr) - which
+            # reads it inconsistently ("Pre-ExIsSting CONGITIONS", "rre-
+            # Existing Conditions" depending on render resolution). "including
+            # chronic" is the one substring that survives every OCR pass.
+            "including chronic",
+        ],
     },
     "Congenital Conditions": {
         "group": "Additional Benefits",

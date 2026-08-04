@@ -215,6 +215,15 @@ def extract_all_rows(file: BinaryIO, filename: str) -> Optional[Dict[str, Any]]:
         if header is None:
             return None
         rows = _extract_rows(pdf)
+        if not rows:
+            # The header line's wording ("... Table of Benefits ...") isn't
+            # unique to this document family - plenty of other insurers'
+            # TOB PDFs happen to open with the same words but use a totally
+            # different table shape. Without any bordered 3-column table
+            # actually found (_column_bounds came back empty), this isn't
+            # really this family either, so fall through to the next parser
+            # rather than reporting a false, all-empty match.
+            return None
 
     return {
         "plan_name": header.get("plan_name") or "Base Plan",
@@ -233,6 +242,8 @@ def parse_labeled_row_benefits_pdf(file: BinaryIO, filename: str) -> Optional[Di
         if header is None:
             return None
         rows = _extract_rows(pdf)
+        if not rows:
+            return None
 
     standard_summary: Dict[str, str] = {}
     if header.get("area_of_cover"):
@@ -243,6 +254,15 @@ def parse_labeled_row_benefits_pdf(file: BinaryIO, filename: str) -> Optional[Di
         matched = _find_matching_row(rows, anchors)
         if matched:
             standard_summary[field] = matched["value"]
+
+    if not standard_summary:
+        # The header text and a stray bordered table both happened to be
+        # found, but none of this document's row labels match any of this
+        # family's known field anchors - a real MaxMed-style document always
+        # matches at least one. This is a different document family whose
+        # table just happens to also have 3 cells somewhere, so report no
+        # match rather than a plan with a name and nothing else.
+        return None
 
     dental_text = standard_summary.get("dental", "")
     optical_text = standard_summary.get("optical", "")

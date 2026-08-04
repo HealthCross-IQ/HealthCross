@@ -100,13 +100,24 @@ def _text_bbox(page: "pdfplumber.page.Page", bbox) -> str:
     return _clean(page.within_bbox(clamped).extract_text())
 
 
+
+# A lone footnote reference number ("2", "12") sharing the label region with
+# an icon-styled label that has no real extractable text of its own (seen on
+# a real Cigna "Smart Care" export - the actual label, e.g. "Out-Patient
+# Co-insurance", is drawn as a graphic, while just the superscript footnote
+# marker next to it is real, separate text) would otherwise win over OCR
+# outright since it isn't empty - a real label is never just 1-2 bare
+# digits, so this is safe to treat the same as no native text at all.
+_BARE_FOOTNOTE_RE = re.compile(r"^\d{1,2}$")
+
+
 def _text_then_ocr(page: "pdfplumber.page.Page", bbox) -> str:
     text = _text_bbox(page, bbox)
-    if text:
+    if text and not _BARE_FOOTNOTE_RE.match(text):
         return text
     if not _has_any_visual_content(page, bbox):
-        return ""
-    return _ocr_bbox(page, bbox)
+        return text
+    return _ocr_bbox(page, bbox) or text
 
 
 def _label_and_note_from_geometry(page: "pdfplumber.page.Page", table_bbox, row_top: float, row_bottom: float, value_x0: float, value_x1: float):

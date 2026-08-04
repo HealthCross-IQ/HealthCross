@@ -789,6 +789,65 @@ async function runReferenceComparison() {
   }
 }
 
+// Prints whatever's currently rendered in a tab (tables, KPI grids, SVG
+// charts) as-is, rather than rebuilding each card's content from scratch
+// per tab - a broker gets a PDF of exactly what they're already looking
+// at. The tab must already have data loaded (this doesn't fetch anything
+// itself); interactive controls (buttons/inputs/selects) are hidden since
+// they aren't meaningful in a printed report. The chart colors are
+// hand-copied from the page's own light-theme :root variables, since a
+// popup window doesn't inherit the parent document's CSS custom
+// properties on its own.
+function printTabAsPdf(tabId, title) {
+  const panel = document.querySelector(`.tab-panel[data-tab="${tabId}"]`);
+  if (!panel || !panel.textContent.trim()) { toast("Nothing to print yet - load this tab's data first", true); return; }
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  :root {
+    --bg: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec; --border: rgba(11,11,11,0.10);
+    --ink: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781; --grid: #e1e0d9;
+    --accent: #2a78d6; --accent-ink: #ffffff;
+    --good: #0ca30c; --good-bg: #0ca30c1a; --warning: #fab219; --warning-bg: #fab2191a;
+    --serious: #ec835a; --serious-bg: #ec835a1a; --critical: #d03b3b; --critical-bg: #d03b3b1a;
+    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-1-wash: #2a78d61a;
+  }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 24px auto; max-width: 900px; color: var(--ink); background: #fff; }
+  h1 { font-size: 19px; margin: 0 0 16px; }
+  h3 { font-size: 15px; margin: 20px 0 6px; }
+  h4 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); margin: 14px 0 6px; }
+  .card { margin-bottom: 18px; page-break-inside: avoid; }
+  .hint { color: var(--ink-muted); font-size: 11px; margin-bottom: 8px; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 8px; font-size: 11.5px; table-layout: fixed; }
+  th, td { border: 1px solid #ccc; padding: 5px 8px; text-align: left; word-wrap: break-word; }
+  th { background: var(--accent); color: #fff; font-weight: 700; text-transform: none; }
+  .kpi-grid { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
+  .kpi { border: 1px solid #ccc; border-radius: 6px; padding: 8px 10px; }
+  .kpi .label { display: block; font-size: 10px; color: var(--ink-muted); }
+  .kpi .value { font-size: 16px; font-weight: 700; }
+  .tier-pill { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+  .chart-wrap { margin: 4px 0 18px; max-width: 620px; }
+  .chart-svg { display: block; overflow: visible; max-width: 100%; height: auto; }
+  .chart-label { font-size: 11.5px; fill: var(--ink-2); text-anchor: end; dominant-baseline: middle; }
+  .chart-value { font-size: 11.5px; fill: var(--ink-2); font-variant-numeric: tabular-nums; dominant-baseline: middle; }
+  .chart-axis-label { font-size: 10.5px; fill: var(--ink-muted); }
+  .chart-grid { stroke: var(--grid); stroke-width: 1; }
+  .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 14px; margin-top: 6px; font-size: 11px; }
+  .chart-legend .dot { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+  button, input, select, #chart-tooltip { display: none !important; }
+  @media print { body { margin: 8px auto; } }
+</style></head><body>
+  <h1>${escapeHtml(title)}${currentCase ? ' - ' + escapeHtml(currentCase.company_name) : ''}</h1>
+  ${panel.innerHTML}
+  <script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
 function _comparisonRowsFlat(result) {
   const rows = [];
   result.sections.forEach(section => {
@@ -971,16 +1030,19 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="tab-panel" data-tab="census">
+      <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('census', 'Census Summary')">Print / Save as PDF</button></div>
       <div id="census-summary-area"></div>
     </div>
 
     <div class="tab-panel" data-tab="benefits">
+      <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('benefits', 'Table of Benefits')">Print / Save as PDF</button></div>
       <div id="benefits-summary-area"></div>
       <div id="premium-by-category-area"></div>
       <div id="benefits-comparison-area"></div>
     </div>
 
     <div class="tab-panel" data-tab="claims">
+      <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('claims', 'Claims Analysis')">Print / Save as PDF</button></div>
       <div id="claims-report-year-area"></div>
       <div id="claims-report-comparison-area"></div>
       <div id="claims-projection-area"></div>
