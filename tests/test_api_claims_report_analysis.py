@@ -343,7 +343,7 @@ def test_benefits_summary_uses_standard_fields(client):
     assert set(body[0]["summary"].keys()) == set(STANDARD_FIELDS)
 
 
-def _fake_parsed_report(period_start: str, period_end: str, total_paid: float) -> dict:
+def _fake_parsed_report(period_start: str, period_end: str, total_paid: float, monthly_paid=None) -> dict:
     return {
         "policy_number": "607836-001",
         "policy_effective_date": date.fromisoformat(period_start),
@@ -361,14 +361,14 @@ def _fake_parsed_report(period_start: str, period_end: str, total_paid: float) -
         "treatment_type_breakdown": [],
         "claims_by_member_type_value": [],
         "claims_by_member_type_count": [],
-        "monthly_paid": [],
+        "monthly_paid": monthly_paid or [],
     }
 
 
-def _upload_fake_claims_report(client, monkeypatch, case_id, period_start, period_end, total_paid, filename="report.pdf"):
+def _upload_fake_claims_report(client, monkeypatch, case_id, period_start, period_end, total_paid, filename="report.pdf", monthly_paid=None):
     monkeypatch.setattr(
         routes_cases, "parse_claims_report",
-        lambda file, name: _fake_parsed_report(period_start, period_end, total_paid),
+        lambda file, name: _fake_parsed_report(period_start, period_end, total_paid, monthly_paid),
     )
     return client.post(
         f"/cases/{case_id}/claims",
@@ -426,20 +426,43 @@ def test_claims_report_comparison_returns_a_row_per_year(client, monkeypatch):
     assert years == [(2024, 992_049.0), (2025, 1_315_830.0)]
 
 
-def test_claims_report_comparison_includes_burning_cost_and_pct_change(client, monkeypatch):
+def _six_full_months(total):
+    per_month = total / 6
+    return [{"year": 2025, "month": m, "paid": per_month, "partial": False} for m in ["Sep", "Oct", "Nov", "Dec", "Jan", "Feb"]]
+
+
+def test_claims_report_comparison_burning_cost_matches_the_standard_projection_formula(client, monkeypatch):
+    from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions
+
     case_id = _create_case_with_census(client)
     # Both fake reports use opening_members=100/closing_members=110 (see
-    # _fake_parsed_report) -> avg_report_members = 105 for each.
-    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
-    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+    # _fake_parsed_report) -> avg_report_members = 105 for each. 6 full
+    # months of monthly_paid so the standard avg-month -> annualized ->
+    # +IBNR -> / avg population formula (same one the single-year Claims
+    # projection card uses) can actually be computed, rather than the
+    # simpler (but understating, for a <12-month report) total_paid /
+    # avg_members shortcut.
+    _upload_fake_claims_report(
+        client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0, monthly_paid=_six_full_months(600_000.0),
+    )
+    _upload_fake_claims_report(
+        client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0, monthly_paid=_six_full_months(900_000.0),
+    )
 
     resp = client.get(f"/cases/{case_id}/claims-report-comparison")
     assert resp.status_code == 200
     rows = resp.json()["reports"]
-
     y2024, y2025 = rows[0], rows[1]
-    assert y2024["burning_cost_per_member"] == round(992_049.0 / 105, 2)
-    assert y2025["burning_cost_per_member"] == round(1_315_830.0 / 105, 2)
+
+    ibnr_pct = ClaimsProjectionAssumptions().ibnr_pct
+
+    def expected_burning_cost(six_month_total):
+        avg_month = six_month_total / 6
+        with_ibnr = avg_month * 12 * (1 + ibnr_pct)
+        return round(with_ibnr / 105, 2)  # avg_report_members = (100 + 110) / 2
+
+    assert y2024["burning_cost_per_member"] == expected_burning_cost(600_000.0)
+    assert y2025["burning_cost_per_member"] == expected_burning_cost(900_000.0)
 
     # The first (oldest) year has nothing earlier to compare against.
     assert y2024["total_paid_pct_change"] is None
@@ -447,9 +470,20 @@ def test_claims_report_comparison_includes_burning_cost_and_pct_change(client, m
 
     expected_total_pct = round((1_315_830.0 - 992_049.0) / 992_049.0 * 100, 2)
     assert y2025["total_paid_pct_change"] == expected_total_pct
-    # Burning cost moves by the same % as total_paid here since both years
-    # share the same average member count.
-    assert y2025["burning_cost_pct_change"] == expected_total_pct
+    # Burning cost moves by the same % as its own 6-month total here since
+    # both years share the same average member count and IBNR assumption.
+    expected_burning_pct = round((900_000.0 - 600_000.0) / 600_000.0 * 100, 2)
+    assert y2025["burning_cost_pct_change"] == expected_burning_pct
+
+
+def test_claims_report_comparison_burning_cost_is_none_without_six_full_months(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-report-comparison")
+    assert resp.status_code == 200
+    row = resp.json()["reports"][0]
+    assert row["burning_cost_per_member"] is None
 
 
 def test_claims_report_endpoints_accept_report_id_to_pick_a_specific_year(client, monkeypatch):

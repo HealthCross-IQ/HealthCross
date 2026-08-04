@@ -33,6 +33,29 @@ def _get_case_or_404(db: Session, case_id: int) -> models.Case:
     return case
 
 
+def _standard_burning_cost_per_member(report: models.ClaimsReport) -> Optional[float]:
+    """The same standard formula the single-year claims projection uses
+    (see project_annual_claims): the first 6 full months' average paid
+    claims, annualized, grossed up for IBNR, then divided by this report's
+    own average (opening+closing)/2 population - NOT total_paid divided
+    by average members directly, which understates the true annual
+    run-rate for a report whose own period doesn't cover a full 12
+    months. Returns None if there isn't enough data (fewer than 6 full
+    months, or missing opening/closing member counts) to compute it.
+    """
+    if not report.opening_members or not report.closing_members:
+        return None
+    full_months = [m["paid"] for m in (report.monthly_paid or []) if not m.get("partial")]
+    if len(full_months) < 6:
+        return None
+    assumptions = ClaimsProjectionAssumptions()
+    avg_month = sum(full_months[:6]) / 6
+    annualized = avg_month * 12
+    with_ibnr = annualized * (1 + assumptions.ibnr_pct)
+    avg_report_members = (report.opening_members + report.closing_members) / 2
+    return round(with_ibnr / avg_report_members, 2) if avg_report_members else None
+
+
 def _resolve_claims_report(db: Session, case_id: int, report_id: Optional[int] = None) -> models.ClaimsReport:
     """A case can have more than one claims report uploaded (one per
     policy year - see GET /claims-reports and /claims-report-comparison).
@@ -109,17 +132,7 @@ def get_claims_report_comparison(case_id: int, db: Session = Depends(get_db)):
         else:
             year = None
 
-        # Same avg_report_members definition project_annual_claims uses
-        # (app/scoring/rules/claims_projection.py) - burning cost per
-        # member for THIS report's own actual total_paid over its own
-        # reporting period, not annualized/IBNR-adjusted the way the
-        # 6-month projection is (that's a separate, more assumption-laden
-        # figure, still available per year via the report_id param on
-        # /claims-projection).
-        burning_cost = None
-        if report.total_paid is not None and report.opening_members and report.closing_members:
-            avg_report_members = (report.opening_members + report.closing_members) / 2
-            burning_cost = round(report.total_paid / avg_report_members, 2) if avg_report_members else None
+        burning_cost = _standard_burning_cost_per_member(report)
 
         rows.append(
             {
