@@ -52,7 +52,7 @@ def test_parses_claim_fields(claims_xlsx):
     assert first["date_of_treatment"].isoformat() == "2025-06-01"
 
 
-def test_reads_xlsb_files_with_the_pyxlsb_engine(monkeypatch, claims_xlsx):
+def test_reads_xlsb_files_with_the_calamine_engine(monkeypatch, claims_xlsx):
     import pandas as pd
 
     captured = {}
@@ -63,15 +63,15 @@ def test_reads_xlsb_files_with_the_pyxlsb_engine(monkeypatch, claims_xlsx):
         # Reuse the real xlsx fixture's content - only the engine kwarg
         # actually matters for this test, not real xlsb bytes.
         with open(claims_xlsx, "rb") as f:
-            return real_read_excel(f)
+            return real_read_excel(f, engine="calamine")
 
     monkeypatch.setattr(pd, "read_excel", _spy_read_excel)
     with open(claims_xlsx, "rb") as f:
         parse_portfolio_claims(f, "claims.xlsb")
-    assert captured["engine"] == "pyxlsb"
+    assert captured["engine"] == "calamine"
 
 
-def test_reads_xlsx_without_the_pyxlsb_engine(monkeypatch, claims_xlsx):
+def test_reads_xlsx_with_the_calamine_engine(monkeypatch, claims_xlsx):
     import pandas as pd
 
     captured = {}
@@ -79,9 +79,9 @@ def test_reads_xlsx_without_the_pyxlsb_engine(monkeypatch, claims_xlsx):
 
     def _spy_read_excel(file, **kwargs):
         captured["engine"] = kwargs.get("engine")
-        return real_read_excel(file)
+        return real_read_excel(file, **kwargs)
 
     monkeypatch.setattr(pd, "read_excel", _spy_read_excel)
     with open(claims_xlsx, "rb") as f:
         parse_portfolio_claims(f, "claims.xlsx")
-    assert captured["engine"] is None
+    assert captured["engine"] == "calamine"

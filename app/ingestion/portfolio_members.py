@@ -30,7 +30,11 @@ def _float_or_none(value) -> Optional[float]:
 
 
 def parse_portfolio_members(file: BinaryIO, filename: str) -> List[Dict]:
-    df = pd.read_excel(file)
+    # calamine (a Rust reader) is roughly twice as fast as the default
+    # openpyxl engine on this export's real size (thousands of rows across
+    # 80 columns) - matters here since the whole upload request blocks
+    # until parsing finishes.
+    df = pd.read_excel(file, engine="calamine")
 
     # Parsed one column at a time (vectorized) rather than value-by-value -
     # much faster than calling pd.to_datetime() per cell in the row loop below.
