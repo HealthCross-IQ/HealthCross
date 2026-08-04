@@ -185,6 +185,7 @@
   }
   .dropzone.dragover { border-color: var(--accent); background: var(--series-1-wash); }
   .dropzone .kind-label { width: 100px; font-size: 13px; font-weight: 600; flex-shrink: 0; }
+  .dropzone .upload-req-pill { flex-shrink: 0; font-size: 10px !important; padding: 2px 7px !important; }
   .dropzone input[type=file] { flex: 1; font-size: 12px; min-width: 0; }
   .status-ok { color: var(--good); font-size: 12.5px; white-space: nowrap; }
   .status-err { color: var(--critical); font-size: 12.5px; white-space: nowrap; }
@@ -988,49 +989,71 @@ function renderCaseWorkspace() {
     <div class="card" id="case-completeness-card"></div>
 
     <div class="card">
-      <h3>Upload files</h3>
-      <div class="hint">Census is required to score. Table of benefits is required. Claims/claims ledger are optional.</div>
+      <h3>Quick upload</h3>
+      <div class="hint">Drop every file for this case at once (census, benefits, claims, quote) - we'll guess which is which from each file's own content, then let you confirm or correct before anything is actually uploaded.</div>
+      <div class="dropzone" id="quick-upload-zone" style="flex-direction:column; align-items:center; padding:26px 16px; cursor:pointer;" onclick="document.getElementById('quick-upload-input').click()">
+        <input type="file" id="quick-upload-input" multiple style="display:none;" accept=".xlsx,.xls,.csv,.pdf" onchange="quickUploadHandleFiles(this.files)">
+        <div style="font-weight:600;">Drop files here, or click to choose</div>
+        <div class="hint" style="margin:4px 0 0;">.xlsx, .xls, .csv, .pdf - any mix, all at once</div>
+      </div>
+      <div id="quick-upload-review"></div>
+    </div>
 
-      <div class="dropzone" id="dropzone-census">
-        <span class="kind-label">Census</span>
-        <input type="file" id="file-census" accept=".xlsx,.xls,.csv">
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
-          <input type="checkbox" id="file-census-merge-dates" style="width:auto;"> dates-only file (merge into existing census)
-        </label>
-        <button onclick="uploadFile('census')">Upload</button>
-        <span id="status-census" class="status-pending"></span>
-      </div>
-      <div class="hint" style="margin-top:-4px;">If member start/end dates come from a separate file (e.g. an "endorsement" export) rather than the main roster, upload the roster first, then tick this and upload the dates file - rows are matched by employee/member ID and only the date columns are filled in.</div>
-      <div class="dropzone" id="dropzone-benefits">
-        <span class="kind-label">Benefits</span>
-        <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv,.pdf">
-        <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
-          <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
-        </label>
-        <button onclick="uploadFile('benefits')">Upload</button>
-        <span id="status-benefits" class="status-pending"></span>
-      </div>
-      <div class="hint" style="margin-top:-4px;">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
-      <div class="dropzone" id="dropzone-claims">
-        <span class="kind-label">Claims</span>
-        <input type="file" id="file-claims" accept=".xlsx,.xls,.csv">
-        <button onclick="uploadFile('claims')">Upload</button>
-        <span id="status-claims" class="status-pending"></span>
-      </div>
-      <div class="dropzone" id="dropzone-quote">
-        <span class="kind-label">Quote</span>
-        <input type="file" id="file-quote" accept=".pdf">
-        <button onclick="uploadFile('quote')">Upload</button>
-        <span id="status-quote" class="status-pending"></span>
-      </div>
-      <div class="hint" style="margin-top:-4px;">Quote: a new insurer's proposal for this case, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
-      <div class="dropzone" id="dropzone-claims-ledger">
-        <span class="kind-label">Claims ledger</span>
-        <input type="file" id="file-claims-ledger" accept=".xlsx,.xls,.csv">
-        <button onclick="uploadFile('claims-ledger')">Upload</button>
-        <span id="status-claims-ledger" class="status-pending"></span>
-      </div>
-      <div class="hint" style="margin-top:-4px;">Claims ledger: a raw per-claim-line export (e.g. the "ServicePlan" format) - only available for existing-business renewals, powering the top patients/diagnoses and renewal-increase analysis below instead of the burning-cost quote projection.</div>
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer; font-weight:700; font-size:14.5px;">Manual upload (one file at a time, with append/merge options)</summary>
+        <div class="hint" style="margin-top:10px;">${c.business_type === 'existing'
+          ? 'Renewal workflow: census (with member start/end dates), the existing table of benefits, and the claims ledger drive the renewal rating. Upload the HealthCross renewal quote to compare against it.'
+          : 'New business workflow: census and the existing table of benefits are required to score; claims aren\'t always available for a brand-new group. Upload the HealthCross quote to compare against your target premium.'}</div>
+
+        <div class="dropzone" id="dropzone-census">
+          <span class="kind-label">Census</span>
+          <span class="tier-pill dir-review upload-req-pill">Required</span>
+          <input type="file" id="file-census" accept=".xlsx,.xls,.csv">
+          <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
+            <input type="checkbox" id="file-census-merge-dates" style="width:auto;"> dates-only file (merge into existing census)
+          </label>
+          <button onclick="uploadFile('census')">Upload</button>
+          <span id="status-census" class="status-pending"></span>
+        </div>
+        <div class="hint" style="margin-top:-4px;">If member start/end dates come from a separate file (e.g. an "endorsement" export) rather than the main roster, upload the roster first, then tick this and upload the dates file - rows are matched by employee/member ID and only the date columns are filled in.</div>
+        <div class="dropzone" id="dropzone-benefits">
+          <span class="kind-label">Benefits</span>
+          <span class="tier-pill dir-review upload-req-pill">Required</span>
+          <input type="file" id="file-benefits" accept=".xlsx,.xls,.csv,.pdf">
+          <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
+            <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
+          </label>
+          <button onclick="uploadFile('benefits')">Upload</button>
+          <span id="status-benefits" class="status-pending"></span>
+        </div>
+        <div class="hint" style="margin-top:-4px;">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
+        <div class="dropzone" id="dropzone-claims">
+          <span class="kind-label">Claims</span>
+          <span class="tier-pill dir-same upload-req-pill">Optional</span>
+          <input type="file" id="file-claims" accept=".xlsx,.xls,.csv">
+          <button onclick="uploadFile('claims')">Upload</button>
+          <span id="status-claims" class="status-pending"></span>
+        </div>
+        <div class="dropzone" id="dropzone-quote">
+          <span class="kind-label">${c.business_type === 'existing' ? 'Renewal Quote' : 'Quote'}</span>
+          <span class="tier-pill dir-same upload-req-pill">Optional</span>
+          <input type="file" id="file-quote" accept=".pdf">
+          <button onclick="uploadFile('quote')">Upload</button>
+          <span id="status-quote" class="status-pending"></span>
+        </div>
+        <div class="hint" style="margin-top:-4px;">${c.business_type === 'existing' ? 'Renewal Quote' : 'Quote'}: ${c.business_type === 'existing' ? "HealthCross's own renewal proposal for this case" : "a new insurer's proposal for this case"}, to compare against the table of benefits above (e.g. the QIC/HealthCROSS Global category-premium quote format).</div>
+        ${c.business_type === 'existing' ? `
+        <div class="dropzone" id="dropzone-claims-ledger">
+          <span class="kind-label">Claims ledger</span>
+          <span class="tier-pill dir-review upload-req-pill">Required</span>
+          <input type="file" id="file-claims-ledger" accept=".xlsx,.xls,.csv">
+          <button onclick="uploadFile('claims-ledger')">Upload</button>
+          <span id="status-claims-ledger" class="status-pending"></span>
+        </div>
+        <div class="hint" style="margin-top:-4px;">Claims ledger: a raw per-claim-line export (e.g. the "ServicePlan" format) - powers the top patients/diagnoses and renewal-increase analysis below instead of the burning-cost quote projection.</div>
+        ` : ''}
+      </details>
     </div>
 
     <div class="tab-bar">
@@ -1264,8 +1287,149 @@ document.addEventListener('drop', (e) => {
   const input = zone.querySelector('input[type=file]');
   if (input && e.dataTransfer.files.length) {
     input.files = e.dataTransfer.files;
+    // Only the Quick upload zone's input has an onchange handler (the
+    // single-file dropzones use a separate Upload button instead) - this
+    // dispatch is what actually lets dropping files there kick off
+    // detection, same as picking them via the file dialog would.
+    input.dispatchEvent(new Event('change', { bubbles: true }));
   }
 });
+
+/* ---------------- Quick upload (drag-drop all files, auto-detect kind) ---------------- */
+
+let quickUploadFiles = []; // [{file, detectedKind, confidence, reason, selectedKind, status}]
+
+const QUICK_UPLOAD_KIND_LABELS = {
+  census: 'Census', benefits: 'Benefits', claims: 'Claims', 'claims-ledger': 'Claims ledger', quote: 'Quote',
+};
+
+async function quickUploadHandleFiles(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+  const newItems = files.map(f => ({
+    file: f, detectedKind: null, confidence: null, reason: 'Detecting...', selectedKind: '', status: 'detecting',
+  }));
+  quickUploadFiles = quickUploadFiles.concat(newItems);
+  document.getElementById('quick-upload-input').value = '';
+  renderQuickUploadReview();
+
+  await Promise.all(newItems.map(async (item) => {
+    try {
+      const form = new FormData();
+      form.append('file', item.file);
+      const result = await api('/cases/detect-upload-kind', { method: 'POST', body: form });
+      item.detectedKind = result.detected_kind;
+      item.confidence = result.confidence;
+      item.reason = result.reason;
+      item.selectedKind = result.detected_kind || '';
+      item.status = 'pending';
+    } catch (err) {
+      item.status = 'error';
+      item.reason = err.message;
+    }
+    renderQuickUploadReview();
+  }));
+}
+
+function quickUploadSetKind(idx, value) {
+  quickUploadFiles[idx].selectedKind = value;
+  renderQuickUploadReview();
+}
+
+function quickUploadRemove(idx) {
+  quickUploadFiles.splice(idx, 1);
+  renderQuickUploadReview();
+}
+
+function quickUploadClear() {
+  quickUploadFiles = [];
+  renderQuickUploadReview();
+}
+
+function renderQuickUploadReview() {
+  const area = document.getElementById('quick-upload-review');
+  if (!area) return;
+  if (!quickUploadFiles.length) { area.innerHTML = ''; return; }
+
+  const rows = quickUploadFiles.map((item, idx) => {
+    const confPill = item.confidence === 'high'
+      ? '<span class="tier-pill dir-improved">Confident</span>'
+      : (item.confidence === 'low' ? '<span class="tier-pill dir-review">Please check</span>' : '');
+    const statusCell = item.status === 'done' ? '<span class="tier-pill dir-improved">Uploaded</span>'
+      : item.status === 'error' ? '<span class="tier-pill dir-review">Failed</span>'
+      : item.status === 'uploading' ? '<span class="hint">Uploading...</span>'
+      : `<button onclick="quickUploadRemove(${idx})">Remove</button>`;
+    return `
+      <tr>
+        <td>${escapeHtml(item.file.name)}</td>
+        <td>
+          <select onchange="quickUploadSetKind(${idx}, this.value)" ${item.status === 'done' || item.status === 'uploading' ? 'disabled' : ''}>
+            <option value="">Skip this file</option>
+            ${Object.entries(QUICK_UPLOAD_KIND_LABELS).map(([k, label]) => `<option value="${k}" ${item.selectedKind === k ? 'selected' : ''}>${label}</option>`).join('')}
+          </select>
+        </td>
+        <td>${item.status === 'detecting' ? '<span class="hint">Detecting...</span>' : confPill}</td>
+        <td class="hint" style="max-width:280px;">${escapeHtml(item.reason || '')}</td>
+        <td>${statusCell}</td>
+      </tr>
+    `;
+  }).join('');
+
+  const readyCount = quickUploadFiles.filter(f => f.status === 'pending' && f.selectedKind).length;
+  const stillDetecting = quickUploadFiles.some(f => f.status === 'detecting');
+
+  area.innerHTML = `
+    <div style="overflow-x:auto; margin-top:14px;">
+      <table>
+        <tr><th>File</th><th>Upload as</th><th>Confidence</th><th>Why</th><th></th></tr>
+        ${rows}
+      </table>
+    </div>
+    <div class="row" style="margin-top:10px;">
+      <button class="primary" onclick="quickUploadConfirm()" ${readyCount && !stillDetecting ? '' : 'disabled'}>Confirm &amp; upload ${readyCount ? `(${readyCount})` : ''}</button>
+      <button onclick="quickUploadClear()">Clear all</button>
+    </div>
+  `;
+}
+
+async function quickUploadConfirm() {
+  const toUpload = quickUploadFiles.filter(item => item.status === 'pending' && item.selectedKind);
+  for (const item of toUpload) {
+    item.status = 'uploading';
+    renderQuickUploadReview();
+    try {
+      const form = new FormData();
+      form.append('file', item.file);
+      const result = await api(`/cases/${currentCase.id}/${item.selectedKind}`, { method: 'POST', body: form });
+      item.status = 'done';
+      item.reason = Array.isArray(result) ? `${result.length} row(s) uploaded` : 'Uploaded';
+    } catch (err) {
+      item.status = 'error';
+      item.reason = err.message;
+    }
+    renderQuickUploadReview();
+  }
+
+  // Refresh whatever views depend on what just got uploaded - same views
+  // uploadFile() itself refreshes after a single manual upload, just for
+  // every kind touched in this one batch.
+  const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); }
+  if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
+  if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
+  if (uploadedKinds.has('claims')) {
+    selectedClaimsReportId = null;
+    await loadClaimsReportYearSelector();
+    await loadClaimsReportComparison();
+    await loadClaimsProjection();
+    await loadClaimsReportBreakdown();
+    await loadDiagnosisExposure();
+  }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); }
+  if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
+  await loadCaseCompleteness();
+  if (uploadedKinds.size) toast('Quick upload complete');
+}
 
 /* ---------------- census ---------------- */
 
@@ -1287,10 +1451,20 @@ function _pctTableWithGender(counts, pct, genderCounts) {
   `).join('');
 }
 
+// Marks an upload row as already having data, on a page (re)load rather
+// than only right after a fresh upload within the same session - e.g.
+// reopening a case that already has a census uploaded previously showed a
+// blank "No file chosen" with no hint that data existed at all.
+function _setUploadStatus(kind, text) {
+  const el = document.getElementById(`status-${kind}`);
+  if (el) { el.textContent = text; el.className = 'status-ok'; }
+}
+
 async function loadCensusSummary() {
   const area = document.getElementById('census-summary-area');
   try {
     const s = await api(`/cases/${currentCase.id}/census-summary`);
+    _setUploadStatus('census', `${s.total_members} member${s.total_members === 1 ? '' : 's'} uploaded`);
     const ageBandItems = Object.keys(s.age_band_counts).map(band => ({ label: band, value: s.age_band_counts[band] }));
     const zoneItems = Object.keys(s.nationality_zone_counts).map(zone => ({
       label: ZONE_LABELS[zone] || zone, count: s.nationality_zone_counts[zone], pct: s.nationality_zone_pct[zone],
@@ -1376,6 +1550,7 @@ async function loadBenefitsSummary() {
   const area = document.getElementById('benefits-summary-area');
   try {
     const plans = await api(`/cases/${currentCase.id}/benefits-summary`);
+    _setUploadStatus('benefits', `${plans.length} plan${plans.length === 1 ? '' : 's'} uploaded`);
     area.innerHTML = plans.map(p => `
       <div class="card">
         <h3>${escapeHtml(p.plan_name || 'Plan')}</h3>
@@ -1395,6 +1570,7 @@ async function loadPremiumByCategory() {
   const area = document.getElementById('premium-by-category-area');
   try {
     const p = await api(`/cases/${currentCase.id}/premium-by-category`);
+    _setUploadStatus('quote', `${p.categories.length} categor${p.categories.length === 1 ? 'y' : 'ies'} uploaded`);
     area.innerHTML = `
       <div class="card">
         <h3>Premium per category</h3>
@@ -1548,6 +1724,9 @@ async function loadClaimsReportYearSelector() {
   const area = document.getElementById('claims-report-year-area');
   try {
     const reports = await api(`/cases/${currentCase.id}/claims-reports`);
+    if (reports.length > 0) {
+      _setUploadStatus('claims', `${reports.length} report${reports.length === 1 ? '' : 's'} uploaded`);
+    }
     if (reports.length < 2) {
       // Only one (or no) report uploaded - the year picker would just be
       // noise, same as before multi-year support existed.
@@ -1782,6 +1961,7 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
     if (loadingOverride != null) params.set('loading_pct', loadingOverride);
     const qs = params.toString() ? `?${params.toString()}` : '';
     const a = await api(`/cases/${currentCase.id}/claims-ledger-analysis${qs}`);
+    _setUploadStatus('claims-ledger', 'Ledger uploaded');
 
     const pmpmBlock = a.annualized_incurred_claims_pmpm != null ? `
       <h4 style="margin-top:16px;">Method 2: Average cost per ERP member</h4>
@@ -2034,6 +2214,18 @@ async function loadNewBusinessRating() {
     nbRateCardOptions = null;
   }
 
+  // Book's own real claims experience by Product/Network, if HealthCross's
+  // Portfolio Analysis book (Members + Claims + rate card) has been
+  // uploaded - a reference figure shown alongside the rate card's own
+  // price, not something that changes the quote itself. Silently empty
+  // (rather than an error) when that book hasn't been uploaded, since
+  // it's optional context for this page, not a requirement of it.
+  nbBurningCostByProductNetwork = {};
+  try {
+    const rows = await api('/portfolio-analysis/burning-cost-by-product-network');
+    rows.forEach(r => { nbBurningCostByProductNetwork[`${r.product}|${r.network}`] = r; });
+  } catch (err) { /* Portfolio Analysis book not uploaded - no reference figures */ }
+
   let censusCategories = { categories: [], uncategorized_member_count: 0 };
   try {
     censusCategories = await api(`/cases/${currentCase.id}/census-categories`);
@@ -2078,6 +2270,7 @@ async function loadNewBusinessRating() {
 
 let nbCensusUncategorized = 0;
 let nbSuggestedProduct = null;
+let nbBurningCostByProductNetwork = {};
 
 async function nbRenderArea() {
   const area = document.getElementById('new-business-rating-area');
@@ -2175,6 +2368,22 @@ function nbCategoryCardHtml(cat, idx) {
         </div>
       </div>
       ${variantSelects ? `<div class="row" style="flex-wrap:wrap; margin-top:8px;">${variantSelects}</div>` : (cat.network ? '<div class="hint">No priced variants found for this Region/TPA/Network combination.</div>' : '')}
+      ${nbBurningCostReferenceHtml(cat)}
+    </div>
+  `;
+}
+
+function nbBurningCostReferenceHtml(cat) {
+  if (!cat.product || !cat.network) return '';
+  const ref = nbBurningCostByProductNetwork[`${cat.product}|${cat.network}`];
+  if (!ref || ref.burning_cost == null) return '';
+  return `
+    <div class="hint" style="margin-top:8px;">
+      <span class="tier-pill dir-review" style="margin-right:6px;">Book reference</span>
+      HealthCross's own already-booked members on ${escapeHtml(cat.product)} / ${escapeHtml(cat.network)}
+      run an actual burning cost of <strong>AED ${ref.burning_cost.toLocaleString()}</strong> per member per year
+      (${ref.member_count.toLocaleString()} members, ${ref.earned_member_years.toLocaleString()} earned member-years) -
+      from Portfolio Analysis, for comparison against this quote's rated price, not a substitute for it.
     </div>
   `;
 }

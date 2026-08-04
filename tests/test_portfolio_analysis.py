@@ -603,3 +603,38 @@ def test_summarize_burning_cost_by_age_gender_matches_rate_card_structure():
     assert by_key[("18-40", "F")]["actual_claims"] == 8000.0
     # Age 70 falls outside every rate-card band (18-40 only in this fixture).
     assert by_key[("Unmapped age", "M")]["actual_claims"] == 500.0
+
+
+def test_summarize_burning_cost_by_product_network_groups_by_the_priced_pair():
+    from app.scoring.rules.portfolio_analysis import summarize_burning_cost_by_product_network
+
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [{"date_of_treatment": None, "final_amount": 2000.0}]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": None, "final_amount": 3000.0}]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M3"), {"Acme Sub LLC": "Gold"}, RATE_CARDS, [],
+            {"M3": [{"date_of_treatment": None, "final_amount": 4000.0}]},
+        ),
+    ]
+    rows = summarize_burning_cost_by_product_network(results)
+    by_key = {(r["product"], r["network"]): r for r in rows}
+    assert by_key[("Bronze", "MSH Regular")]["actual_claims"] == 5000.0
+    assert by_key[("Bronze", "MSH Regular")]["member_count"] == 2
+    assert by_key[("Gold", "MSH Regular")]["actual_claims"] == 4000.0
+
+
+def test_summarize_burning_cost_by_product_network_skips_members_missing_either_field():
+    from app.scoring.rules.portfolio_analysis import summarize_burning_cost_by_product_network
+
+    # A member missing a Product mapping never gets priced, so has no
+    # network resolved either (analyze_portfolio_member only prices when
+    # BOTH are known) - shouldn't show up as a bogus (None, ...) bucket.
+    results = [analyze_portfolio_member(_member(), {}, RATE_CARDS, [], {})]
+    rows = summarize_burning_cost_by_product_network(results)
+    assert rows == []

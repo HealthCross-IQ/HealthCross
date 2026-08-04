@@ -411,3 +411,43 @@ def summarize_burning_cost_by_age_gender(member_results: List[dict], rate_cards:
         )
     rows.sort(key=lambda r: (r["age_band"], r["gender"]))
     return rows
+
+
+def summarize_burning_cost_by_product_network(member_results: List[dict]) -> List[dict]:
+    """Actual burning cost from the already-booked book, broken out by the
+    same (Product, Network) pairing a New Business rate card row prices -
+    lets New Business Rating show "the card charges X for this Product/
+    Network, the book's own real claims experience runs Y" side by side,
+    a reference for the underwriter to weigh rather than something that
+    silently overrides the rate card itself.
+    """
+    buckets: Dict[tuple, dict] = defaultdict(lambda: {"member_count": 0, "actual_claims": 0.0, "earned_member_years": 0.0})
+
+    for r in member_results:
+        if not r.get("in_scope", True):
+            continue
+        product = r.get("product")
+        network = r.get("network")
+        if not product or not network:
+            continue
+        key = (product, network)
+        bucket = buckets[key]
+        bucket["member_count"] += 1
+        bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
+
+    rows = []
+    for (product, network), bucket in buckets.items():
+        earned_member_years = bucket["earned_member_years"]
+        rows.append(
+            {
+                "product": product,
+                "network": network,
+                "member_count": bucket["member_count"],
+                "actual_claims": round(bucket["actual_claims"], 2),
+                "earned_member_years": round(earned_member_years, 4),
+                "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+            }
+        )
+    rows.sort(key=lambda r: (r["product"], r["network"]))
+    return rows

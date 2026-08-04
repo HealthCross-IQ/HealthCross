@@ -20,6 +20,7 @@ from app.ingestion.international_tob import extract_benefit_rows as extract_gene
 from app.ingestion.labeled_row_benefits_pdf import parse_labeled_row_benefits_pdf
 from app.ingestion.plan_details import parse_plan_details
 from app.ingestion.quote_pdf import parse_benefit_tables_only, parse_quote_pdf
+from app.ingestion.upload_sniffer import sniff_upload_kind
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.benefit_category_mapping import build_standard_summary_from_rows, to_case_benefit_plan_fields
@@ -122,6 +123,19 @@ def upload_census(
     for record in records:
         db.refresh(record)
     return records
+
+
+@router.post("/detect-upload-kind")
+def detect_upload_kind(file: UploadFile = File(...)):
+    """Best-effort guess at which upload slot this file belongs in
+    (census/benefits/claims/claims-ledger/quote), for the case workspace's
+    single drag-drop "Quick upload" zone - see app/ingestion/
+    upload_sniffer.py. Never actually parses or stores anything; the
+    result is always shown back to the user to confirm or correct before
+    any real upload happens.
+    """
+    result = sniff_upload_kind(file.file, file.filename)
+    return {"filename": file.filename, **result}
 
 
 @router.get("/{case_id}/completeness", response_model=schemas.CaseCompletenessOut)

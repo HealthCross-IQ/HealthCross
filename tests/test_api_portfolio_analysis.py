@@ -534,6 +534,29 @@ def test_insights_endpoint_respects_the_master_client_filter(client, members_two
     assert resp.json()["by_product"]["total_members"] == 0
 
 
+def test_burning_cost_by_product_network_endpoint(client, members_xlsx, mapping_xlsx, rate_card_xlsx):
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(mapping_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/burning-cost-by-product-network")
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert any(r["product"] == "Gold" and r["network"] == "MSH Platinum" for r in rows)
+
+
+def test_burning_cost_by_product_network_endpoint_returns_empty_list_without_a_rate_card(client):
+    # Optional supporting context for New Business Rating, not something
+    # that page requires - a 400 here would be a red herring on a page
+    # whose own required uploads are unrelated to Portfolio Analysis.
+    resp = client.get("/portfolio-analysis/burning-cost-by-product-network")
+    assert resp.status_code == 200
+    assert resp.json() == []
+
+
 def test_list_clients_endpoint_returns_distinct_contract_names(client, members_two_policy_years_xlsx):
     with open(members_two_policy_years_xlsx, "rb") as f:
         client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
