@@ -76,8 +76,22 @@ def parse_claims_report(file: BinaryIO, filename: str) -> Dict[str, Any]:
     """
     with pdfplumber.open(file) as pdf:
         full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
+        upper_text = full_text.upper()
 
-        if "HEALTH INSURANCE CLAIMS RECORD" in full_text.upper() and "DHA Mandated Format" not in full_text:
+        if "HEALTH INSURANCE CLAIMS RECORD" in upper_text and "DHA Mandated Format" not in full_text:
+            if "POPULATION CENSUS" in upper_text and "OVER 65" in upper_text:
+                # A third real-world variant (seen on a real DAL Group
+                # report) that also lacks "DHA Mandated Format" but doesn't
+                # share format 2's bordered-table structure or column
+                # counts either: its own population census splits by 6 age
+                # bands (ending in an "Over 65" column) across 3 gender/
+                # marital-status rows rather than a single opening/closing
+                # female+male figure, and its member-type/diagnosis/
+                # provider/network tables run IP/OP/Total or IP/OP/
+                # Pharmacy/Dental/Optical/Total rather than format 1's
+                # fixed 7 columns - real, extractable text throughout, so
+                # this reads it directly rather than via find_tables().
+                return _parse_format3_text(full_text)
             return _parse_format2_from_rows(extract_format2_rows(pdf))
 
         return _parse_format1_text(full_text)
@@ -276,6 +290,258 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
 
     # Flag the first month as partial if the policy didn't start on the 1st -
     # a stub month understates the true monthly run-rate if averaged as-is.
+    if monthly and result["policy_effective_date"]:
+        first = monthly[0]
+        month_num = _MONTH_NAMES.get(first["month"].lower())
+        if (
+            month_num == result["policy_effective_date"].month
+            and first["year"] == result["policy_effective_date"].year
+            and result["policy_effective_date"].day > 1
+        ):
+            first["partial"] = True
+
+    result["monthly_paid"] = monthly
+    return result
+
+
+_FORMAT3_DATE_RE = re.compile(r"(\d{2}/\d{2}/\d{4})")
+_FORMAT3_MONTHLY_ROW_RE = re.compile(r"^([A-Za-z]+)\s+\d{1,2}\s+(\d{4})\s+([\d,]+)\s*$")
+# Real row numbers only go up to 18, always followed by whitespace or
+# end-of-line before any letter/rest - unlike the generic _ROW_PREFIX_RE,
+# this deliberately does NOT match e.g. "607836-001 / 607836-004 / ..." (a
+# policy-number continuation line), which would otherwise be mistaken for
+# a bogus new row "607836" and silently dropped instead of being collected
+# as part of the real policy number value. group(3) (the rest of the line)
+# is None, not "", when there's nothing after the row number/letter.
+_FORMAT3_ROW_RE = re.compile(r"^(\d{1,2})([a-z]?)(?:\s+(.*))?$")
+
+
+def _format3_parse_date(text: str) -> Optional[date]:
+    match = _FORMAT3_DATE_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        return datetime.strptime(match.group(1), "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def _format3_last_number(rest: str) -> Optional[float]:
+    nums = re.findall(r"[\d,]+\.?\d*", rest)
+    return _parse_number(nums[-1]) if nums else None
+
+
+def _format3_trailing_numbers(rest: str, count: int):
+    """Rows shaped like: <label> <n1> <n2> ... <nCount> - label is
+    whatever text remains once the last `count` whitespace-separated
+    numeric tokens are peeled off the end.
+    """
+    tokens = rest.split()
+    if len(tokens) < count:
+        return rest.strip(), None
+    numbers = tokens[-count:]
+    if not all(re.fullmatch(r"[\d,]+\.?\d*", t) for t in numbers):
+        return rest.strip(), None
+    label = " ".join(tokens[:-count]).strip()
+    return label, [_parse_number(t) for t in numbers]
+
+
+def _parse_format3_text(raw_text: str) -> Dict[str, Any]:
+    """A third real-world "Health insurance claims record" variant (seen on
+    a real DAL Group report) that, like format 2, lacks the literal "DHA
+    Mandated Format" marker format 1 relies on, but shares neither format
+    2's bordered-table structure nor format 1's fixed 7-trailing-number
+    row shape. Its own tables run 3 columns (IP/OP/Total) for diagnosis
+    and provider breakdowns, 6 columns (IP/OP/Pharmacy/Dental/Optical/
+    Total) for member-type and network breakdowns (no "Not Yet
+    Classified" column at all), and its population census splits 3 rows
+    (Male/Single Female/Married Female) by 6 age bands each rather than a
+    single opening/closing female+male figure - real, extractable text
+    throughout, parsed directly by row number rather than via
+    find_tables().
+    """
+    lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+
+    result: Dict[str, Any] = {
+        "policy_number": None,
+        "policy_effective_date": None,
+        "policy_expiry_date": None,
+        "report_period_start": None,
+        "report_period_end": None,
+        "report_production_date": None,
+        "total_paid": None,
+        "incurred_not_reported": None,
+        "opening_members": None,
+        "closing_members": None,
+        "diagnosis_breakdown": [],
+        "provider_breakdown": [],
+        "claims_by_type": [],
+        "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
+        "monthly_paid": [],
+    }
+
+    diagnosis_rows: Dict[str, dict] = {}
+    counts_rows: Dict[str, dict] = {}
+    member_type_value_rows: Dict[str, dict] = {}
+    member_type_count_rows: Dict[str, dict] = {}
+    network_value_rows: Dict[str, dict] = {}
+    population_open: List[List[float]] = []
+    population_close: List[List[float]] = []
+    policy_number_parts: List[str] = []
+    collecting_policy_number = False
+    # Row "2 Policy number" only ever appears once, near the top - later
+    # prose can start with a bare digit too (e.g. "2 ongoing cancer cases
+    # with expected utilization..." under "18 Patient Support Programs"),
+    # which must never be mistaken for a second, later occurrence of row 2.
+    past_policy_number_section = False
+
+    for line in lines:
+        match = _FORMAT3_ROW_RE.match(line)
+        if not match:
+            if collecting_policy_number:
+                policy_number_parts.append(line)
+            continue
+        row_num, row_letter, rest = match.group(1), match.group(2), match.group(3) or ""
+
+        # Row 2's own value (possibly several policy numbers) sits on the
+        # line(s) AFTER the "2 Policy number" label line itself, not on the
+        # same line - collect every following non-numbered-row line until
+        # the next top-level row ("3 Policy period") starts.
+        if row_num == "2" and not row_letter and not past_policy_number_section:
+            # "rest" here is just this row's own leftover label text ("2
+            # Policy number" - the "Policy number" is the field's name, not
+            # part of any real value) whenever there's nothing else on the
+            # same line - stripped off so it's never mistaken for (or
+            # prepended to) the real value collected from later lines.
+            remainder = re.sub(r"(?i)^policy number\s*", "", rest).strip()
+            collecting_policy_number = not remainder
+            if remainder:
+                policy_number_parts.append(remainder)
+            continue
+        collecting_policy_number = False
+        if row_num == "3":
+            past_policy_number_section = True
+
+        if row_num == "3" and row_letter == "a":
+            result["policy_effective_date"] = _format3_parse_date(rest)
+        elif row_num == "3" and row_letter == "b":
+            result["policy_expiry_date"] = _format3_parse_date(rest)
+        elif row_num == "4" and row_letter == "a":
+            result["report_period_start"] = _format3_parse_date(rest)
+        elif row_num == "4" and row_letter == "b":
+            result["report_period_end"] = _format3_parse_date(rest)
+        elif row_num == "4" and row_letter == "c":
+            result["report_production_date"] = _format3_parse_date(rest)
+        elif row_num == "5" and row_letter == "a":
+            result["total_paid"] = _format3_last_number(rest)
+        elif row_num == "5" and row_letter == "c":
+            result["incurred_not_reported"] = _format3_last_number(rest)
+        elif row_num == "6" and row_letter:
+            _, numbers = _format3_trailing_numbers(rest, 6)
+            if numbers:
+                population_open.append(numbers)
+        elif row_num == "7" and row_letter:
+            _, numbers = _format3_trailing_numbers(rest, 6)
+            if numbers:
+                population_close.append(numbers)
+        elif row_num == "8" and row_letter:
+            label, numbers = _format3_trailing_numbers(rest, 6)
+            if numbers:
+                member_type_value_rows[row_letter] = {"label": label, "numbers": numbers}
+        elif row_num == "9" and row_letter:
+            label, numbers = _format3_trailing_numbers(rest, 6)
+            if numbers:
+                member_type_count_rows[row_letter] = {"label": label, "numbers": numbers}
+        elif row_num == "10" and row_letter:
+            label, numbers = _format3_trailing_numbers(rest, 3)
+            if numbers:
+                diagnosis_rows[row_letter] = {"label": label, "value": numbers[2], "ip_value": numbers[0]}
+        elif row_num == "11" and row_letter:
+            _, numbers = _format3_trailing_numbers(rest, 3)
+            if numbers:
+                counts_rows[row_letter] = {"count": int(numbers[2]), "ip_count": int(numbers[0])}
+        elif row_num == "12" and row_letter:
+            label, numbers = _format3_trailing_numbers(rest, 3)
+            if numbers:
+                result["provider_breakdown"].append({"provider": label, "value": numbers[2]})
+        elif row_num == "14" and row_letter:
+            label, numbers = _format3_trailing_numbers(rest, 6)
+            if numbers:
+                result["claims_by_type"].append({"type": label, "value": numbers[5]})
+                network_value_rows[row_letter] = numbers
+
+    if population_open:
+        result["opening_members"] = int(sum(sum(row) for row in population_open))
+    if population_close:
+        result["closing_members"] = int(sum(sum(row) for row in population_close))
+
+    if network_value_rows:
+        # Rows 14a/14b (In network / Out of network) partition every AED
+        # in the report by IP/OP/Pharmacy/Dental/Optical - summing them
+        # gives the whole report's treatment-type split, same derivation
+        # format 1 uses from its own equivalent row. This variant has no
+        # "Not Yet Classified" column at all, so that category is always 0.
+        _TREATMENT_TYPE_NAMES = ["In-Patient", "Out-Patient", "Pharmacy", "Dental", "Optical"]
+        column_sums = [sum(row[i] for row in network_value_rows.values()) for i in range(5)]
+        result["treatment_type_breakdown"] = [
+            {"type": name, "value": value} for name, value in zip(_TREATMENT_TYPE_NAMES, column_sums)
+        ] + [{"type": "Not Yet Classified", "value": 0.0}]
+
+    def _member_type_rows(raw_rows: Dict[str, dict], cast) -> List[dict]:
+        rows = []
+        for letter in sorted(raw_rows.keys()):
+            entry = raw_rows[letter]
+            if entry["label"].strip().lower() in ("total", "totals"):
+                continue
+            numbers = entry["numbers"]
+            rows.append(
+                {
+                    "relation": entry["label"],
+                    "in_patient": cast(numbers[0]),
+                    "out_patient": cast(numbers[1]),
+                    "pharmacy": cast(numbers[2]),
+                    "dental": cast(numbers[3]),
+                    "optical": cast(numbers[4]),
+                    "not_yet_classified": cast(0),
+                    "total": cast(numbers[5]),
+                }
+            )
+        return rows
+
+    result["claims_by_member_type_value"] = _member_type_rows(member_type_value_rows, float)
+    result["claims_by_member_type_count"] = _member_type_rows(member_type_count_rows, int)
+
+    for letter, entry in diagnosis_rows.items():
+        counts = counts_rows.get(letter, {})
+        result["diagnosis_breakdown"].append(
+            {
+                "label": entry["label"],
+                "value": entry["value"],
+                "count": counts.get("count", 0),
+                "ip_value": entry["ip_value"],
+                "ip_count": counts.get("ip_count", 0),
+            }
+        )
+
+    if policy_number_parts:
+        result["policy_number"] = " ".join(policy_number_parts).strip()
+
+    monthly: List[dict] = []
+    for line in lines:
+        row_match = _FORMAT3_ROW_RE.match(line)
+        match = _FORMAT3_MONTHLY_ROW_RE.match(row_match.group(3) or "") if row_match else None
+        if match and match.group(1).lower()[:3] in _MONTH_NAMES:
+            monthly.append(
+                {
+                    "year": int(match.group(2)),
+                    "month": match.group(1)[:3].title(),
+                    "paid": _parse_number(match.group(3)),
+                    "partial": False,
+                }
+            )
+
     if monthly and result["policy_effective_date"]:
         first = monthly[0]
         month_num = _MONTH_NAMES.get(first["month"].lower())

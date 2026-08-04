@@ -30,14 +30,14 @@ CATEGORIES: Dict[str, Dict] = {
         "group": "General",
         "keywords": [
             "annual maximum", "indemnity limit", "overall annual", "plan annual maximum", "sum insured",
-            "annual aggregate limit", "annual policy limit",
+            "annual aggregate limit", "annual policy limit", "annual benefit limit",
         ],
     },
     "Area of Cover": {
         "group": "General",
         "keywords": [
             "area of cover", "geographical cover", "territory for elective", "geographical scope",
-            "basic territory", "area of coverage",
+            "basic territory", "area of coverage", "territorial limit",
         ],
     },
     "Pre-existing & Chronic Conditions": {

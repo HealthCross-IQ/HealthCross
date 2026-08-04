@@ -15,6 +15,7 @@ from app.ingestion.census import parse_census
 from app.ingestion.claims import parse_claims
 from app.ingestion.claims_ledger import parse_claims_ledger
 from app.ingestion.claims_report import parse_claims_report
+from app.ingestion.daman_tob import extract_all_rows as extract_daman_tob_rows
 from app.ingestion.international_tob import extract_benefit_rows as extract_generic_benefit_rows
 from app.ingestion.labeled_row_benefits_pdf import parse_labeled_row_benefits_pdf
 from app.ingestion.plan_details import parse_plan_details
@@ -190,81 +191,107 @@ def upload_benefits(
                     ]
                 else:
                     # Neither the Bupa-style nor CAT-style table shape
-                    # matched - try the "labeled 3-column row" layout (e.g.
-                    # MaxHealth/MaxMed's "MAXMED Neuron <TIER> GROUP" docs):
-                    # one category per FILE rather than one tier per column,
-                    # with a benefit label/value/description row structure
-                    # instead. Returns None (not just empty) when this isn't
-                    # that document family either, so it falls through
-                    # cleanly to the crude text scan below.
+                    # matched - try Daman's own "Schedule of Benefits"
+                    # layout (e.g. "Uselect Bronze/Silver/Gold"): one tier
+                    # per FILE, with most benefit rows carrying a Network
+                    # AND a Non-network % side by side rather than one flat
+                    # value. Returns None when this isn't that document
+                    # family either, so it falls through to the next parser.
                     file.file.seek(0)
-                    labeled_row_plan = parse_labeled_row_benefits_pdf(file.file, file.filename)
-                    if labeled_row_plan:
+                    try:
+                        daman_plan = extract_daman_tob_rows(file.file, file.filename)
+                    except Exception:
+                        daman_plan = None
+                    if daman_plan:
+                        daman_summary = build_standard_summary_from_rows(daman_plan["rows"])
                         plans = [
                             models.BenefitPlan(
                                 case_id=case.id,
-                                plan_name=labeled_row_plan["plan_name"],
-                                category=labeled_row_plan.get("category"),
-                                network_type=labeled_row_plan.get("network"),
-                                annual_limit=labeled_row_plan.get("annual_limit"),
-                                maternity_limit=labeled_row_plan.get("maternity_limit"),
-                                maternity_covered=labeled_row_plan.get("maternity_covered", False),
-                                dental_covered=labeled_row_plan.get("dental_covered", False),
-                                optical_covered=labeled_row_plan.get("optical_covered", False),
-                                pre_existing_covered=labeled_row_plan.get("pre_existing_covered", False),
-                                chronic_covered=labeled_row_plan.get("chronic_covered", False),
-                                source_format="pdf-labeled-row",
-                                standard_summary=labeled_row_plan.get("standard_summary"),
+                                plan_name=daman_plan["plan_name"],
+                                source_format="pdf-daman-tob",
+                                standard_summary=daman_summary,
+                                **to_case_benefit_plan_fields(daman_summary),
                             )
                         ]
                     else:
-                        # Not Bupa/CAT-style/Maxmed-shaped, but still a real
-                        # bordered table (e.g. Sukoon's single-tier "Category
-                        # 1" layout, or the international insurers' generic
-                        # label|value|clarification tables) - the detailed
-                        # comparison's own parser already handles these well
-                        # (app/ingestion/international_tob.py), so map its
-                        # raw rows onto the fixed 11-field standard summary
-                        # via the same category matching used there, rather
-                        # than falling all the way to the crude scan below.
+                        # Not Bupa/CAT-style/Daman-shaped - try the "labeled
+                        # 3-column row" layout (e.g. MaxHealth/MaxMed's
+                        # "MAXMED Neuron <TIER> GROUP" docs): one category
+                        # per FILE rather than one tier per column, with a
+                        # benefit label/value/description row structure
+                        # instead. Returns None (not just empty) when this
+                        # isn't that document family either, so it falls
+                        # through cleanly to the crude text scan below.
                         file.file.seek(0)
-                        try:
-                            generic_rows = extract_generic_benefit_rows(file.file, file.filename)
-                        except Exception:
-                            generic_rows = []
-                        generic_summary = build_standard_summary_from_rows(generic_rows) if generic_rows else {}
-                        if generic_summary:
+                        labeled_row_plan = parse_labeled_row_benefits_pdf(file.file, file.filename)
+                        if labeled_row_plan:
                             plans = [
                                 models.BenefitPlan(
                                     case_id=case.id,
-                                    plan_name="Base Plan",
-                                    source_format="pdf-generic-table",
-                                    standard_summary=generic_summary,
-                                    **to_case_benefit_plan_fields(generic_summary),
+                                    plan_name=labeled_row_plan["plan_name"],
+                                    category=labeled_row_plan.get("category"),
+                                    network_type=labeled_row_plan.get("network"),
+                                    annual_limit=labeled_row_plan.get("annual_limit"),
+                                    maternity_limit=labeled_row_plan.get("maternity_limit"),
+                                    maternity_covered=labeled_row_plan.get("maternity_covered", False),
+                                    dental_covered=labeled_row_plan.get("dental_covered", False),
+                                    optical_covered=labeled_row_plan.get("optical_covered", False),
+                                    pre_existing_covered=labeled_row_plan.get("pre_existing_covered", False),
+                                    chronic_covered=labeled_row_plan.get("chronic_covered", False),
+                                    source_format="pdf-labeled-row",
+                                    standard_summary=labeled_row_plan.get("standard_summary"),
                                 )
                             ]
                         else:
-                            # Real extractable text, but no bordered table
-                            # recognizable at all (e.g. a layout that uses
-                            # whitespace alignment rather than actual table
-                            # lines) - fall back to the same label-anchored
-                            # nearby-value scan used for scanned/OCR'd PDFs,
-                            # just against this PDF's real text instead of
-                            # an OCR'd image (see
-                            # app/ingestion/benefits_pdf.py's
-                            # parse_benefits_pdf_text_fallback for why this
-                            # is safer than a bespoke table parser here).
+                            # Not Bupa/CAT-style/Maxmed-shaped, but still a
+                            # real bordered table (e.g. Sukoon's single-tier
+                            # "Category 1" layout, or the international
+                            # insurers' generic label|value|clarification
+                            # tables) - the detailed comparison's own parser
+                            # already handles these well (app/ingestion/
+                            # international_tob.py), so map its raw rows
+                            # onto the fixed 11-field standard summary via
+                            # the same category matching used there, rather
+                            # than falling all the way to the crude scan below.
                             file.file.seek(0)
-                            fallback_result = parse_benefits_pdf_text_fallback(file.file, file.filename)
-                            plans = [
-                                models.BenefitPlan(
-                                    case_id=case.id,
-                                    plan_name="Text extract (verify against source - table structure not recognized)",
-                                    source_format="pdf-text-fallback",
-                                    standard_summary=fallback_result["summary"],
-                                    raw_ocr_text=fallback_result["raw_text"],
-                                )
-                            ]
+                            try:
+                                generic_rows = extract_generic_benefit_rows(file.file, file.filename)
+                            except Exception:
+                                generic_rows = []
+                            generic_summary = build_standard_summary_from_rows(generic_rows) if generic_rows else {}
+                            if generic_summary:
+                                plans = [
+                                    models.BenefitPlan(
+                                        case_id=case.id,
+                                        plan_name="Base Plan",
+                                        source_format="pdf-generic-table",
+                                        standard_summary=generic_summary,
+                                        **to_case_benefit_plan_fields(generic_summary),
+                                    )
+                                ]
+                            else:
+                                # Real extractable text, but no bordered
+                                # table recognizable at all (e.g. a layout
+                                # that uses whitespace alignment rather than
+                                # actual table lines) - fall back to the
+                                # same label-anchored nearby-value scan used
+                                # for scanned/OCR'd PDFs, just against this
+                                # PDF's real text instead of an OCR'd image
+                                # (see app/ingestion/benefits_pdf.py's
+                                # parse_benefits_pdf_text_fallback for why
+                                # this is safer than a bespoke table parser
+                                # here).
+                                file.file.seek(0)
+                                fallback_result = parse_benefits_pdf_text_fallback(file.file, file.filename)
+                                plans = [
+                                    models.BenefitPlan(
+                                        case_id=case.id,
+                                        plan_name="Text extract (verify against source - table structure not recognized)",
+                                        source_format="pdf-text-fallback",
+                                        standard_summary=fallback_result["summary"],
+                                        raw_ocr_text=fallback_result["raw_text"],
+                                    )
+                                ]
         else:
             parsed = parse_table_of_benefits(file.file, file.filename)
             plans = [models.BenefitPlan(case_id=case.id, source_format=file.filename.rsplit(".", 1)[-1].lower(), **row) for row in parsed]
