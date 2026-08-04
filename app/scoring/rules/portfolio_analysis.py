@@ -117,13 +117,21 @@ def _claim_matches_period(date_of_treatment, policy_start, policy_end) -> bool:
     return policy_start <= date_of_treatment <= policy_end
 
 
+_PAID_CLAIM_STATUS_KEYWORDS = ("paid", "validated")
+
+
 def _is_paid_claim_status(claim_status: Optional[str]) -> bool:
-    """The real claims export carries a Claim Status of either "Paid
-    Claims" or "Outstanding Claims" (reserved/reported but not yet
-    settled) - anything not explicitly "paid" is treated as outstanding,
-    so a future status value doesn't silently get miscounted as paid.
+    """The real claims export carries a Claim Status of "Paid Claims" (or,
+    on a newer export template, "Validated Claims" - same meaning, just a
+    different word for a settled claim) vs "Outstanding Claims" (reserved/
+    reported but not yet settled). Anything not explicitly one of these is
+    treated as outstanding, so a future status value doesn't silently get
+    miscounted as paid.
     """
-    return bool(claim_status) and "paid" in claim_status.lower()
+    if not claim_status:
+        return False
+    lowered = claim_status.lower()
+    return any(keyword in lowered for keyword in _PAID_CLAIM_STATUS_KEYWORDS)
 
 
 def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]]) -> Dict[str, float]:

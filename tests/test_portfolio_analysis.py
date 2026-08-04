@@ -131,6 +131,23 @@ def test_analyze_portfolio_member_segregates_paid_and_outstanding_claims():
     assert result["actual_claims"] == 1200.0
 
 
+def test_analyze_portfolio_member_treats_validated_claims_as_paid():
+    # A newer HealthCross Claims export template uses "Validated Claims"
+    # instead of "Paid Claims" for a settled claim - same meaning, just a
+    # different word (the real bug this fixes: every claim in that export
+    # was silently landing in "outstanding" since only the literal word
+    # "paid" was recognized).
+    claims_by_ben = {
+        "ACM0001": [
+            {"date_of_treatment": None, "final_amount": 900.0, "claim_status": "Validated Claims"},
+            {"date_of_treatment": None, "final_amount": 300.0, "claim_status": "Outstanding Claims"},
+        ]
+    }
+    result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
+    assert result["actual_claims_paid"] == 900.0
+    assert result["actual_claims_outstanding"] == 300.0
+
+
 def test_analyze_portfolio_member_treats_unrecognized_status_as_outstanding():
     claims_by_ben = {"ACM0001": [{"date_of_treatment": None, "final_amount": 500.0, "claim_status": "Pending Review"}]}
     result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
