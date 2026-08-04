@@ -168,6 +168,8 @@ def _member_dicts(db: Session) -> List[dict]:
             "beneficiary_id": m.beneficiary_id,
             "contract": m.contract,
             "master_contract": m.master_contract,
+            "master_client_name": m.master_client_name,
+            "product_name": m.product_name,
             "network_type_raw": m.network_type_raw,
             "age": m.age,
             "gender": m.gender,
@@ -390,10 +392,15 @@ def list_master_clients(db: Session = Depends(get_db)):
     subgroup_master_by_name: Dict[str, str] = {
         normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
     }
-    rows = db.query(models.PortfolioMember.contract, models.PortfolioMember.master_contract).all()
+    rows = db.query(
+        models.PortfolioMember.contract, models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name
+    ).all()
     masters = {
-        resolve_master_client({"contract": contract, "master_contract": master_contract}, subgroup_master_by_name)
-        for contract, master_contract in rows
+        resolve_master_client(
+            {"contract": contract, "master_contract": master_contract, "master_client_name": master_client_name},
+            subgroup_master_by_name,
+        )
+        for contract, master_contract, master_client_name in rows
     }
     masters.discard(None)
     return sorted(masters)

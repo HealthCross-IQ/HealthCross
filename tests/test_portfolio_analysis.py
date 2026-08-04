@@ -56,6 +56,23 @@ def test_resolve_group_product_returns_none_when_unmapped():
     assert resolve_group_product(_member(), {}) is None
 
 
+def test_resolve_group_product_prefers_the_member_s_own_product_name_over_the_uploaded_mapping():
+    # Starting Aug 2026 underwriting adds PRODUCTNAME directly into the
+    # membership export itself instead of a separate Group->Product mapping
+    # upload - when present on the member's own row, it wins outright.
+    mapping = {"Acme Sub LLC": "Bronze"}
+    member = _member(product_name="Platinum")
+    assert resolve_group_product(member, mapping) == "Platinum"
+
+
+def test_resolve_group_product_falls_back_to_the_uploaded_mapping_without_a_product_name():
+    # An older-format export with no PRODUCTNAME column at all still works
+    # exactly as before via the separate mapping upload.
+    mapping = {"Acme Sub LLC": "Bronze"}
+    member = _member(product_name=None)
+    assert resolve_group_product(member, mapping) == "Bronze"
+
+
 def test_analyze_portfolio_member_computes_standard_premium_via_the_rate_card():
     mapping = {"Acme Sub LLC": "Bronze"}
     result = analyze_portfolio_member(_member(), mapping, RATE_CARDS, [], {})
@@ -445,6 +462,24 @@ def test_resolve_master_client_prefers_the_uploaded_mapping_over_the_raw_field()
     # same file as Group->Product) is the authoritative source when present.
     mapping = {normalize_subgroup_key("Acme Sub LLC"): "Acme Holdings (correct)"}
     member = {"contract": "Acme Sub LLC", "master_contract": "Acme Sub LLC"}  # raw field wrongly duplicates the subgroup
+    assert resolve_master_client(member, mapping) == "Acme Holdings (correct)"
+
+
+def test_resolve_master_client_prefers_the_member_s_own_master_client_name_over_the_uploaded_mapping():
+    # Starting Aug 2026 underwriting adds "Master Client Name" directly into
+    # the membership export itself instead of a separate Subgroup->Master
+    # mapping upload - when present on the member's own row, it wins outright,
+    # even over an uploaded mapping that would otherwise say something else.
+    mapping = {normalize_subgroup_key("Acme Sub LLC"): "Wrong Master From Upload"}
+    member = {"contract": "Acme Sub LLC", "master_contract": None, "master_client_name": "Acme Holdings (correct)"}
+    assert resolve_master_client(member, mapping) == "Acme Holdings (correct)"
+
+
+def test_resolve_master_client_falls_back_to_the_uploaded_mapping_without_a_master_client_name():
+    # An older-format export with no "Master Client Name" column at all still
+    # works exactly as before via the separate mapping upload.
+    mapping = {normalize_subgroup_key("Acme Sub LLC"): "Acme Holdings (correct)"}
+    member = {"contract": "Acme Sub LLC", "master_contract": "Acme Sub LLC", "master_client_name": None}
     assert resolve_master_client(member, mapping) == "Acme Holdings (correct)"
 
 

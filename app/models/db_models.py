@@ -473,8 +473,9 @@ class PortfolioMember(Base):
 
     `contract`/`master_contract` are this book's own sub-group/master-group
     names (e.g. "VL Consulting DWC-LLC" under master "VALUELABS - VL
-    CONSULTING") - the join key into GroupProductMapping, since Product
-    isn't captured on the membership export itself.
+    CONSULTING") - the join key into GroupProductMapping on an
+    older-format export where `product_name`/`master_client_name` (see
+    below) aren't populated.
     """
 
     __tablename__ = "portfolio_members"
@@ -483,6 +484,14 @@ class PortfolioMember(Base):
     beneficiary_id = Column(String, nullable=False)  # joins to PortfolioClaimEntry.patient_id
     contract = Column(String, nullable=True)
     master_contract = Column(String, nullable=True)
+    # Populated directly from the export's own "Master Client Name"/
+    # PRODUCTNAME columns starting Aug 2026 - see app/ingestion/
+    # portfolio_members.py. None on an older-format export, in which case
+    # the separate GroupProductMapping/SubgroupMasterMapping uploads are
+    # still the source of truth (see resolve_group_product/
+    # resolve_master_client in app/scoring/rules/portfolio_analysis.py).
+    master_client_name = Column(String, nullable=True)
+    product_name = Column(String, nullable=True)
     policy_number = Column(String, nullable=True)
     msh_policy_number = Column(String, nullable=True)
     category = Column(String, nullable=True)  # this book's own raw category code, e.g. "QIC/HC/BR/FDG/DXB/A"

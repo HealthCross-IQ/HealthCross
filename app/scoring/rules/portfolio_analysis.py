@@ -31,7 +31,16 @@ def resolve_group_product(member: dict, group_product_by_name: Dict[str, str]) -
     master-contract - a master group split across multiple Products (one
     sub-group upgraded, say) would otherwise all resolve to whichever
     Product the master-level mapping happened to carry.
+
+    A member's own `product_name` (populated directly from the export's
+    own PRODUCTNAME column starting Aug 2026 - see app/ingestion/
+    portfolio_members.py) is authoritative when present, since it's this
+    member's own row rather than a separately-uploaded, contract-keyed
+    mapping - only falls back to the uploaded GroupProductMapping lookup
+    on an older-format export that doesn't carry it.
     """
+    if member.get("product_name"):
+        return member["product_name"]
     return group_product_by_name.get(member.get("contract")) or group_product_by_name.get(member.get("master_contract"))
 
 
@@ -50,16 +59,25 @@ def normalize_subgroup_key(name: Optional[str]) -> str:
 
 
 def resolve_master_client(member: dict, subgroup_master_by_name: Optional[Dict[str, str]]) -> Optional[str]:
-    """Which master policy a member's own subgroup belongs to - the
-    uploaded Subgroup->Master mapping (see app/ingestion/subgroup_mapping.py,
-    a dedicated Subgroup/Group Name sheet) is authoritative, since
-    PortfolioMember's own MASTERCONTRACT column on the system export isn't
-    reliable for this. Falls back to the raw master_contract/contract
-    fields only when no mapping entry exists, so a member is never
-    silently dropped from every master-level view just because the
-    mapping hasn't been uploaded yet. `subgroup_master_by_name` must be
-    keyed by normalize_subgroup_key(subgroup_name), not the raw name.
+    """Which master policy a member's own subgroup belongs to.
+
+    A member's own `master_client_name` (populated directly from the
+    export's own "Master Client Name" column starting Aug 2026 - see
+    app/ingestion/portfolio_members.py) is authoritative when present,
+    since it's this member's own row rather than a separately-uploaded,
+    contract-keyed mapping. On an older-format export that doesn't carry
+    it, falls back to the uploaded Subgroup->Master mapping (see
+    app/ingestion/subgroup_mapping.py, a dedicated Subgroup/Group Name
+    sheet), since PortfolioMember's own MASTERCONTRACT column on the
+    system export isn't reliable for this. Falls back further to the raw
+    master_contract/contract fields only when neither is available, so a
+    member is never silently dropped from every master-level view just
+    because no mapping has been uploaded yet. `subgroup_master_by_name`
+    must be keyed by normalize_subgroup_key(subgroup_name), not the raw
+    name.
     """
+    if member.get("master_client_name"):
+        return member["master_client_name"]
     contract = member.get("contract")
     if subgroup_master_by_name and contract:
         key = normalize_subgroup_key(contract)

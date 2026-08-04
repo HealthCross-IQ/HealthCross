@@ -2420,6 +2420,7 @@ function portfolioAnalysisPanelHtml() {
       </div>
       <div class="hint">Set this to the date the Members/Claims export was actually produced (e.g. "as of 15/07/2026") - earned premium proration measures elapsed policy time against this date by default, instead of whatever day you happen to click "Run analysis". Included automatically with your next Membership/Claims upload, or set it directly with "Save date" any time.</div>
       <div class="hint">"Subgroup &rarr; Master Group mapping" is a plain two-column sheet (Subgroup, Group Name) - each subgroup's row names the master policy it actually belongs to (a master's own row maps to itself). This is the authoritative source for "Client (Master)" grouping/filtering, since the Membership export's own MASTERCONTRACT column isn't reliable for this.</div>
+      <div class="hint">Both mapping uploads above are optional if the Membership export already carries its own "Master Client Name" and "PRODUCTNAME" columns - those are used directly and take priority over these uploads whenever present.</div>
     </div>
     <div class="card">
       <h3>Run analysis</h3>

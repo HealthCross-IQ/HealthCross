@@ -56,6 +56,38 @@ def test_parses_member_fields(members_xlsx):
     assert employee["nationality_zone"] == "zone_1_asia"
     assert employee["region"] == "Dubai"
     assert employee["actual_gross_premium"] == 12000
+    # This fixture's HEADER has neither column - an older-format export
+    # still parses fine, just without these two (see the dedicated test
+    # below for when they're present).
+    assert employee["master_client_name"] is None
+    assert employee["product_name"] is None
+
+
+def test_reads_master_client_name_and_product_name_when_present(tmp_path):
+    # Starting Aug 2026 underwriting adds these two columns directly into
+    # the export itself (Column K / Column BD on a real file) instead of
+    # maintaining them as separate Group->Product/Subgroup->Master mapping
+    # uploads - see resolve_group_product/resolve_master_client in
+    # app/scoring/rules/portfolio_analysis.py, which prefer these over the
+    # uploaded mappings whenever present.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(HEADER + ["Master Client Name", "PRODUCTNAME"])
+    ws.append([
+        "Acme Sub LLC", "Acme Holdings", "P100", "QC1-ACM-A", "ACM0001",
+        "1990-01-01", "M", "Married", "India", "Principal",
+        "Dubai", "QIC/HC/BR/ACM/DXB/A", "PLATINUM",
+        "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+        12000, 12000, None, None, 500,
+        "Acme Holdings Group", "Gold",
+    ])
+    path = tmp_path / "members_with_product.xlsx"
+    wb.save(path)
+
+    with open(path, "rb") as f:
+        rows = parse_portfolio_members(f, "members_with_product.xlsx")
+    assert rows[0]["master_client_name"] == "Acme Holdings Group"
+    assert rows[0]["product_name"] == "Gold"
 
 
 def test_derives_age_from_dob_not_a_separate_age_column(members_xlsx):

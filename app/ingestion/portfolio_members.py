@@ -51,6 +51,17 @@ def parse_portfolio_members(file: BinaryIO, filename: str) -> List[Dict]:
                 "beneficiary_id": beneficiary_id,
                 "contract": _str_or_none(row.get("CONTRACT")),
                 "master_contract": _str_or_none(row.get("MASTERCONTRACT")),
+                # Underwriting now adds these two directly into the export
+                # itself (starting Aug 2026) instead of maintaining them as
+                # separate Group->Product/Subgroup->Master mapping uploads -
+                # "Master Client Name" and "PRODUCTNAME" respectively. Both
+                # are still None on an older-format export with no such
+                # column, in which case resolve_group_product/
+                # resolve_master_client (app/scoring/rules/
+                # portfolio_analysis.py) fall back to the separate mapping
+                # uploads exactly as before.
+                "master_client_name": _str_or_none(row.get("Master Client Name")),
+                "product_name": _str_or_none(row.get("PRODUCTNAME")),
                 "policy_number": _str_or_none(row.get("POLICYNUMBER")),
                 "msh_policy_number": _str_or_none(row.get("MSH_POLICYNUMBER")),
                 "category": _str_or_none(row.get("CATEGORY")),
