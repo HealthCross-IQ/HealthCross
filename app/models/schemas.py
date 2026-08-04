@@ -85,6 +85,24 @@ class BenefitPlanOut(BaseModel):
     matched_quote_plan_id: Optional[int] = None
 
 
+class CaseCompletenessOut(BaseModel):
+    census_count: int
+    existing_benefit_plan_count: int
+    quoted_benefit_plan_count: int
+    claims_record_count: int
+    claims_report_count: int
+    claims_ledger_entry_count: int
+    scorecard_count: int
+    has_census: bool
+    has_benefits: bool
+    has_quote: bool
+    has_claims: bool
+    has_claims_ledger: bool
+    has_scorecard: bool
+    ready_to_score: bool
+    latest_risk_tier: Optional[str] = None
+
+
 class BenefitPlanMatchUpdate(BaseModel):
     # The quoted-role plan this existing-role plan should be compared
     # against in /benefits-comparison, or null to clear a manual mapping

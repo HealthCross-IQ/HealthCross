@@ -332,6 +332,53 @@ def portfolio_summary(
     )
 
 
+@router.get("/insights")
+def portfolio_insights(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """Every summary view the Portfolio Insights dashboard needs, computed
+    from a SINGLE run of the underlying analysis rather than the 7 separate
+    round trips the dashboard used to make (one per group_by dimension,
+    plus age/gender) - each of those independently re-fetched every member
+    and every claim and re-ran analyze_portfolio_member over the whole
+    book from scratch, so the dashboard was doing 7x the necessary work on
+    a real ~3,700-member/~80,000-claim-line book. summarize_portfolio/
+    summarize_burning_cost_by_age_gender are cheap in-memory regroupings
+    of the same already-computed per-member results, so there's no
+    correctness difference - only fetches the expensive shared inputs once.
+    """
+    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    in_scope = [r for r in results if r.get("in_scope", True)]
+    out_of_scope_count = len(results) - len(in_scope)
+    unmapped_product_count = sum(1 for r in in_scope if not r.get("product"))
+    unmapped_network_count = sum(1 for r in in_scope if not r.get("network"))
+    rate_cards = _rate_card_dicts(db)
+
+    def _summary(group_by: str) -> schemas.PortfolioSummaryOut:
+        return schemas.PortfolioSummaryOut(
+            group_by=group_by,
+            rows=summarize_portfolio(results, group_by),
+            total_members=len(results),
+            out_of_scope_member_count=out_of_scope_count,
+            unmapped_product_member_count=unmapped_product_count,
+            unmapped_network_member_count=unmapped_network_count,
+        )
+
+    return {
+        "by_product": _summary("product"),
+        "by_network": _summary("network"),
+        "by_nationality_zone": _summary("nationality_zone"),
+        "by_relation": _summary("relation"),
+        "by_gender": _summary("gender"),
+        "by_policy_year": _summary("policy_year"),
+        "by_age_gender": summarize_burning_cost_by_age_gender(results, rate_cards),
+    }
+
+
 @router.get("/members", response_model=List[dict])
 def portfolio_member_detail(
     as_of: Optional[date] = Query(

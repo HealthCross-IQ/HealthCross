@@ -495,6 +495,45 @@ def test_burning_cost_by_age_gender_endpoint(client, members_xlsx, rate_card_xls
     assert any(r["age_band"] == "18-40" and r["gender"] == "M" for r in rows)
 
 
+def test_insights_endpoint_returns_every_breakdown_from_one_call(client, members_xlsx, rate_card_xlsx):
+    # The Portfolio Insights dashboard used to make 7 separate requests
+    # (one per group_by dimension, plus age/gender), each re-running the
+    # full member/claims analysis from scratch - this single endpoint
+    # returns every one of those breakdowns from one shared analysis run.
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/insights")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data.keys()) == {
+        "by_product", "by_network", "by_nationality_zone", "by_relation", "by_gender", "by_policy_year", "by_age_gender",
+    }
+    assert data["by_product"]["group_by"] == "product"
+    assert data["by_product"]["total_members"] == data["by_network"]["total_members"]
+    assert any(r["age_band"] == "18-40" and r["gender"] == "M" for r in data["by_age_gender"])
+
+
+def test_insights_endpoint_respects_the_master_client_filter(client, members_two_policy_years_xlsx, rate_card_xlsx):
+    with open(members_two_policy_years_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    # No Subgroup->Master mapping uploaded here, so master_client resolves
+    # to the raw master_contract field ("Acme Holdings"), not the subgroup
+    # name itself - see resolve_master_client's fallback order.
+    resp = client.get("/portfolio-analysis/insights", params={"master_client": "Acme Holdings"})
+    assert resp.status_code == 200
+    assert resp.json()["by_product"]["total_members"] == 2
+
+    resp = client.get("/portfolio-analysis/insights", params={"master_client": "Nonexistent Co"})
+    assert resp.status_code == 200
+    assert resp.json()["by_product"]["total_members"] == 0
+
+
 def test_list_clients_endpoint_returns_distinct_contract_names(client, members_two_policy_years_xlsx):
     with open(members_two_policy_years_xlsx, "rb") as f:
         client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})

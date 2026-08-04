@@ -124,6 +124,56 @@ def upload_census(
     return records
 
 
+@router.get("/{case_id}/completeness", response_model=schemas.CaseCompletenessOut)
+def get_case_completeness(case_id: int, db: Session = Depends(get_db)):
+    """At-a-glance status of what's been uploaded for this case, so the
+    case workspace can show a checklist instead of requiring a click into
+    every tab just to see what's still missing - cheap COUNT queries
+    only, no need to load the actual rows.
+    """
+    case = _get_case_or_404(db, case_id)
+
+    census_count = db.query(models.CensusRecord).filter_by(case_id=case.id).count()
+    existing_benefit_plan_count = (
+        db.query(models.BenefitPlan).filter_by(case_id=case.id, role="existing").count()
+    )
+    quoted_benefit_plan_count = (
+        db.query(models.BenefitPlan).filter_by(case_id=case.id, role="quoted").count()
+    )
+    claims_record_count = db.query(models.ClaimsRecord).filter_by(case_id=case.id).count()
+    claims_report_count = db.query(models.ClaimsReport).filter_by(case_id=case.id).count()
+    claims_ledger_entry_count = db.query(models.ClaimsLedgerEntry).filter_by(case_id=case.id).count()
+    scorecard_count = db.query(models.Scorecard).filter_by(case_id=case.id).count()
+
+    latest_scorecard = (
+        db.query(models.Scorecard)
+        .filter_by(case_id=case.id)
+        .order_by(models.Scorecard.created_at.desc())
+        .first()
+    )
+
+    has_census = census_count > 0
+    has_benefits = existing_benefit_plan_count > 0
+
+    return schemas.CaseCompletenessOut(
+        census_count=census_count,
+        existing_benefit_plan_count=existing_benefit_plan_count,
+        quoted_benefit_plan_count=quoted_benefit_plan_count,
+        claims_record_count=claims_record_count,
+        claims_report_count=claims_report_count,
+        claims_ledger_entry_count=claims_ledger_entry_count,
+        scorecard_count=scorecard_count,
+        has_census=has_census,
+        has_benefits=has_benefits,
+        has_quote=quoted_benefit_plan_count > 0,
+        has_claims=(claims_record_count + claims_report_count) > 0,
+        has_claims_ledger=claims_ledger_entry_count > 0,
+        has_scorecard=scorecard_count > 0,
+        ready_to_score=has_census and has_benefits,
+        latest_risk_tier=latest_scorecard.risk_tier if latest_scorecard else None,
+    )
+
+
 @router.get("/{case_id}/benefit-plans", response_model=List[schemas.BenefitPlanOut])
 def list_benefit_plans(case_id: int, db: Session = Depends(get_db)):
     """Every existing- and quoted-role benefit plan on this case, with its
