@@ -11,7 +11,7 @@ from typing import BinaryIO, Dict, List
 
 import pandas as pd
 
-from app.ingestion.column_mapping import map_columns
+from app.ingestion.column_mapping import find_header_row, map_columns
 
 SUBGROUP_MAPPING_ALIASES: Dict[str, List[str]] = {
     "subgroup": ["subgroup", "sub-group", "sub group", "contract"],
@@ -21,9 +21,22 @@ SUBGROUP_MAPPING_ALIASES: Dict[str, List[str]] = {
 
 def parse_subgroup_mapping(file: BinaryIO, filename: str) -> List[dict]:
     if filename.lower().endswith(".csv"):
-        df = pd.read_csv(file)
+        raw = pd.read_csv(file, header=None)
     else:
-        df = pd.read_excel(file)
+        raw = pd.read_excel(file, header=None)
+
+    # Real mapping sheets sometimes have a blank title row and/or blank
+    # leading columns before the actual Subgroup/Group Name header (e.g. the
+    # header starting a few rows/columns in rather than at A1) - find it
+    # rather than assuming row 0, so the file isn't rejected as empty.
+    header_row = find_header_row(raw, SUBGROUP_MAPPING_ALIASES)
+    if header_row is None:
+        df = raw.iloc[1:].copy()
+        df.columns = raw.iloc[0]
+    else:
+        df = raw.iloc[header_row + 1 :].copy()
+        df.columns = raw.iloc[header_row]
+    df = df.loc[:, df.columns.notna()]
     df = map_columns(df, SUBGROUP_MAPPING_ALIASES)
 
     rows = []
