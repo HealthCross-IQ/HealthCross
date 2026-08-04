@@ -426,6 +426,32 @@ def test_claims_report_comparison_returns_a_row_per_year(client, monkeypatch):
     assert years == [(2024, 992_049.0), (2025, 1_315_830.0)]
 
 
+def test_claims_report_comparison_includes_burning_cost_and_pct_change(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    # Both fake reports use opening_members=100/closing_members=110 (see
+    # _fake_parsed_report) -> avg_report_members = 105 for each.
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-report-comparison")
+    assert resp.status_code == 200
+    rows = resp.json()["reports"]
+
+    y2024, y2025 = rows[0], rows[1]
+    assert y2024["burning_cost_per_member"] == round(992_049.0 / 105, 2)
+    assert y2025["burning_cost_per_member"] == round(1_315_830.0 / 105, 2)
+
+    # The first (oldest) year has nothing earlier to compare against.
+    assert y2024["total_paid_pct_change"] is None
+    assert y2024["burning_cost_pct_change"] is None
+
+    expected_total_pct = round((1_315_830.0 - 992_049.0) / 992_049.0 * 100, 2)
+    assert y2025["total_paid_pct_change"] == expected_total_pct
+    # Burning cost moves by the same % as total_paid here since both years
+    # share the same average member count.
+    assert y2025["burning_cost_pct_change"] == expected_total_pct
+
+
 def test_claims_report_endpoints_accept_report_id_to_pick_a_specific_year(client, monkeypatch):
     case_id = _create_case_with_census(client)
     _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)

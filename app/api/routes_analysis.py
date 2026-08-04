@@ -108,6 +108,19 @@ def get_claims_report_comparison(case_id: int, db: Session = Depends(get_db)):
             year = report.report_production_date.year
         else:
             year = None
+
+        # Same avg_report_members definition project_annual_claims uses
+        # (app/scoring/rules/claims_projection.py) - burning cost per
+        # member for THIS report's own actual total_paid over its own
+        # reporting period, not annualized/IBNR-adjusted the way the
+        # 6-month projection is (that's a separate, more assumption-laden
+        # figure, still available per year via the report_id param on
+        # /claims-projection).
+        burning_cost = None
+        if report.total_paid is not None and report.opening_members and report.closing_members:
+            avg_report_members = (report.opening_members + report.closing_members) / 2
+            burning_cost = round(report.total_paid / avg_report_members, 2) if avg_report_members else None
+
         rows.append(
             {
                 "report_id": report.id,
@@ -120,11 +133,36 @@ def get_claims_report_comparison(case_id: int, db: Session = Depends(get_db)):
                 "incurred_not_reported": report.incurred_not_reported,
                 "opening_members": report.opening_members,
                 "closing_members": report.closing_members,
+                "burning_cost_per_member": burning_cost,
                 "treatment_type_breakdown": report.treatment_type_breakdown,
                 "top_diagnoses": sorted(report.diagnosis_breakdown or [], key=lambda d: d["value"], reverse=True)[:5],
                 "top_providers": sorted(report.provider_breakdown or [], key=lambda p: p["value"], reverse=True)[:5],
             }
         )
+
+    # % change vs. the immediately preceding row (chronologically) - e.g.
+    # "2025 from 2024" - blank for the first year, since there's nothing
+    # earlier to compare it against.
+    for previous, current in zip(rows, rows[1:]):
+        if previous["total_paid"]:
+            current["total_paid_pct_change"] = round(
+                (current["total_paid"] - previous["total_paid"]) / previous["total_paid"] * 100, 2
+            )
+        else:
+            current["total_paid_pct_change"] = None
+        if previous["burning_cost_per_member"]:
+            current["burning_cost_pct_change"] = round(
+                (current["burning_cost_per_member"] - previous["burning_cost_per_member"])
+                / previous["burning_cost_per_member"]
+                * 100,
+                2,
+            )
+        else:
+            current["burning_cost_pct_change"] = None
+    if rows:
+        rows[0]["total_paid_pct_change"] = None
+        rows[0]["burning_cost_pct_change"] = None
+
     return {"case_id": case.id, "reports": rows}
 
 

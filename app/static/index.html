@@ -1426,14 +1426,17 @@ async function loadClaimsReportComparison() {
     area.innerHTML = `
       <div class="card">
         <h3>Year-over-year claims comparison</h3>
-        <div class="hint">How this group's claims experience has trended across every policy year uploaded so far.</div>
+        <div class="hint">How this group's claims experience has trended across every policy year uploaded so far. Burning cost = total paid ÷ average of opening/closing members for that report's own period (not annualized/IBNR-adjusted - see the Claims projection card above for that). % change is versus the immediately preceding year.</div>
         <table>
-          <tr><th>Year</th><th>Period</th><th>Total paid</th><th>Incurred not reported</th><th>Opening members</th><th>Closing members</th></tr>
+          <tr><th>Year</th><th>Period</th><th>Total paid</th><th>% change</th><th>Burning cost / member</th><th>% change</th><th>Incurred not reported</th><th>Opening members</th><th>Closing members</th></tr>
           ${result.reports.map(r => `
             <tr>
               <td>${r.year ?? '-'}</td>
               <td>${r.report_period_start ?? '-'} to ${r.report_period_end ?? '-'}</td>
               <td>${r.total_paid != null ? r.total_paid.toLocaleString() : '-'}</td>
+              <td>${r.total_paid_pct_change != null ? (r.total_paid_pct_change > 0 ? '+' : '') + r.total_paid_pct_change + '%' : '-'}</td>
+              <td>${r.burning_cost_per_member != null ? r.burning_cost_per_member.toLocaleString() : '-'}</td>
+              <td>${r.burning_cost_pct_change != null ? (r.burning_cost_pct_change > 0 ? '+' : '') + r.burning_cost_pct_change + '%' : '-'}</td>
               <td>${r.incurred_not_reported != null ? r.incurred_not_reported.toLocaleString() : '-'}</td>
               <td>${r.opening_members ?? '-'}</td>
               <td>${r.closing_members ?? '-'}</td>
