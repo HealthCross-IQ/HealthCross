@@ -523,23 +523,73 @@ def get_premium_by_category(case_id: int, db: Session = Depends(get_db)):
     }
 
 
+def _resolve_benefit_plan_pairs(
+    existing_plans: List[models.BenefitPlan], quoted_plans: List[models.BenefitPlan]
+) -> List[tuple]:
+    """Returns a list of (existing_plan, quoted_plan, reused) rows for the
+    comparison. A single existing plan describing every quoted category
+    (the common case: one incumbent table of benefits, several priced
+    categories - or a scanned/OCR'd existing plan, which only ever
+    produces ONE combined entry regardless of how many categories the
+    source document actually has, see app/ingestion/benefits_ocr.py)
+    reuses that one plan against every quoted category, same as always.
+
+    With more than one existing plan, position alone can't be trusted -
+    neither side's category naming is guaranteed to match (e.g. an
+    existing plan's "Bronze"/"Silver"/"Gold" vs a quote's "CAT A"/"CAT
+    B") - so each existing plan is paired via, in order: an explicit
+    manual mapping (see PUT .../benefits/{plan_id}/match), then an
+    automatic category-letter/plan-name match (_match_quoted_plan) among
+    quoted plans not already claimed by an earlier existing plan. An
+    existing plan that resolves to nothing is left out rather than forced
+    into a misleading pairing; any quoted plans still left over once every
+    existing plan has been considered fall back to the last existing plan,
+    same as the single-plan case, with `reused=True` so the UI can flag it.
+    """
+    if len(existing_plans) <= 1:
+        existing_plan = existing_plans[0]
+        return [(existing_plan, quoted_plan, i >= 1) for i, quoted_plan in enumerate(quoted_plans)]
+
+    quoted_by_id = {p.id: p for p in quoted_plans}
+    remaining_quoted = list(quoted_plans)
+    pairs = []
+    unresolved = []
+    for existing_plan in existing_plans:
+        matched = None
+        if existing_plan.matched_quote_plan_id in quoted_by_id:
+            candidate = quoted_by_id[existing_plan.matched_quote_plan_id]
+            if candidate in remaining_quoted:
+                matched = candidate
+        if matched is None:
+            matched = _match_quoted_plan(existing_plan.category or existing_plan.plan_name, remaining_quoted)
+        if matched is not None:
+            pairs.append((existing_plan, matched, False))
+            remaining_quoted.remove(matched)
+        else:
+            unresolved.append(existing_plan)
+
+    for existing_plan in unresolved:
+        if remaining_quoted:
+            pairs.append((existing_plan, remaining_quoted.pop(0), False))
+
+    for quoted_plan in remaining_quoted:
+        pairs.append((existing_plans[-1], quoted_plan, True))
+
+    order = {id(p): i for i, p in enumerate(existing_plans)}
+    pairs.sort(key=lambda pair: order[id(pair[0])])
+    return pairs
+
+
 @router.get("/{case_id}/benefits-comparison")
 def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
     """Field-by-field comparison of the existing/incumbent plan(s) against
     the quoted plan(s) for this case (see
-    app/scoring/rules/benefits_comparison.py).
-
-    Pairing: existing and quoted plans line up by position (1st existing
-    vs 1st quoted category, 2nd vs 2nd, etc.), since neither side's
-    category naming is guaranteed to match (e.g. the existing plan's
-    "Category 1"/"Category 2" vs a quote's "CAT A"/"CAT B"). If one side
-    has fewer plans than the other - most commonly a scanned/OCR'd
-    existing plan, which only ever produces ONE combined entry regardless
-    of how many categories the source document actually has (see
-    app/ingestion/benefits_ocr.py) - the shorter side's LAST plan is
-    reused for the extra categories rather than comparing against nothing.
-    `existing_plan_reused` flags this so the UI can make clear the same
-    existing figures are being shown against more than one quoted category.
+    app/scoring/rules/benefits_comparison.py and
+    _resolve_benefit_plan_pairs above for how each side's plans are paired
+    up). `existing_plan_reused` flags a row where the existing side's
+    figures are also shown against another quoted category elsewhere in
+    the response, so the UI can make that clear rather than imply a
+    dedicated match.
     """
     case = _get_case_or_404(db, case_id)
     existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
@@ -550,9 +600,7 @@ def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No quote uploaded for this case")
 
     comparisons = []
-    for i in range(max(len(existing_plans), len(quoted_plans))):
-        existing_plan = existing_plans[i] if i < len(existing_plans) else existing_plans[-1]
-        quoted_plan = quoted_plans[i] if i < len(quoted_plans) else quoted_plans[-1]
+    for existing_plan, quoted_plan, reused in _resolve_benefit_plan_pairs(existing_plans, quoted_plans):
         existing_summary = _benefit_summary(existing_plan)
         quoted_summary = _benefit_summary(quoted_plan)
 
@@ -561,13 +609,15 @@ def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
 
         comparisons.append(
             {
+                "existing_plan_id": existing_plan.id,
                 "existing_plan_name": existing_plan.plan_name,
                 "existing_category": existing_plan.category,
+                "quoted_plan_id": quoted_plan.id,
                 "quoted_plan_name": quoted_plan.plan_name,
                 "quoted_category": quoted_plan.category,
                 "quoted_gross_premium": quoted_plan.gross_premium,
                 "quoted_member_count": quoted_plan.member_count,
-                "existing_plan_reused": len(existing_plans) < len(quoted_plans) and i >= len(existing_plans),
+                "existing_plan_reused": reused,
                 "fields": fields,
             }
         )

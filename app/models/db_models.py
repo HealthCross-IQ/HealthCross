@@ -137,6 +137,15 @@ class BenefitPlan(Base):
     category = Column(String, nullable=True)  # broker/insurer category label, e.g. "A" / "B"
     gross_premium = Column(Float, nullable=True)
 
+    # Set on an EXISTING-role plan to pin which QUOTED-role plan it should
+    # be compared against in /benefits-comparison, overriding the automatic
+    # category-letter/plan-name match - needed because an insurer's own
+    # category naming is never guaranteed to line up with HealthCross's
+    # quote categories (e.g. an incumbent's "Bronze/Silver/Gold" tiers vs a
+    # quote's "CAT A/B/C"). Self-referential rather than a separate mapping
+    # table since each existing plan only ever needs one counterpart.
+    matched_quote_plan_id = Column(Integer, ForeignKey("benefit_plans.id"), nullable=True)
+
     case = relationship("Case", back_populates="benefit_plans")
 
 

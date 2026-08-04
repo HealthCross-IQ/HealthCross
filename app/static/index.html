@@ -492,6 +492,7 @@ function showNewCaseForm() {
             </select>
           </div>
           <div><label>Current annual premium (renewals only)</label><input type="number" name="current_annual_premium" placeholder="e.g. 3000000"></div>
+          <div><label>Target premium (new business only)</label><input type="number" name="target_premium" placeholder="e.g. 2800000"></div>
         </div>
         <div class="row">
           <div>
@@ -518,6 +519,7 @@ async function createCase(event) {
     employee_count_declared: form.get('employee_count_declared') ? Number(form.get('employee_count_declared')) : null,
     business_type: form.get('business_type') || null,
     current_annual_premium: form.get('current_annual_premium') ? Number(form.get('current_annual_premium')) : null,
+    target_premium: form.get('target_premium') ? Number(form.get('target_premium')) : null,
     policy_start_date: form.get('policy_start_date') || null,
   };
   try {
@@ -971,12 +973,16 @@ function renderCaseWorkspace() {
           <input type="number" id="current-annual-premium" value="${c.current_annual_premium ?? ''}" placeholder="e.g. 3000000">
         </div>
         <div>
+          <label>Target premium (for new business rating)</label>
+          <input type="number" id="case-target-premium" value="${c.target_premium ?? ''}" placeholder="e.g. 2800000">
+        </div>
+        <div>
           <label>Policy start date</label>
           <input type="date" id="case-policy-start-date" value="${c.policy_start_date ?? ''}">
         </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
-      <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column.</div>
+      <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column. Target premium is the broker's ask for a new-business case - compared against HealthCross's own rated price in the New Business Rating tab.</div>
     </div>
 
     <div class="card">
@@ -1110,6 +1116,7 @@ function renderCaseWorkspace() {
 
 async function saveCaseDetails() {
   const premiumValue = document.getElementById('current-annual-premium').value;
+  const targetPremiumValue = document.getElementById('case-target-premium').value;
   const businessType = document.getElementById('case-business-type').value;
   const policyStartDate = document.getElementById('case-policy-start-date').value;
   try {
@@ -1119,6 +1126,7 @@ async function saveCaseDetails() {
       body: JSON.stringify({
         business_type: businessType,
         current_annual_premium: premiumValue ? Number(premiumValue) : null,
+        target_premium: targetPremiumValue ? Number(targetPremiumValue) : null,
         policy_start_date: policyStartDate || null,
       }),
     });
@@ -1393,11 +1401,75 @@ function _directionChip(direction, pctChange) {
   return `<span class="tier-pill dir-${direction}">${labels[direction] || direction}${pct}</span>`;
 }
 
+async function onChangeBenefitPlanMatch(existingPlanId, selectEl) {
+  const quotedPlanId = selectEl.value ? Number(selectEl.value) : null;
+  try {
+    await api(`/cases/${currentCase.id}/benefits/${existingPlanId}/match`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({quoted_plan_id: quotedPlanId}),
+    });
+    toast('Category mapping saved');
+    await loadBenefitsComparison();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function _categoryMappingHtml(plans, comparisons) {
+  const existingPlans = plans.filter(p => p.role === 'existing');
+  const quotedPlans = plans.filter(p => p.role === 'quoted');
+  // Only ambiguous - and only actionable - when there's more than one
+  // plan on each side; with a single existing plan it's always compared
+  // against every quoted category already (see existing_plan_reused), and
+  // with a single quoted plan there's nothing to choose between.
+  if (existingPlans.length < 2 || quotedPlans.length < 2) return '';
+
+  const currentQuotedIdByExisting = {};
+  comparisons.forEach(c => {
+    if (!c.existing_plan_reused) currentQuotedIdByExisting[c.existing_plan_id] = c.quoted_plan_id;
+  });
+
+  const rows = existingPlans.map(ep => {
+    const selectedId = ep.matched_quote_plan_id ?? currentQuotedIdByExisting[ep.id] ?? '';
+    const options = quotedPlans.map(qp => `
+      <option value="${qp.id}" ${String(selectedId) === String(qp.id) ? 'selected' : ''}>
+        ${escapeHtml(qp.plan_name || 'Quoted plan')}${qp.category ? ' (Cat ' + escapeHtml(qp.category) + ')' : ''}
+      </option>
+    `).join('');
+    return `
+      <tr>
+        <td>${escapeHtml(ep.plan_name || 'Existing plan')}${ep.category ? ' (Cat ' + escapeHtml(ep.category) + ')' : ''}</td>
+        <td>
+          <select onchange="onChangeBenefitPlanMatch(${ep.id}, this)">
+            <option value="">- not compared -</option>
+            ${options}
+          </select>
+        </td>
+      </tr>
+    `;
+  }).join('');
+
+  return `
+    <div class="card">
+      <h3>Category mapping</h3>
+      <div class="hint">This case has more than one existing category and more than one HealthCross quote category - pick which HealthCross category each existing plan should be compared against below if the automatic match (by category letter or plan name) picked the wrong one.</div>
+      <table>
+        <tr><th>Existing plan</th><th>Compared against (HealthCross quote)</th></tr>
+        ${rows}
+      </table>
+    </div>
+  `;
+}
+
 async function loadBenefitsComparison() {
   const area = document.getElementById('benefits-comparison-area');
   try {
-    const comparisons = await api(`/cases/${currentCase.id}/benefits-comparison`);
-    area.innerHTML = comparisons.map(c => `
+    const [comparisons, plans] = await Promise.all([
+      api(`/cases/${currentCase.id}/benefits-comparison`),
+      api(`/cases/${currentCase.id}/benefit-plans`),
+    ]);
+    area.innerHTML = _categoryMappingHtml(plans, comparisons) + comparisons.map(c => `
       <div class="card">
         <h3>Summary</h3>
         <div class="hint">

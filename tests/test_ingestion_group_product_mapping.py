@@ -1,7 +1,8 @@
 import openpyxl
 import pytest
 
-from app.ingestion.group_product_mapping import parse_group_product_mapping, parse_subgroup_master_mapping
+from app.ingestion.group_product_mapping import parse_group_product_mapping
+from app.ingestion.subgroup_mapping import parse_subgroup_mapping as parse_subgroup_master_mapping
 
 
 @pytest.fixture()

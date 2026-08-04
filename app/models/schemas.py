@@ -12,6 +12,7 @@ class CaseCreate(BaseModel):
     employee_count_declared: Optional[int] = None
     business_type: Optional[str] = None  # "new" or "existing"
     current_annual_premium: Optional[float] = None
+    target_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
 
 
@@ -81,6 +82,14 @@ class BenefitPlanOut(BaseModel):
     role: str = "existing"
     category: Optional[str] = None
     gross_premium: Optional[float] = None
+    matched_quote_plan_id: Optional[int] = None
+
+
+class BenefitPlanMatchUpdate(BaseModel):
+    # The quoted-role plan this existing-role plan should be compared
+    # against in /benefits-comparison, or null to clear a manual mapping
+    # and go back to the automatic category-letter/plan-name match.
+    quoted_plan_id: Optional[int] = None
 
 
 class ClaimsRecordOut(BaseModel):
@@ -121,6 +130,7 @@ class ClaimsLedgerEntryOut(BaseModel):
 class CaseUpdate(BaseModel):
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
+    target_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
 
 

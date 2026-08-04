@@ -124,6 +124,17 @@ def upload_census(
     return records
 
 
+@router.get("/{case_id}/benefit-plans", response_model=List[schemas.BenefitPlanOut])
+def list_benefit_plans(case_id: int, db: Session = Depends(get_db)):
+    """Every existing- and quoted-role benefit plan on this case, with its
+    id - used by the category-mapping UI (see PUT .../benefits/{plan_id}/
+    match) to build its existing-plan/quoted-plan pickers, since
+    GET /benefits-summary and /benefits-comparison don't expose plan ids.
+    """
+    case = _get_case_or_404(db, case_id)
+    return case.benefit_plans
+
+
 @router.post("/{case_id}/benefits", response_model=List[schemas.BenefitPlanOut])
 def upload_benefits(
     case_id: int,
@@ -368,7 +379,19 @@ def upload_quote(case_id: int, file: UploadFile = File(...), db: Session = Depen
     ]
 
     # Replace, not accumulate - only this case's quoted-role plans; the
-    # existing-role plans from /benefits are untouched.
+    # existing-role plans from /benefits are untouched. Any existing-role
+    # plan's manual category mapping (see PUT .../benefits/{plan_id}/match)
+    # pointing at one of the quoted rows about to be deleted has to be
+    # cleared first - otherwise it's left pointing at a row that no longer
+    # exists once the new quote's rows replace them.
+    old_quoted_ids = [
+        row.id for row in db.query(models.BenefitPlan.id).filter_by(case_id=case.id, role="quoted")
+    ]
+    if old_quoted_ids:
+        db.query(models.BenefitPlan).filter(
+            models.BenefitPlan.case_id == case.id,
+            models.BenefitPlan.matched_quote_plan_id.in_(old_quoted_ids),
+        ).update({"matched_quote_plan_id": None}, synchronize_session=False)
     db.query(models.BenefitPlan).filter_by(case_id=case.id, role="quoted").delete()
 
     db.add_all(plans)
@@ -376,6 +399,37 @@ def upload_quote(case_id: int, file: UploadFile = File(...), db: Session = Depen
     for plan in plans:
         db.refresh(plan)
     return plans
+
+
+@router.put("/{case_id}/benefits/{plan_id}/match", response_model=schemas.BenefitPlanOut)
+def set_benefit_plan_match(
+    case_id: int, plan_id: int, payload: schemas.BenefitPlanMatchUpdate, db: Session = Depends(get_db)
+):
+    """Pins which quoted-role plan an existing-role plan should line up
+    against in GET /benefits-comparison, for the cases where an insurer's
+    own category naming doesn't match HealthCross's quote categories
+    closely enough for the automatic match (see
+    app/api/routes_analysis.py's _match_quoted_plan) to find it - e.g. an
+    incumbent's "Bronze/Silver/Gold" tiers against a quote's "CAT A/B/C".
+    Pass quoted_plan_id: null to clear a manual mapping and fall back to
+    the automatic match again.
+    """
+    case = _get_case_or_404(db, case_id)
+    plan = db.query(models.BenefitPlan).filter_by(id=plan_id, case_id=case.id, role="existing").first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Existing-role benefit plan not found on this case")
+
+    if payload.quoted_plan_id is not None:
+        quoted_plan = db.query(models.BenefitPlan).filter_by(
+            id=payload.quoted_plan_id, case_id=case.id, role="quoted"
+        ).first()
+        if not quoted_plan:
+            raise HTTPException(status_code=404, detail="Quoted benefit plan not found on this case")
+
+    plan.matched_quote_plan_id = payload.quoted_plan_id
+    db.commit()
+    db.refresh(plan)
+    return plan
 
 
 @router.post("/{case_id}/claims", response_model=Union[List[schemas.ClaimsRecordOut], schemas.ClaimsReportOut])

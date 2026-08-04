@@ -202,3 +202,112 @@ def test_reuploading_benefits_does_not_delete_quoted_plans(client):
     resp = client.get(f"/cases/{case_id}/premium-by-category")
     assert resp.status_code == 200
     assert resp.json()["total_members"] == 54
+
+
+def test_list_benefit_plans_returns_existing_and_quoted_plans_with_ids(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id)
+    quoted = _insert_quoted_plan(client, case_id)
+
+    resp = client.get(f"/cases/{case_id}/benefit-plans")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {p["id"] for p in body} == {existing.id, quoted.id}
+    assert {p["role"] for p in body} == {"existing", "quoted"}
+
+
+def test_multiple_existing_plans_auto_match_quoted_plans_by_category_letter_regardless_of_upload_order(client):
+    # Two existing plans and two quoted plans, uploaded in opposite order -
+    # position-based pairing would wrongly cross-match Category 1 against
+    # CAT B and Category 2 against CAT A. The category letter is what
+    # actually ties them together.
+    case_id = _create_case(client)
+    _insert_existing_plan(client, case_id, plan_name="Category 1", category="A")
+    _insert_existing_plan(client, case_id, plan_name="Category 2", category="B")
+    _insert_quoted_plan(client, case_id, category="B", plan_name="Gold - CAT B", gross_premium=1328222.0)
+    _insert_quoted_plan(client, case_id, category="A", plan_name="Gold - CAT A", gross_premium=918950.0)
+
+    resp = client.get(f"/cases/{case_id}/benefits-comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 2
+    by_existing_name = {row["existing_plan_name"]: row for row in body}
+    assert by_existing_name["Category 1"]["quoted_category"] == "A"
+    assert by_existing_name["Category 2"]["quoted_category"] == "B"
+    assert all(row["existing_plan_reused"] is False for row in body)
+
+
+def test_manual_match_overrides_the_automatic_category_letter_match(client):
+    # The existing plan's own category doesn't line up with the quote's at
+    # all (a real-world case: an incumbent's own tier naming vs
+    # HealthCross's quote categories) - PUT .../match pins the pairing by
+    # plan id instead of relying on any naming match.
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, plan_name="Bronze", category=None)
+    quoted = _insert_quoted_plan(client, case_id, category="A", plan_name="Gold - CAT A")
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/match", json={"quoted_plan_id": quoted.id}
+    )
+    assert resp.status_code == 200
+    assert resp.json()["matched_quote_plan_id"] == quoted.id
+
+    # Add a second existing/quoted pair with no naming overlap either -
+    # only the manually-matched pair above should resolve.
+    existing2 = _insert_existing_plan(client, case_id, plan_name="Silver", category=None)
+    quoted2 = _insert_quoted_plan(client, case_id, category="B", plan_name="Gold - CAT B")
+
+    resp = client.get(f"/cases/{case_id}/benefits-comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    by_existing_name = {row["existing_plan_name"]: row for row in body}
+    assert by_existing_name["Bronze"]["quoted_plan_name"] == "Gold - CAT A"
+
+
+def test_match_endpoint_rejects_a_quoted_plan_from_a_different_case(client):
+    case_id = _create_case(client)
+    other_case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id)
+    other_quoted = _insert_quoted_plan(client, other_case_id)
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/match", json={"quoted_plan_id": other_quoted.id}
+    )
+    assert resp.status_code == 404
+
+
+def test_reuploading_the_quote_clears_stale_manual_matches(client, monkeypatch):
+    from app.api import routes_cases
+
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, plan_name="Bronze", category=None)
+    quoted = _insert_quoted_plan(client, case_id, category="A", plan_name="Gold - CAT A")
+
+    resp = client.put(f"/cases/{case_id}/benefits/{existing.id}/match", json={"quoted_plan_id": quoted.id})
+    assert resp.status_code == 200
+
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_quote_pdf",
+        lambda file, name: [
+            {"category": "A", "plan_name": "Reissued Gold - CAT A", "member_count": 10, "gross_premium": 111000.0}
+        ],
+    )
+    resp = client.post(
+        f"/cases/{case_id}/quote", files={"file": ("quote.pdf", b"%PDF-1.4 fake", "application/pdf")}
+    )
+    assert resp.status_code == 200
+
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    refreshed = db.query(models.BenefitPlan).filter_by(id=existing.id).first()
+    assert refreshed.matched_quote_plan_id is None
+    db.close()
+
+    # The comparison still works (falls back to the automatic category
+    # match against the newly-uploaded quote) rather than 404ing or
+    # pointing at a deleted row.
+    resp = client.get(f"/cases/{case_id}/benefits-comparison")
+    assert resp.status_code == 200
+    assert resp.json()[0]["quoted_plan_name"] == "Reissued Gold - CAT A - CAT A"
