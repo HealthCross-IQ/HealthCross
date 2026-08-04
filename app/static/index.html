@@ -2611,9 +2611,9 @@ function paSummaryRowHtml(groupByField, r) {
       <td>${r.member_count.toLocaleString()}</td>
       <td>${r.priced_member_count.toLocaleString()}</td>
       <td>${r.actual_premium.toLocaleString()}</td>
-      <td>${r.actual_claims.toLocaleString()}</td>
       <td>${(r.actual_claims_paid || 0).toLocaleString()}</td>
       <td>${(r.actual_claims_outstanding || 0).toLocaleString()}</td>
+      <td>${r.actual_claims.toLocaleString()}</td>
       <td>${r.actual_vs_standard_pct != null ? (r.actual_vs_standard_pct > 0 ? '+' : '') + r.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
       <td>${r.loss_ratio_vs_standard != null ? (r.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
       <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
@@ -2649,7 +2649,7 @@ function paSummaryHtml(summary) {
         <table>
           <tr>
             <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
-            <th>Actual premium</th><th>Actual claims</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th>
+            <th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Actual claims</th>
             <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th>
             <th>Exposed (member-years)</th><th>Burning cost</th>
           </tr>
@@ -2659,9 +2659,9 @@ function paSummaryHtml(summary) {
             <td>${totals.member_count.toLocaleString()}</td>
             <td>${totals.priced_member_count.toLocaleString()}</td>
             <td>${totals.actual_premium.toLocaleString()}</td>
-            <td>${totals.actual_claims.toLocaleString()}</td>
             <td>${totals.actual_claims_paid.toLocaleString()}</td>
             <td>${totals.actual_claims_outstanding.toLocaleString()}</td>
+            <td>${totals.actual_claims.toLocaleString()}</td>
             <td>${totals.actual_vs_standard_pct != null ? (totals.actual_vs_standard_pct > 0 ? '+' : '') + totals.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
             <td>${totals.loss_ratio_vs_standard != null ? (totals.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
             <td>${totals.loss_ratio_vs_actual != null ? (totals.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
@@ -2684,15 +2684,15 @@ function paPolicyYearBreakdownHtml() {
       <div class="hint">The summary above combines every policy year present for this selection into one total - since more than one is present here (e.g. a renewed client with last year's and this year's members both in the same upload), here's each year split out separately.</div>
       <div style="overflow-x:auto;">
         <table>
-          <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Actual claims</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
+          <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Actual claims</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
           ${[...paLastPolicyYearBreakdown.rows].sort((a, b) => String(a.policy_year).localeCompare(String(b.policy_year))).map(r => `
             <tr>
               <td>${escapeHtml(String(r.policy_year))}</td>
               <td>${r.member_count.toLocaleString()}</td>
               <td>${r.actual_premium.toLocaleString()}</td>
-              <td>${r.actual_claims.toLocaleString()}</td>
               <td>${(r.actual_claims_paid || 0).toLocaleString()}</td>
               <td>${(r.actual_claims_outstanding || 0).toLocaleString()}</td>
+              <td>${r.actual_claims.toLocaleString()}</td>
               <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
               <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
             </tr>
@@ -2832,15 +2832,15 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
       <h3>Production report by policy year</h3>
       <div class="hint">Compares cohorts by the calendar year each member's own policy started - the same client can have last year's and this year's members both present in one upload if it's already renewed.</div>
       <table>
-        <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Actual claims</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
+        <tr><th>Policy year</th><th>Members</th><th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Actual claims</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
         ${policyYearRows.map(r => `
           <tr>
             <td>${escapeHtml(String(r.policy_year))}</td>
             <td>${r.member_count.toLocaleString()}</td>
             <td>${r.actual_premium.toLocaleString()}</td>
-            <td>${r.actual_claims.toLocaleString()}</td>
             <td>${(r.actual_claims_paid || 0).toLocaleString()}</td>
             <td>${(r.actual_claims_outstanding || 0).toLocaleString()}</td>
+            <td>${r.actual_claims.toLocaleString()}</td>
             <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
             <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
           </tr>
