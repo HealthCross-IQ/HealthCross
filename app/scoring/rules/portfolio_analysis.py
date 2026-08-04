@@ -110,18 +110,29 @@ def _is_paid_claim_status(claim_status: Optional[str]) -> bool:
 
 def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]]) -> Dict[str, float]:
     """Sums only the claim lines whose date_of_treatment falls within this
-    member's own policy period (see _claim_matches_period), split into
+    member's own enrollment window (see _claim_matches_period), split into
     paid vs outstanding - "total" always equals paid + outstanding, so the
     two segments reconcile back to the same grand total callers already
     relied on.
+
+    Matches against member_start_date/member_end_date rather than the
+    broader policy_start_date/policy_end_date whenever the former are set.
+    The two aren't the same thing: a member who transfers between subgroups
+    mid-term appears as TWO rows sharing the SAME policy_start/policy_end
+    (the one overall MSH policy term) but with different, non-overlapping
+    member_start/member_end windows (their own actual enrollment sub-period
+    under each subgroup). Matching against the full policy term in that
+    case would double count every claim in the year against BOTH rows,
+    since both share an identical policy period even though the person was
+    only actually enrolled under each subgroup for part of it.
     """
     beneficiary_id = member.get("beneficiary_id")
-    policy_start = member.get("policy_start_date")
-    policy_end = member.get("policy_end_date")
+    period_start = member.get("member_start_date") or member.get("policy_start_date")
+    period_end = member.get("member_end_date") or member.get("policy_end_date")
     paid = 0.0
     outstanding = 0.0
     for c in claims_by_beneficiary.get(beneficiary_id, []):
-        if not _claim_matches_period(c.get("date_of_treatment"), policy_start, policy_end):
+        if not _claim_matches_period(c.get("date_of_treatment"), period_start, period_end):
             continue
         amount = c.get("final_amount") or 0.0
         if _is_paid_claim_status(c.get("claim_status")):

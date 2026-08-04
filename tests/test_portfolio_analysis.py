@@ -146,6 +146,54 @@ def test_analyze_portfolio_member_only_counts_claims_within_its_own_policy_perio
     assert row_2026["actual_claims"] == 4800.0
 
 
+def test_analyze_portfolio_member_uses_member_window_not_full_policy_term_for_a_mid_term_subgroup_transfer():
+    # A real scenario found in the actual book: an employee transfers
+    # between subgroups mid-term (e.g. DEVERE ACUMA -> ACUMA LLC) and
+    # appears as TWO member rows that both carry the SAME overall
+    # policy_start/policy_end (the one underlying MSH policy term) but
+    # different, non-overlapping member_start/member_end windows (their
+    # own actual enrollment sub-period under each subgroup). Matching
+    # claims against the full policy term (instead of the member's own
+    # window) double counted every claim in the year against BOTH rows -
+    # this was a distinct bug from the renewal-year case above, since here
+    # policy_start/policy_end are identical on both rows.
+    claims_by_ben = {
+        "M1": [
+            {"date_of_treatment": date(2025, 6, 1), "final_amount": 1000.0, "claim_status": "Paid Claims"},
+            {"date_of_treatment": date(2025, 10, 1), "final_amount": 2000.0, "claim_status": "Paid Claims"},
+        ]
+    }
+    early_subgroup_row = analyze_portfolio_member(
+        _member(
+            beneficiary_id="M1",
+            policy_start_date=date(2025, 5, 25), policy_end_date=date(2026, 5, 24),
+            member_start_date=date(2025, 5, 25), member_end_date=date(2025, 8, 20),
+        ),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben,
+    )
+    later_subgroup_row = analyze_portfolio_member(
+        _member(
+            beneficiary_id="M1",
+            policy_start_date=date(2025, 5, 25), policy_end_date=date(2026, 5, 24),
+            member_start_date=date(2025, 8, 20), member_end_date=date(2026, 5, 24),
+        ),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben,
+    )
+    # The June 1 claim falls only within the early sub-period, the Oct 1
+    # claim only within the later one - each counts exactly once.
+    assert early_subgroup_row["actual_claims"] == 1000.0
+    assert later_subgroup_row["actual_claims"] == 2000.0
+
+
+def test_analyze_portfolio_member_falls_back_to_policy_dates_when_member_dates_missing():
+    claims_by_ben = {"M1": [{"date_of_treatment": date(2025, 6, 1), "final_amount": 500.0}]}
+    result = analyze_portfolio_member(
+        _member(beneficiary_id="M1", policy_start_date=date(2025, 1, 1), policy_end_date=date(2026, 1, 1)),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben,
+    )
+    assert result["actual_claims"] == 500.0
+
+
 def test_analyze_portfolio_member_counts_undated_claims_regardless_of_period():
     # A claim with no date_of_treatment can't be matched to a specific
     # period - it's still counted rather than silently dropped.

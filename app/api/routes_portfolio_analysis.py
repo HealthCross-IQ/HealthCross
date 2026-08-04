@@ -179,6 +179,8 @@ def _member_dicts(db: Session) -> List[dict]:
             "actual_gross_premium": m.actual_gross_premium,
             "policy_start_date": m.policy_start_date,
             "policy_end_date": m.policy_end_date,
+            "member_start_date": m.member_start_date,
+            "member_end_date": m.member_end_date,
         }
         for m in db.query(models.PortfolioMember).all()
     ]
