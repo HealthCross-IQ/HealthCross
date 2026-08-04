@@ -33,11 +33,24 @@ def _get_case_or_404(db: Session, case_id: int) -> models.Case:
     return case
 
 
-def _latest_claims_report(db: Session, case_id: int) -> models.ClaimsReport:
+def _resolve_claims_report(db: Session, case_id: int, report_id: Optional[int] = None) -> models.ClaimsReport:
+    """A case can have more than one claims report uploaded (one per
+    policy year - see GET /claims-reports and /claims-report-comparison).
+    Every view that used to only ever look at "the" report now takes an
+    optional report_id to look at a SPECIFIC year instead; omitting it
+    keeps the old behavior of defaulting to the latest one, ordered by
+    the report's own period (falling back to upload order for a report
+    whose own period date couldn't be parsed).
+    """
+    if report_id is not None:
+        report = db.query(models.ClaimsReport).filter_by(case_id=case_id, id=report_id).first()
+        if not report:
+            raise HTTPException(status_code=404, detail="Claims report not found for this case")
+        return report
     report = (
         db.query(models.ClaimsReport)
         .filter_by(case_id=case_id)
-        .order_by(models.ClaimsReport.created_at.desc())
+        .order_by(models.ClaimsReport.report_period_start.desc(), models.ClaimsReport.created_at.desc())
         .first()
     )
     if not report:
@@ -46,15 +59,80 @@ def _latest_claims_report(db: Session, case_id: int) -> models.ClaimsReport:
 
 
 @router.get("/{case_id}/claims-report", response_model=schemas.ClaimsReportOut)
-def get_claims_report(case_id: int, db: Session = Depends(get_db)):
+def get_claims_report(case_id: int, report_id: Optional[int] = None, db: Session = Depends(get_db)):
     _get_case_or_404(db, case_id)
-    return _latest_claims_report(db, case_id)
+    return _resolve_claims_report(db, case_id, report_id)
+
+
+@router.get("/{case_id}/claims-reports", response_model=List[schemas.ClaimsReportOut])
+def list_claims_reports(case_id: int, db: Session = Depends(get_db)):
+    """Every claims report uploaded for this case (one per report period,
+    e.g. one per policy year for a renewing group) - lets a broker compare
+    multiple years side by side (see /claims-report-comparison) or pick a
+    specific one to view via the report_id param on the other claims
+    endpoints, rather than only ever seeing the latest upload. Sorted
+    oldest to newest by the report's own period_start, falling back to
+    upload order for a report whose own period date couldn't be parsed.
+    """
+    _get_case_or_404(db, case_id)
+    return (
+        db.query(models.ClaimsReport)
+        .filter_by(case_id=case_id)
+        .order_by(models.ClaimsReport.report_period_start.asc(), models.ClaimsReport.created_at.asc())
+        .all()
+    )
+
+
+@router.get("/{case_id}/claims-report-comparison")
+def get_claims_report_comparison(case_id: int, db: Session = Depends(get_db)):
+    """Year-over-year comparison across every claims report uploaded for
+    this case - lets a broker see how a renewing group's claims experience
+    has trended across policy years (total paid, population, top
+    diagnoses/providers) rather than only ever seeing the latest year.
+    """
+    case = _get_case_or_404(db, case_id)
+    reports = (
+        db.query(models.ClaimsReport)
+        .filter_by(case_id=case_id)
+        .order_by(models.ClaimsReport.report_period_start.asc(), models.ClaimsReport.created_at.asc())
+        .all()
+    )
+    if not reports:
+        raise HTTPException(status_code=404, detail="No claims reports uploaded for this case")
+
+    rows = []
+    for report in reports:
+        if report.report_period_start:
+            year = report.report_period_start.year
+        elif report.report_production_date:
+            year = report.report_production_date.year
+        else:
+            year = None
+        rows.append(
+            {
+                "report_id": report.id,
+                "year": year,
+                "policy_effective_date": report.policy_effective_date,
+                "policy_expiry_date": report.policy_expiry_date,
+                "report_period_start": report.report_period_start,
+                "report_period_end": report.report_period_end,
+                "total_paid": report.total_paid,
+                "incurred_not_reported": report.incurred_not_reported,
+                "opening_members": report.opening_members,
+                "closing_members": report.closing_members,
+                "treatment_type_breakdown": report.treatment_type_breakdown,
+                "top_diagnoses": sorted(report.diagnosis_breakdown or [], key=lambda d: d["value"], reverse=True)[:5],
+                "top_providers": sorted(report.provider_breakdown or [], key=lambda p: p["value"], reverse=True)[:5],
+            }
+        )
+    return {"case_id": case.id, "reports": rows}
 
 
 @router.get("/{case_id}/claims-projection", response_model=schemas.ClaimsProjectionOut)
 def get_claims_projection(
     case_id: int,
     db: Session = Depends(get_db),
+    report_id: Optional[int] = None,
     credibility_pct: Optional[float] = None,
     inflation_pct: Optional[float] = None,
     ibnr_pct: Optional[float] = None,
@@ -62,14 +140,15 @@ def get_claims_projection(
 ):
     """Runs the standing burning-cost formula (see
     app/scoring/rules/claims_projection.py) against this case's latest
-    claims report and current census member count. Credibility (and the
-    other assumptions) can be overridden per call via query params since
-    credibility in particular is negotiated per insurer/case rather than
-    fixed - the defaults on ClaimsProjectionAssumptions still apply when
-    a param is omitted.
+    claims report (or a specific year's, via report_id - see
+    /claims-reports) and current census member count. Credibility (and
+    the other assumptions) can be overridden per call via query params
+    since credibility in particular is negotiated per insurer/case
+    rather than fixed - the defaults on ClaimsProjectionAssumptions still
+    apply when a param is omitted.
     """
     case = _get_case_or_404(db, case_id)
-    report = _latest_claims_report(db, case_id)
+    report = _resolve_claims_report(db, case_id, report_id)
 
     census_count = len(case.census_records)
     if not census_count:
@@ -108,13 +187,14 @@ def get_claims_projection(
 
 
 @router.get("/{case_id}/diagnosis-exposure", response_model=List[schemas.DiagnosisExposureRow])
-def get_diagnosis_exposure(case_id: int, db: Session = Depends(get_db)):
+def get_diagnosis_exposure(case_id: int, report_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Applies the standing chronic/high-exposure classification (see
     app/reference/diagnosis_classification.py) to this case's latest
-    claims report's diagnosis breakdown.
+    claims report's diagnosis breakdown (or a specific year's, via
+    report_id - see /claims-reports).
     """
     _get_case_or_404(db, case_id)
-    report = _latest_claims_report(db, case_id)
+    report = _resolve_claims_report(db, case_id, report_id)
 
     rows = []
     for entry in report.diagnosis_breakdown or []:
@@ -149,7 +229,7 @@ def _with_percentages(rows: List[dict], value_key: str, total: float) -> List[di
 
 
 @router.get("/{case_id}/claims-report-breakdown")
-def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
+def get_claims_report_breakdown(case_id: int, report_id: Optional[int] = None, db: Session = Depends(get_db)):
     """Top 10 providers, IP/OP/Pharmacy/Dental/Optical/Not-Yet-Classified
     treatment-type split (see app/ingestion/claims_report.py - format 1's
     row 14 partitions the whole report by billing method, and each of its
@@ -161,13 +241,16 @@ def get_claims_report_breakdown(case_id: int, db: Session = Depends(get_db)):
     additionally annualized by applying its % share to the projected
     final_projected_claims.
 
+    Defaults to the latest uploaded report; pass report_id (see
+    /claims-reports) to view a specific year instead.
+
     Only available where the source report is DHA Mandated Format
     (format 1) - format 2's row 13 only splits In Network/Out of Network,
     not by treatment type, so treatment_type_breakdown comes back empty
     for those reports (top providers and Maternity still work either way).
     """
     case = _get_case_or_404(db, case_id)
-    report = _latest_claims_report(db, case_id)
+    report = _resolve_claims_report(db, case_id, report_id)
     total = report.total_paid or 0.0
 
     top_providers = sorted(report.provider_breakdown or [], key=lambda p: p["value"], reverse=True)[:10]

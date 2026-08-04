@@ -394,8 +394,22 @@ def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depe
         # its own columns - opening_members/closing_members already carry
         # the totals that matter downstream.
         report_fields = {k: v for k, v in parsed.items() if k in models.ClaimsReport.__table__.columns.keys()}
-        # Replace, not accumulate - see the census upload for why.
-        db.query(models.ClaimsReport).filter_by(case_id=case.id).delete()
+
+        # Multiple years' reports can coexist for the same case (see
+        # GET /claims-reports and /claims-report-comparison) - a renewing
+        # group's DHA report from a prior policy year is real history, not
+        # a stale duplicate of this year's, so it isn't wiped out just
+        # because a new one came in. Re-uploading a correction for the
+        # SAME report period (e.g. a re-issued version of this year's
+        # report) still replaces just that one row rather than piling up
+        # near-duplicates. A report whose own period couldn't be parsed
+        # can't be matched this way, so it's simply added rather than
+        # risking a delete that removes a different, unrelated year.
+        new_period_start = report_fields.get("report_period_start")
+        if new_period_start is not None:
+            db.query(models.ClaimsReport).filter_by(
+                case_id=case.id, report_period_start=new_period_start
+            ).delete()
         report = models.ClaimsReport(case_id=case.id, **report_fields)
         db.add(report)
         db.commit()

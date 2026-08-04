@@ -1,7 +1,9 @@
 import io
+from datetime import date
 
 import pandas as pd
 
+from app.api import routes_cases
 from app.models import db_models as models
 from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
@@ -339,3 +341,113 @@ def test_benefits_summary_uses_standard_fields(client):
     body = resp.json()
     assert len(body) == 1
     assert set(body[0]["summary"].keys()) == set(STANDARD_FIELDS)
+
+
+def _fake_parsed_report(period_start: str, period_end: str, total_paid: float) -> dict:
+    return {
+        "policy_number": "607836-001",
+        "policy_effective_date": date.fromisoformat(period_start),
+        "policy_expiry_date": date.fromisoformat(period_end),
+        "report_period_start": date.fromisoformat(period_start),
+        "report_period_end": date.fromisoformat(period_end),
+        "report_production_date": date.fromisoformat(period_end),
+        "total_paid": total_paid,
+        "incurred_not_reported": 10_000.0,
+        "opening_members": 100,
+        "closing_members": 110,
+        "diagnosis_breakdown": [],
+        "provider_breakdown": [],
+        "claims_by_type": [],
+        "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
+        "monthly_paid": [],
+    }
+
+
+def _upload_fake_claims_report(client, monkeypatch, case_id, period_start, period_end, total_paid, filename="report.pdf"):
+    monkeypatch.setattr(
+        routes_cases, "parse_claims_report",
+        lambda file, name: _fake_parsed_report(period_start, period_end, total_paid),
+    )
+    return client.post(
+        f"/cases/{case_id}/claims",
+        files={"file": (filename, b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+
+def test_uploading_a_new_report_period_keeps_the_previous_year(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    resp = _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    assert resp.status_code == 200
+    resp = _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/claims-reports")
+    assert resp.status_code == 200
+    reports = resp.json()
+    assert len(reports) == 2
+    assert {r["total_paid"] for r in reports} == {992_049.0, 1_315_830.0}
+
+
+def test_reuploading_the_same_report_period_replaces_only_that_year(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+    # A corrected re-issue of the SAME 2025-2026 period.
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_400_000.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-reports")
+    reports = resp.json()
+    assert len(reports) == 2
+    totals = {r["total_paid"] for r in reports}
+    assert totals == {992_049.0, 1_400_000.0}
+
+
+def test_list_claims_reports_sorted_oldest_to_newest(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-reports")
+    reports = resp.json()
+    assert [r["report_period_start"] for r in reports] == ["2024-08-29", "2025-08-29"]
+
+
+def test_claims_report_comparison_returns_a_row_per_year(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-report-comparison")
+    assert resp.status_code == 200
+    body = resp.json()
+    years = [(r["year"], r["total_paid"]) for r in body["reports"]]
+    assert years == [(2024, 992_049.0), (2025, 1_315_830.0)]
+
+
+def test_claims_report_endpoints_accept_report_id_to_pick_a_specific_year(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+
+    reports = client.get(f"/cases/{case_id}/claims-reports").json()
+    older_report_id = next(r["id"] for r in reports if r["total_paid"] == 992_049.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-report", params={"report_id": older_report_id})
+    assert resp.status_code == 200
+    assert resp.json()["total_paid"] == 992_049.0
+
+    # Omitting report_id still defaults to the latest (2025-2026) period.
+    resp = client.get(f"/cases/{case_id}/claims-report")
+    assert resp.json()["total_paid"] == 1_315_830.0
+
+
+def test_claims_report_id_404s_when_it_belongs_to_a_different_case(client, monkeypatch):
+    case_id_a = _create_case_with_census(client)
+    case_id_b = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id_a, "2025-08-29", "2026-08-28", 1_315_830.0)
+    report_id = client.get(f"/cases/{case_id_a}/claims-reports").json()[0]["id"]
+
+    resp = client.get(f"/cases/{case_id_b}/claims-report", params={"report_id": report_id})
+    assert resp.status_code == 404
