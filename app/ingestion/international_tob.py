@@ -272,6 +272,7 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                     continue
                 table_rows = table.rows
                 last_value: Optional[str] = None
+                pending_orphan_value: Optional[str] = None
                 for row_index in range(len(data)):
                     raw_cells = [_clean(c) for c in data[row_index]]
                     non_empty_idx = [i for i, c in enumerate(raw_cells) if c]
@@ -311,6 +312,25 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                         idx = non_empty_idx[0]
                         cells = table_rows[row_index].cells
                         ruled_cell_count = sum(1 for c in cells if c is not None)
+                        if len(raw_cells) == 2 and idx == 1 and ruled_cell_count > 1:
+                            # A genuinely 2-column (label | value) ruled
+                            # table whose LABEL cell is blank on this row,
+                            # not its value - the opposite of the "value
+                            # blank, inherit from last row" case below (seen
+                            # on Orient's maternity section, where one
+                            # merged label cell visually spans two separate
+                            # ruled value cells - in-patient, then
+                            # out-patient - but only the SECOND row restates
+                            # the shared label). Buffered here and prepended
+                            # to whichever row below supplies the real
+                            # label, rather than being run through the
+                            # value-inheritance logic further down (which
+                            # would misread this row's own VALUE text as if
+                            # it were a label, and could then silently drop
+                            # it outright if that text happens to contain
+                            # "coinsurance").
+                            pending_orphan_value = raw_cells[idx]
+                            continue
                         if ruled_cell_count <= 1:
                             # The label/note columns aren't ruled as their
                             # own cells in this row (some documents only
@@ -395,6 +415,9 @@ def extract_benefit_rows(file: BinaryIO, filename: str) -> List[Dict[str, str]]:
                         continue
                     if _is_non_benefit_section(current_section):
                         continue
+                    if pending_orphan_value:
+                        value = f"{pending_orphan_value} {value}".strip()
+                        pending_orphan_value = None
                     rows.append({"section": current_section, "label": label, "value": value, "note": note})
                     last_value = value
 
