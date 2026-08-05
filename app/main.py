@@ -102,3 +102,8 @@ def health():
 @app.get("/", include_in_schema=False)
 def serve_ui():
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/finance-ui", include_in_schema=False)
+def serve_finance_ui():
+    return FileResponse(STATIC_DIR / "finance.html")

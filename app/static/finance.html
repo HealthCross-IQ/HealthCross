@@ -1,0 +1,782 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HealthCross Finance Status</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f0efec;
+    --border: rgba(11,11,11,0.10);
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-muted: #898781;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --good: #0ca30c;
+    --good-bg: #0ca30c1a;
+    --warning: #fab219;
+    --warning-bg: #fab2191a;
+    --serious: #ec835a;
+    --serious-bg: #ec835a1a;
+    --critical: #d03b3b;
+    --critical-bg: #d03b3b1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #232320;
+      --border: rgba(255,255,255,0.10);
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --ink-muted: #898781;
+      --accent: #3987e5;
+      --accent-ink: #0d0d0d;
+      --good-bg: #0ca30c26;
+      --warning-bg: #fab21926;
+      --serious-bg: #ec835a26;
+      --critical-bg: #d03b3b26;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.45;
+  }
+  header {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  header span { color: var(--ink-muted); font-size: 12.5px; }
+  header a { margin-left: auto; color: var(--accent); font-size: 13px; text-decoration: none; font-weight: 600; }
+  header a:hover { text-decoration: underline; }
+
+  main { padding: 22px 26px 60px; max-width: 1040px; margin: 0 auto; }
+
+  button, .btn {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 8px 14px;
+    font-size: 13.5px;
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.small { padding: 5px 10px; font-size: 12.5px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+  .card .hint { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 14px; }
+
+  label { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 4px; }
+  input[type=text], input[type=number], input[type=date], input[type=month], select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 160px; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 8px; }
+  .kpi { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .kpi .label { font-size: 11px; color: var(--ink-muted); display: block; margin-bottom: 2px; }
+  .kpi .value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table th { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-variant-numeric: normal; }
+  .table-wrap { overflow-x: auto; }
+
+  .pill { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .pill-good { background: var(--good-bg); color: var(--good); }
+  .pill-warn { background: var(--warning-bg); color: var(--ink-2); }
+  .pill-bad { background: var(--critical-bg); color: var(--critical); }
+  .pill-neutral { background: var(--surface-2); color: var(--ink-2); }
+
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .tab-btn {
+    background: none; border: none; border-radius: 0;
+    padding: 9px 14px; font-size: 13.5px; font-weight: 600;
+    color: var(--ink-muted); border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { background: none; color: var(--ink); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .upload-row input[type=file] { flex: 1; min-width: 180px; font-size: 12.5px; }
+  .status-ok { color: var(--good); font-size: 12.5px; }
+  .status-err { color: var(--critical); font-size: 12.5px; }
+
+  .empty-state { color: var(--ink-muted); font-size: 13px; padding: 16px 0; text-align: center; }
+  #toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+    display: none; max-width: 420px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HealthCross</h1>
+  <span>Finance Status</span>
+  <a href="/">&larr; Underwriting</a>
+</header>
+
+<main>
+  <div class="tab-bar" id="tabBar"></div>
+  <div id="panels"></div>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const money = (v, ccy) => (v === null || v === undefined) ? '—' : `${(ccy || 'AED')} ${Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+const esc = s => (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+function toast(message, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.style.borderColor = isError ? 'var(--critical)' : 'var(--border)';
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || (`Request failed (${res.status})`));
+  }
+  return res.json();
+}
+
+const TABS = [
+  { id: 'summary', label: 'Summary' },
+  { id: 'tracker', label: 'Payment Tracker' },
+  { id: 'reconciliation', label: 'Reconciliation' },
+  { id: 'people', label: 'Employees & Expenses' },
+  { id: 'cashflow', label: 'Cash Flow & Forecast' },
+];
+
+function renderTabs() {
+  document.getElementById('tabBar').innerHTML = TABS.map(t =>
+    `<button class="tab-btn" id="tabbtn-${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`
+  ).join('');
+  document.getElementById('panels').innerHTML = TABS.map(t =>
+    `<div class="tab-panel" id="panel-${t.id}"></div>`
+  ).join('');
+}
+
+function switchTab(id) {
+  TABS.forEach(t => {
+    document.getElementById(`tabbtn-${t.id}`).classList.toggle('active', t.id === id);
+    document.getElementById(`panel-${t.id}`).classList.toggle('active', t.id === id);
+  });
+  const loaders = { summary: loadSummary, tracker: loadTracker, reconciliation: loadReconciliationPanel, people: loadPeoplePanel, cashflow: loadCashflowPanel };
+  loaders[id] && loaders[id]();
+}
+
+/* ---------------- Summary ---------------- */
+
+async function loadSummary() {
+  const panel = document.getElementById('panel-summary');
+  panel.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const s = await api('/finance/summary');
+    panel.innerHTML = `
+      <div class="card">
+        <h3>At a glance</h3>
+        <div class="hint">As of ${new Date(s.as_of).toLocaleString()}</div>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">HC Fees Invoiced</span><span class="value">${money(s.total_hc_fees_invoiced)}</span></div>
+          <div class="kpi"><span class="label">HC Fees Received</span><span class="value">${money(s.total_hc_fees_received)}</span></div>
+          <div class="kpi"><span class="label">Outstanding</span><span class="value">${money(s.total_outstanding)}</span></div>
+          <div class="kpi"><span class="label">YTD Expenses</span><span class="value">${money(s.ytd_expenses)}</span></div>
+          <div class="kpi"><span class="label">YTD Net</span><span class="value">${money(s.ytd_net)}</span></div>
+        </div>
+        <button onclick="loadSummary()">Refresh</button>
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div class="card"><div class="status-err">${esc(e.message)}</div></div>`;
+  }
+}
+
+/* ---------------- Payment Tracker ---------------- */
+
+async function loadTracker() {
+  const panel = document.getElementById('panel-tracker');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Upload Payment Tracker</h3>
+      <div class="hint">Upload the working tracker spreadsheet (any of its "Payment Tracker" / "Ledgers" / "Eman" sheets).</div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="trackerFile" /></div>
+        <div><label>Sheet name (optional)</label><input type="text" id="trackerSheet" placeholder="Payment Tracker" /></div>
+        <div><label>Mode</label>
+          <select id="trackerMode">
+            <option value="append">Append (add to existing)</option>
+            <option value="replace">Replace (wipe existing first)</option>
+          </select>
+        </div>
+        <div><button class="primary" onclick="uploadTracker()">Upload</button></div>
+      </div>
+      <div id="trackerUploadStatus"></div>
+    </div>
+    <div class="card">
+      <h3>Tracker entries</h3>
+      <div class="row">
+        <div><label>Filter: HC Payment Status</label>
+          <select id="trackerFilterStatus" onchange="loadTrackerTable()">
+            <option value="">All</option>
+            <option value="Received">Received</option>
+            <option value="Outstanding">Outstanding</option>
+          </select>
+        </div>
+        <div><button onclick="loadTrackerTable()">Refresh</button></div>
+      </div>
+      <div class="table-wrap" id="trackerTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  loadTrackerTable();
+}
+
+async function uploadTracker() {
+  const fileInput = document.getElementById('trackerFile');
+  const statusEl = document.getElementById('trackerUploadStatus');
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  const sheet = document.getElementById('trackerSheet').value.trim();
+  const mode = document.getElementById('trackerMode').value;
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    let url = `/finance/payment-tracker/upload?mode=${encodeURIComponent(mode)}`;
+    if (sheet) url += `&sheet_name=${encodeURIComponent(sheet)}`;
+    const rows = await api(url, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows.</span>`;
+    toast(`Uploaded ${rows.length} payment tracker rows`);
+    loadTrackerTable();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function loadTrackerTable() {
+  const el = document.getElementById('trackerTable');
+  const status = document.getElementById('trackerFilterStatus').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    let url = '/finance/payment-tracker';
+    if (status) url += `?hc_payment_status=${encodeURIComponent(status)}`;
+    const rows = await api(url);
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet - upload a file above.</div>`; return; }
+    const shown = rows.slice(0, 100);
+    el.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Doc No</th><th>Client</th><th>Channel</th><th>Product</th>
+          <th>Total Value</th><th>Client Status</th><th>HC Status</th><th>Received</th><th></th>
+        </tr></thead>
+        <tbody>
+          ${shown.map(r => `
+            <tr>
+              <td>${esc(r.doc_no)}</td>
+              <td>${esc(r.main_policy_holder)}</td>
+              <td>${esc(r.channel)}</td>
+              <td>${esc(r.product)}</td>
+              <td>${money(r.total_value)}</td>
+              <td>${statusPill(r.client_payment_status)}</td>
+              <td>${statusPill(r.hc_payment_status)}</td>
+              <td>${esc(r.payment_receive_date || r.payment_receive_note || '—')}</td>
+              <td>${(r.hc_payment_status || '').toLowerCase().startsWith('received') ? '' :
+                `<button class="small" onclick="markReceived(${r.id})">Mark Received</button>`}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+      ${rows.length > 100 ? `<div class="hint">Showing first 100 of ${rows.length} rows.</div>` : ''}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function statusPill(status) {
+  if (!status) return `<span class="pill pill-neutral">&mdash;</span>`;
+  const s = status.toLowerCase();
+  if (s.startsWith('received') || s === 'settled') return `<span class="pill pill-good">${esc(status)}</span>`;
+  if (s.includes('outstanding') || s.includes('due')) return `<span class="pill pill-warn">${esc(status)}</span>`;
+  return `<span class="pill pill-neutral">${esc(status)}</span>`;
+}
+
+async function markReceived(id) {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    await api(`/finance/payment-tracker/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hc_payment_status: 'Received', payment_receive_date: today }),
+    });
+    toast('Marked as received');
+    loadTrackerTable();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/* ---------------- Reconciliation ---------------- */
+
+function loadReconciliationPanel() {
+  const panel = document.getElementById('panel-reconciliation');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Upload QIC Statement of Account</h3>
+      <div class="hint">Give each upload a period label (e.g. "2026-06") - re-uploading the same label replaces that period's rows.</div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="soaFile" /></div>
+        <div><label>Statement period label</label><input type="text" id="soaPeriod" placeholder="2026-06" /></div>
+        <div><button class="primary" onclick="uploadSoa()">Upload</button></div>
+      </div>
+      <div id="soaUploadStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Upload Bank Statement</h3>
+      <div class="row">
+        <div><label>File</label><input type="file" id="bankFile" /></div>
+        <div><label>Statement period label (optional)</label><input type="text" id="bankPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="uploadBank()">Upload</button></div>
+      </div>
+      <div id="bankUploadStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Tracker vs. QIC SOA</h3>
+      <div class="hint">Does every Payment Tracker document exist (and match in amount) on QIC's own statement?</div>
+      <div class="row">
+        <div><label>Statement period (optional - leave blank to check against ALL uploaded SOA periods)</label>
+          <input type="text" id="reconPeriod" placeholder="2026-06" /></div>
+        <div><button onclick="runTrackerVsQic()">Run</button></div>
+      </div>
+      <div id="reconTrackerVsQic"></div>
+    </div>
+
+    <div class="card">
+      <h3>Compare two QIC SOA periods</h3>
+      <div class="hint">e.g. this month's export vs. a later "recon" re-export - shows what changed between them.</div>
+      <div class="row">
+        <div><label>Period A</label><input type="text" id="periodA" placeholder="2026-06" /></div>
+        <div><label>Period B</label><input type="text" id="periodB" placeholder="2026-07-recon" /></div>
+        <div><button onclick="runQicPeriods()">Compare</button></div>
+      </div>
+      <div id="reconQicPeriods"></div>
+    </div>
+
+    <div class="card">
+      <h3>Tracker "Received" rows vs. bank credits</h3>
+      <div class="hint">Every tracker row marked Received should be backed by a real inbound bank credit.</div>
+      <button onclick="runTrackerVsBank()">Run</button>
+      <div id="reconTrackerVsBank"></div>
+    </div>
+  `;
+}
+
+async function uploadSoa() {
+  const fileInput = document.getElementById('soaFile');
+  const statusEl = document.getElementById('soaUploadStatus');
+  const period = document.getElementById('soaPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  if (!period) { toast('Enter a statement period label', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    const rows = await api(`/finance/qic-soa/upload?statement_period=${encodeURIComponent(period)}`, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows for period "${esc(period)}".</span>`;
+    toast(`Uploaded ${rows.length} QIC SOA rows`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function uploadBank() {
+  const fileInput = document.getElementById('bankFile');
+  const statusEl = document.getElementById('bankUploadStatus');
+  const period = document.getElementById('bankPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    let url = '/finance/bank-statement/upload';
+    if (period) url += `?statement_period=${encodeURIComponent(period)}`;
+    const rows = await api(url, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} transactions.</span>`;
+    toast(`Uploaded ${rows.length} bank transactions`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function runTrackerVsQic() {
+  const el = document.getElementById('reconTrackerVsQic');
+  const period = document.getElementById('reconPeriod').value.trim();
+  el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
+  try {
+    let url = '/finance/reconciliation/tracker-vs-qic';
+    if (period) url += `?statement_period=${encodeURIComponent(period)}`;
+    const r = await api(url);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Matched</span><span class="value">${r.matched_count}</span></div>
+        <div class="kpi"><span class="label">Amount Mismatch</span><span class="value">${r.mismatched_count}</span></div>
+        <div class="kpi"><span class="label">Missing in QIC</span><span class="value">${r.missing_in_qic_count}</span></div>
+        <div class="kpi"><span class="label">Missing in Tracker</span><span class="value">${r.missing_in_tracker_count}</span></div>
+      </div>
+      ${reconTable(r.rows.filter(row => row.status !== 'matched'), ['doc_no', 'client_name', 'tracker_total_value', 'qic_gross_amount', 'variance', 'status'])}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+async function runQicPeriods() {
+  const el = document.getElementById('reconQicPeriods');
+  const a = document.getElementById('periodA').value.trim();
+  const b = document.getElementById('periodB').value.trim();
+  if (!a || !b) { toast('Enter both period labels', true); return; }
+  el.innerHTML = `<div class="empty-state">Comparing&hellip;</div>`;
+  try {
+    const r = await api(`/finance/reconciliation/qic-periods?period_a=${encodeURIComponent(a)}&period_b=${encodeURIComponent(b)}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Changed</span><span class="value">${r.changed_count}</span></div>
+        <div class="kpi"><span class="label">Only in ${esc(a)}</span><span class="value">${r.only_in_a_count}</span></div>
+        <div class="kpi"><span class="label">Only in ${esc(b)}</span><span class="value">${r.only_in_b_count}</span></div>
+      </div>
+      ${reconTable(r.rows, ['doc_no', 'period_a_amount', 'period_b_amount', 'variance', 'status'])}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+async function runTrackerVsBank() {
+  const el = document.getElementById('reconTrackerVsBank');
+  el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
+  try {
+    const r = await api('/finance/reconciliation/tracker-vs-bank');
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Matched</span><span class="value">${r.matched_count}</span></div>
+        <div class="kpi"><span class="label">No Bank Match</span><span class="value">${r.unmatched_tracker_count}</span></div>
+        <div class="kpi"><span class="label">Unmatched Bank Credits</span><span class="value">${r.unmatched_bank_count}</span></div>
+      </div>
+      ${reconTable(r.rows.filter(row => row.status !== 'matched'), ['doc_no', 'client_name', 'total_value', 'payment_receive_date', 'bank_credit_amount', 'bank_txn_date', 'status'])}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function reconTable(rows, columns) {
+  if (!rows.length) return `<div class="empty-state">No differences to show.</div>`;
+  const shown = rows.slice(0, 200);
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${columns.map(c => `<th>${c.replace(/_/g, ' ')}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${shown.map(row => `<tr>${columns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      ${rows.length > 200 ? `<div class="hint">Showing first 200 of ${rows.length}.</div>` : ''}
+    </div>
+  `;
+}
+
+/* ---------------- Employees & Expenses ---------------- */
+
+function loadPeoplePanel() {
+  const panel = document.getElementById('panel-people');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Add employee</h3>
+      <div class="row">
+        <div><label>Full name</label><input type="text" id="empName" /></div>
+        <div><label>Role</label><input type="text" id="empRole" /></div>
+        <div><label>Monthly salary</label><input type="number" id="empSalary" /></div>
+        <div><label>Currency</label><input type="text" id="empCurrency" value="AED" /></div>
+        <div><button class="primary" onclick="addEmployee()">Add</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Employees</h3>
+      <div class="table-wrap" id="employeeTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Add recurring expense</h3>
+      <div class="hint">A "variable" item (e.g. Etisalat) has no default amount - its real cost is entered fresh each month instead.</div>
+      <div class="row">
+        <div><label>Name</label><input type="text" id="recName" /></div>
+        <div><label>Category</label><input type="text" id="recCategory" placeholder="software / telecom / outsourced_services / rent" /></div>
+        <div><label>Type</label>
+          <select id="recType"><option value="fixed">Fixed</option><option value="variable">Variable</option></select>
+        </div>
+        <div><label>Default amount (fixed only)</label><input type="number" id="recAmount" /></div>
+        <div><label>Currency</label><input type="text" id="recCurrency" value="AED" /></div>
+        <div><button class="primary" onclick="addRecurring()">Add</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Recurring expense templates</h3>
+      <div class="table-wrap" id="recurringTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Monthly expenses</h3>
+      <div class="row">
+        <div><label>Generate this month's salary + fixed recurring expenses for</label><input type="month" id="genPeriod" /></div>
+        <div><button onclick="generateExpenses()">Generate</button></div>
+      </div>
+      <div id="generateStatus"></div>
+      <div class="row">
+        <div><label>Show expenses for year</label><input type="number" id="expenseYear" placeholder="2026" /></div>
+        <div><button onclick="loadExpenseTable()">Refresh</button></div>
+      </div>
+      <div class="table-wrap" id="expenseTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  loadEmployeeTable();
+  loadRecurringTable();
+  loadExpenseTable();
+}
+
+async function addEmployee() {
+  const full_name = document.getElementById('empName').value.trim();
+  const role_title = document.getElementById('empRole').value.trim();
+  const monthly_salary = parseFloat(document.getElementById('empSalary').value);
+  const currency = document.getElementById('empCurrency').value.trim() || 'AED';
+  if (!full_name || !monthly_salary) { toast('Name and monthly salary are required', true); return; }
+  try {
+    await api('/finance/employees', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, role_title, monthly_salary, currency }),
+    });
+    toast(`Added ${full_name}`);
+    document.getElementById('empName').value = '';
+    document.getElementById('empRole').value = '';
+    document.getElementById('empSalary').value = '';
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadEmployeeTable() {
+  const el = document.getElementById('employeeTable');
+  try {
+    const rows = await api('/finance/employees');
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No employees added yet.</div>`; return; }
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>Name</th><th>Role</th><th>Monthly Salary</th><th>Active</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title)}</td><td>${money(r.monthly_salary, r.currency)}</td>
+          <td>${r.is_active ? `<span class="pill pill-good">Active</span>` : `<span class="pill pill-neutral">Inactive</span>`}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+async function addRecurring() {
+  const name = document.getElementById('recName').value.trim();
+  const category = document.getElementById('recCategory').value.trim();
+  const expense_type = document.getElementById('recType').value;
+  const amountRaw = document.getElementById('recAmount').value;
+  const currency = document.getElementById('recCurrency').value.trim() || 'AED';
+  if (!name || !category) { toast('Name and category are required', true); return; }
+  const payload = { name, category, expense_type, currency };
+  if (amountRaw) payload.default_amount = parseFloat(amountRaw);
+  try {
+    await api('/finance/recurring-expenses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    toast(`Added ${name}`);
+    document.getElementById('recName').value = '';
+    document.getElementById('recCategory').value = '';
+    document.getElementById('recAmount').value = '';
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function loadRecurringTable() {
+  const el = document.getElementById('recurringTable');
+  try {
+    const rows = await api('/finance/recurring-expenses');
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No recurring expenses added yet.</div>`; return; }
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Default Amount</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr><td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${esc(r.expense_type)}</td>
+          <td>${r.default_amount !== null ? money(r.default_amount, r.currency) : '— (variable, entered monthly)'}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+async function generateExpenses() {
+  const period = document.getElementById('genPeriod').value;
+  const statusEl = document.getElementById('generateStatus');
+  if (!period) { toast('Pick a month first', true); return; }
+  try {
+    const rows = await api(`/finance/expenses/generate?period=${period}-01`, { method: 'POST' });
+    statusEl.innerHTML = `<span class="status-ok">Generated ${rows.length} new expense rows.</span>`;
+    toast(`Generated ${rows.length} expense rows`);
+    loadExpenseTable();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function loadExpenseTable() {
+  const el = document.getElementById('expenseTable');
+  const year = document.getElementById('expenseYear').value;
+  try {
+    let url = '/finance/expenses';
+    if (year) url += `?year=${year}`;
+    const rows = await api(url);
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No expenses recorded yet.</div>`; return; }
+    el.innerHTML = `
+      <table>
+        <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr><td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
+          <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Cash Flow & Forecast ---------------- */
+
+function loadCashflowPanel() {
+  const panel = document.getElementById('panel-cashflow');
+  const thisYear = new Date().getFullYear();
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Monthly cash flow</h3>
+      <div class="row">
+        <div><label>Year</label><input type="number" id="cfYear" value="${thisYear}" /></div>
+        <div><button class="primary" onclick="runCashFlow()">Run</button></div>
+      </div>
+      <div id="cashflowResult"></div>
+    </div>
+    <div class="card">
+      <h3>Expense forecast</h3>
+      <div class="hint">A month with real recorded expenses shows its actual; a month with none is projected from your active payroll/recurring-expense run-rate plus a trailing average of recent variable spend.</div>
+      <div class="row">
+        <div><label>Year</label><input type="number" id="fcYear" value="${thisYear}" /></div>
+        <div><button class="primary" onclick="runForecast()">Run</button></div>
+      </div>
+      <div id="forecastResult"></div>
+    </div>
+  `;
+}
+
+async function runCashFlow() {
+  const el = document.getElementById('cashflowResult');
+  const year = document.getElementById('cfYear').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api(`/finance/cash-flow?year=${year}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total Inflow</span><span class="value">${money(r.total_inflow)}</span></div>
+        <div class="kpi"><span class="label">Total Outflow</span><span class="value">${money(r.total_outflow)}</span></div>
+        <div class="kpi"><span class="label">Net</span><span class="value">${money(r.total_net)}</span></div>
+      </div>
+      <table>
+        <thead><tr><th>Month</th><th>Inflow</th><th>Outflow</th><th>Net</th><th>Cumulative</th></tr></thead>
+        <tbody>${r.months.map(m => `
+          <tr><td>${esc(m.period)}</td><td>${money(m.inflow)}</td><td>${money(m.outflow)}</td><td>${money(m.net)}</td><td>${money(m.cumulative)}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+async function runForecast() {
+  const el = document.getElementById('forecastResult');
+  const year = document.getElementById('fcYear').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api(`/finance/expense-forecast?year=${year}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Actual (recorded months)</span><span class="value">${money(r.total_actual)}</span></div>
+        <div class="kpi"><span class="label">Forecast (remaining months)</span><span class="value">${money(r.total_forecast)}</span></div>
+      </div>
+      <div class="hint">Fixed run-rate: ${money(r.assumptions.fixed_monthly_run_rate)}/mo &middot; trailing variable avg: ${money(r.assumptions.trailing_variable_monthly_avg)}/mo (from ${r.assumptions.trailing_months_used} recent month(s))</div>
+      <table>
+        <thead><tr><th>Month</th><th>Fixed</th><th>Variable</th><th>Total</th><th>Basis</th></tr></thead>
+        <tbody>${r.months.map(m => `
+          <tr><td>${esc(m.period)}</td><td>${money(m.fixed)}</td><td>${money(m.variable)}</td><td>${money(m.total)}</td>
+          <td>${m.is_actual ? '<span class="pill pill-good">Actual</span>' : '<span class="pill pill-neutral">Forecast</span>'}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Init ---------------- */
+
+renderTabs();
+switchTab('summary');
+</script>
+</body>
+</html>
