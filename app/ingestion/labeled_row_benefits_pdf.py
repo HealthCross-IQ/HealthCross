@@ -55,6 +55,19 @@ _CATEGORY_IN_FILENAME_RE = re.compile(r"category[\s_-]*([a-z])(?![a-z])", re.IGN
 _NOT_COVERED_RE = re.compile(r"\bnot covered\b", re.IGNORECASE)
 _NUMBER_RE = re.compile(r"([\d,]+(?:\.\d+)?)")
 
+# A real MaxMed-style document matches most of _FIELD_LABEL_ANCHORS (7+ of
+# the 9 fields, in practice) since its whole table is built around those
+# exact row labels. A totally different document family - e.g. a Cigna
+# "Schedule 3 - Table of Benefits" narrative doc, whose own header line
+# happens to contain the words "table of benefits" too, and whose 85+ real
+# benefit rows happen to include something that coincidentally contains one
+# of these anchor substrings ("chiropractic"/"alternative treatment") - can
+# match exactly one field by pure chance. Below this count, it's not
+# actually this document family; report no match so the caller falls
+# through to the generic label/value/description table parser instead
+# (app/ingestion/international_tob.py), which handles that family correctly.
+_MIN_MATCHED_ANCHOR_FIELDS = 3
+
 
 def _clean(text: Optional[str]) -> str:
     if not text:
@@ -246,23 +259,27 @@ def parse_labeled_row_benefits_pdf(file: BinaryIO, filename: str) -> Optional[Di
             return None
 
     standard_summary: Dict[str, str] = {}
-    if header.get("area_of_cover"):
-        standard_summary["area_of_cover"] = header["area_of_cover"]
-    if header.get("annual_limit"):
-        standard_summary["annual_limit"] = header["annual_limit"]
+    matched_anchor_count = 0
     for field, anchors in _FIELD_LABEL_ANCHORS.items():
         matched = _find_matching_row(rows, anchors)
         if matched:
             standard_summary[field] = matched["value"]
+            matched_anchor_count += 1
 
-    if not standard_summary:
+    if matched_anchor_count < _MIN_MATCHED_ANCHOR_FIELDS:
         # The header text and a stray bordered table both happened to be
-        # found, but none of this document's row labels match any of this
-        # family's known field anchors - a real MaxMed-style document always
-        # matches at least one. This is a different document family whose
-        # table just happens to also have 3 cells somewhere, so report no
-        # match rather than a plan with a name and nothing else.
+        # found, but too few (or none) of this document's row labels match
+        # this family's known field anchors - a real MaxMed-style document
+        # matches most of them, since its whole table is built around these
+        # exact labels. This is a different document family whose table
+        # just happens to share a handful of generic terms, so report no
+        # match rather than a near-empty plan built on coincidence.
         return None
+
+    if header.get("area_of_cover"):
+        standard_summary["area_of_cover"] = header["area_of_cover"]
+    if header.get("annual_limit"):
+        standard_summary["annual_limit"] = header["annual_limit"]
 
     dental_text = standard_summary.get("dental", "")
     optical_text = standard_summary.get("optical", "")

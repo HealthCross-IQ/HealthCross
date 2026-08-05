@@ -16,6 +16,7 @@ from app.ingestion.labeled_row_benefits_pdf import (
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLD_CATEGORY_A = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Gold_Group_Category_A.pdf"
 BRONZE_CATEGORY_B = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Bronze_Group_Category_B.pdf"
+CIGNA_SMARTCARE = FIXTURES / "Table_of_Benefits_Cigna_SmartCare_Annexure1.pdf"
 
 
 def test_category_from_filename_handles_trailing_characters():
@@ -96,4 +97,22 @@ def test_returns_none_for_a_document_without_the_table_of_benefits_header(monkey
     monkeypatch.setattr(labeled_row_benefits_pdf.pdfplumber, "open", lambda file: _FakePdf())
 
     result = parse_labeled_row_benefits_pdf(b"", "unrelated.pdf")
+    assert result is None
+
+
+def test_returns_none_for_a_cigna_smartcare_document_despite_a_coincidental_header_and_anchor_match():
+    """Regression test: this real Cigna "Schedule 3 - Table of Benefits and
+    Exclusions" document has an unrelated narrative/clarifications layout,
+    but its title line coincidentally contains "table of benefits" (passing
+    _header_fields' check) and one of its 85+ real benefit rows
+    coincidentally matches the "alternative treatment" anchor - previously
+    enough to wrongly claim this document, producing a near-empty
+    standard_summary (just that one field) instead of falling through to
+    the generic label/value/description table parser
+    (app/ingestion/international_tob.py), which handles this document
+    family correctly. _MIN_MATCHED_ANCHOR_FIELDS now requires several
+    matched fields, not just one, before accepting a match.
+    """
+    with open(CIGNA_SMARTCARE, "rb") as f:
+        result = parse_labeled_row_benefits_pdf(f, CIGNA_SMARTCARE.name)
     assert result is None

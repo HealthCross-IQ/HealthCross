@@ -9,6 +9,7 @@ from pathlib import Path
 FIXTURES = Path(__file__).parent / "fixtures"
 GOLD_CATEGORY_A = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Gold_Group_Category_A.pdf"
 BRONZE_CATEGORY_B = FIXTURES / "Table_of_Benefits_Maxmed_Neuron_Bronze_Group_Category_B.pdf"
+CIGNA_SMARTCARE = FIXTURES / "Table_of_Benefits_Cigna_SmartCare_Annexure1.pdf"
 
 
 def test_uploads_real_labeled_row_pdf_end_to_end(client):
@@ -55,3 +56,29 @@ def test_uploads_both_categories_as_separate_files_with_append_mode(client):
     assert set(plans_by_category.keys()) == {"A", "B"}
     assert plans_by_category["A"].network_type == "Neuron General Plus"
     assert plans_by_category["B"].network_type == "Neuron General"
+
+
+def test_a_cigna_smartcare_document_falls_through_to_the_generic_table_parser(client):
+    # Regression test: this real file's title line and one of its 85+ real
+    # benefit rows used to coincidentally match this labeled-row parser's
+    # own detection (see test_ingestion_labeled_row_benefits_pdf.py), giving
+    # a near-empty summary instead of reaching the generic label/value/
+    # description table parser that actually understands this document's
+    # narrative/clarifications layout.
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    with open(CIGNA_SMARTCARE, "rb") as f:
+        resp = client.post(
+            f"/cases/{case_id}/benefits",
+            files={"file": (CIGNA_SMARTCARE.name, f, "application/pdf")},
+        )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert len(body) == 1
+    assert body[0]["source_format"] == "pdf-generic-table"
+    assert body[0]["annual_limit"] == 3_673_000.0
+    assert body[0]["network_type"] == "Cigna"
+    summary = body[0]["standard_summary"]
+    assert summary["area_of_cover"] == "Worldwide excluding USA"
+    assert summary["pre_existing_chronic_limit"] == "Covered"
