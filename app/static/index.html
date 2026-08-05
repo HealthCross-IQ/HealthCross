@@ -330,6 +330,7 @@
     <button onclick="showInternationalComparison()">International comparison</button>
     <button onclick="showPortfolioAnalysis()">Portfolio Analysis</button>
     <button onclick="showPortfolioInsights()">Portfolio Insights</button>
+    <button onclick="showChatAssistant()">Ask a question</button>
     <h2>Cases</h2>
     <div class="case-filters">
       <input type="text" id="caseFilterSearch" placeholder="Search company or broker" oninput="renderCaseList()">
@@ -3360,6 +3361,88 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
       </div>
     </div>
   `;
+}
+
+/* ---------------- Chat assistant (free-text Q&A over portfolio + case data) ---------------- */
+
+let chatHistory = []; // [{role: 'user'|'assistant', text}]
+
+function showChatAssistant() {
+  currentCase = null;
+  loadCases();
+  document.getElementById('main').innerHTML = chatPanelHtml();
+  chatRenderMessages();
+  document.getElementById('chat-input').focus();
+}
+
+function chatPanelHtml() {
+  return `
+    <div class="card">
+      <h3>Ask a question</h3>
+      <div class="hint">Ask anything about the booked portfolio or the case pipeline - e.g. "which product has the worst loss ratio", "how many renewals are due this quarter", "why does zone 2 look expensive". Answered from a snapshot of the current data, not a live database query - for a fine-grained drill-down (one specific member, one specific case's full history), use Portfolio Insights or the case itself instead.</div>
+      <div id="chat-messages" style="display:flex; flex-direction:column; gap:12px; max-height:55vh; overflow-y:auto; padding:4px 2px;"></div>
+      <div class="row" style="margin-top:14px; align-items:flex-end;">
+        <div style="flex:1;">
+          <textarea id="chat-input" rows="2" placeholder="Ask a question... (Enter to send, Shift+Enter for a new line)" style="width:100%; padding:8px 10px; border-radius:7px; border:1px solid var(--border); background:var(--surface); color:var(--ink); font:inherit; font-size:13.5px; resize:vertical;" onkeydown="chatHandleKeydown(event)"></textarea>
+        </div>
+        <button class="primary" id="chat-send-btn" onclick="chatSend()">Ask</button>
+      </div>
+    </div>
+  `;
+}
+
+function chatHandleKeydown(event) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    chatSend();
+  }
+}
+
+function chatMessageHtml(msg) {
+  const isUser = msg.role === 'user';
+  return `
+    <div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:80%;">
+      <div class="hint" style="margin-bottom:2px; ${isUser ? 'text-align:right;' : ''}">${isUser ? 'You' : 'Assistant'}</div>
+      <div style="padding:10px 14px; border-radius:10px; background:${isUser ? 'var(--accent)' : 'var(--surface-2)'}; color:${isUser ? 'var(--accent-ink)' : 'var(--ink)'}; white-space:pre-wrap; font-size:13.5px; line-height:1.5;">${escapeHtml(msg.text)}</div>
+    </div>
+  `;
+}
+
+function chatRenderMessages() {
+  const area = document.getElementById('chat-messages');
+  if (!area) return;
+  area.innerHTML = chatHistory.length
+    ? chatHistory.map(chatMessageHtml).join('')
+    : '<div class="empty-state">No questions asked yet.</div>';
+  area.scrollTop = area.scrollHeight;
+}
+
+async function chatSend() {
+  const input = document.getElementById('chat-input');
+  const question = input.value.trim();
+  if (!question) return;
+
+  chatHistory.push({ role: 'user', text: question });
+  chatHistory.push({ role: 'assistant', text: 'Thinking...' });
+  input.value = '';
+  chatRenderMessages();
+
+  const sendBtn = document.getElementById('chat-send-btn');
+  sendBtn.disabled = true;
+  try {
+    const result = await api('/chat/ask', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question }),
+    });
+    chatHistory[chatHistory.length - 1] = { role: 'assistant', text: result.answer };
+  } catch (err) {
+    chatHistory[chatHistory.length - 1] = { role: 'assistant', text: `Couldn't get an answer: ${err.message}` };
+  } finally {
+    sendBtn.disabled = false;
+    chatRenderMessages();
+    document.getElementById('chat-input').focus();
+  }
 }
 
 showNewCaseForm();

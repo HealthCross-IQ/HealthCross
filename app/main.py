@@ -1,13 +1,17 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+
+load_dotenv()
 
 from app.api import (
     routes_admin,
     routes_analysis,
     routes_cases,
+    routes_chat,
     routes_feedback,
     routes_new_business_rating,
     routes_portfolio_analysis,
@@ -141,6 +145,7 @@ app.include_router(routes_analysis.router)
 app.include_router(routes_reference_plans.router)
 app.include_router(routes_new_business_rating.router)
 app.include_router(routes_portfolio_analysis.router)
+app.include_router(routes_chat.router)
 
 
 @app.get("/health")

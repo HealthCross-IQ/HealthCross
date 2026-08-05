@@ -455,3 +455,11 @@ class PortfolioDataAsOfIn(BaseModel):
 
 class PortfolioDataAsOfOut(BaseModel):
     data_as_of_date: Optional[date] = None
+
+
+class ChatQuestionIn(BaseModel):
+    question: str
+
+
+class ChatAnswerOut(BaseModel):
+    answer: str
