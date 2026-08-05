@@ -1,3 +1,5 @@
+import datetime
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -35,6 +37,14 @@ def client(tmp_path):
             is_active=True,
         )
     )
+    today = datetime.date.today()
+    for channel, tier_band, fee_pct in [
+        ("broker", "bronze_silver", 0.065),
+        ("broker", "gold_platinum", 0.05),
+        ("direct", "bronze_silver", 0.115),
+        ("direct", "gold_platinum", 0.10),
+    ]:
+        db.add(models.FeeRateCard(channel=channel, tier_band=tier_band, fee_pct=fee_pct, effective_from=today, is_active=True))
     db.commit()
     db.close()
 

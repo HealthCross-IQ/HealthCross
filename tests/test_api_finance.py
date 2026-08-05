@@ -1,0 +1,139 @@
+import io
+
+import pandas as pd
+
+
+def _xlsx_bytes(df: pd.DataFrame) -> bytes:
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False)
+    buf.seek(0)
+    return buf.read()
+
+
+def _upload(client, path, filename, df):
+    return client.post(
+        path,
+        files={"file": (filename, _xlsx_bytes(df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+
+
+def test_create_payment_tracker_entry_computes_fee_from_rate_card(client):
+    resp = client.post("/finance/payment-tracker", json={"channel": "direct", "product": "Silver", "premium_excl_vat": 200000})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["hc_fee_pct"] == 0.115
+    assert body["hc_fees"] == 23000.0
+    assert body["is_manual_fee"] is False
+
+
+def test_create_payment_tracker_entry_requires_manual_rate_for_group(client):
+    resp = client.post("/finance/payment-tracker", json={"channel": "group", "product": "Gold", "premium_excl_vat": 50000})
+    assert resp.status_code == 400
+
+    resp = client.post("/finance/payment-tracker", json={"channel": "group", "product": "Gold", "premium_excl_vat": 50000, "manual_fee_pct": 0.08})
+    assert resp.status_code == 200
+    assert resp.json()["is_manual_fee"] is True
+
+
+def test_payment_tracker_upload_and_update_status(client):
+    df = pd.DataFrame(
+        [
+            {
+                "Source": "Direct Channel",
+                "Policy No.": "P1",
+                "DocNo.": "128-1",
+                "Premium\n( excl VAT)": 100000.0,
+                "Product": "Silver",
+                "HC Fee %": 0.115,
+                "HC Fees": 11500.0,
+                "Total Value": 12075.0,
+            }
+        ]
+    )
+    resp = _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", df)
+    assert resp.status_code == 200
+    rows = resp.json()
+    assert len(rows) == 1
+    entry_id = rows[0]["id"]
+    assert rows[0]["doc_no"] == "128-1"
+
+    resp = client.patch(f"/finance/payment-tracker/{entry_id}", json={"hc_payment_status": "Received", "payment_receive_date": "2026-07-24"})
+    assert resp.status_code == 200
+    assert resp.json()["hc_payment_status"] == "Received"
+
+    resp = client.get("/finance/payment-tracker", params={"hc_payment_status": "Received"})
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+
+def test_qic_soa_upload_replaces_same_period_and_reconciles_against_tracker(client):
+    tracker_df = pd.DataFrame(
+        [{"Source": "Direct Channel", "Policy No.": "P1", "DocNo.": "128-1", "Invoice amount": 1000.0, "Premium\n( excl VAT)": 1000.0, "Product": "Silver"}]
+    )
+    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
+
+    soa_df = pd.DataFrame([{"Doc No": "128 - 1", "Gross Amount": 1000.0, "AMOUNT": 1000.0, "Dr/Cr": "D", "Insured Name": "Acme"}])
+    resp = _upload(client, "/finance/qic-soa/upload?statement_period=2026-06", "soa.xlsx", soa_df)
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+    # Re-uploading the same period replaces, not accumulates.
+    resp = _upload(client, "/finance/qic-soa/upload?statement_period=2026-06", "soa.xlsx", soa_df)
+    assert len(resp.json()) == 1
+    resp = client.get("/finance/qic-soa", params={"statement_period": "2026-06"})
+    assert len(resp.json()) == 1
+
+    resp = client.get("/finance/reconciliation/tracker-vs-qic", params={"statement_period": "2026-06"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["matched_count"] == 1
+    assert body["missing_in_qic_count"] == 0
+
+
+def test_employees_recurring_expenses_and_generate(client):
+    resp = client.post("/finance/employees", json={"full_name": "Sheetal", "role_title": "Head of Operations", "monthly_salary": 30000, "currency": "AED"})
+    assert resp.status_code == 200
+
+    resp = client.post("/finance/recurring-expenses", json={"name": "Nivotime", "category": "software", "default_amount": 5000, "expense_type": "fixed"})
+    assert resp.status_code == 200
+
+    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-15"})
+    assert resp.status_code == 200
+    generated = resp.json()
+    assert len(generated) == 2
+    assert {e["period"] for e in generated} == {"2026-08-01"}
+
+    # Calling again for the same period doesn't duplicate.
+    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-01"})
+    assert resp.json() == []
+
+    resp = client.get("/finance/expenses", params={"year": 2026})
+    assert len(resp.json()) == 2
+
+
+def test_cash_flow_and_summary_endpoints(client):
+    tracker_df = pd.DataFrame(
+        [
+            {
+                "Source": "Direct Channel",
+                "Policy No.": "P1",
+                "DocNo.": "128-1",
+                "Premium\n( excl VAT)": 100000.0,
+                "Product": "Silver",
+                "HC Fee %": 0.115,
+                "Total Value": 12075.0,
+                "HC Payment Status": "Received",
+                "Payment Receive Date": pd.Timestamp("2026-03-06"),
+            }
+        ]
+    )
+    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
+
+    resp = client.get("/finance/cash-flow", params={"year": 2026})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_inflow"] == 12075.0
+
+    resp = client.get("/finance/summary")
+    assert resp.status_code == 200
+    assert resp.json()["total_hc_fees_received"] == 12075.0

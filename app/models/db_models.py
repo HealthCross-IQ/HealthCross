@@ -299,6 +299,268 @@ class Outcome(Base):
     scorecard = relationship("Scorecard")
 
 
+class FeeRateCard(Base):
+    """HC's commission rate table: the % of premium (excl. VAT) HealthCross
+    earns on medical insurance sold through the platform, banded by sales
+    channel (broker-introduced vs. direct) and plan tier. A negotiated
+    Group/case-to-case rate isn't stored here at all - it's entered directly
+    as a manual override on the PaymentTrackerEntry it applies to (see
+    PaymentTrackerEntry.is_manual_fee), exactly mirroring the "manual calc"
+    convention already used in the working payment tracker.
+
+    Versioned like ScoringWeightSet - a rate change is a new row with a
+    fresh effective_from rather than an edit, so historical
+    PaymentTrackerEntry rows stay explainable against whatever rate applied
+    when they were invoiced.
+    """
+
+    __tablename__ = "fee_rate_cards"
+
+    id = Column(Integer, primary_key=True)
+    channel = Column(String, nullable=False)  # "broker" / "direct"
+    tier_band = Column(String, nullable=False)  # "bronze_silver" / "gold_platinum"
+    fee_pct = Column(Float, nullable=False)
+    effective_from = Column(Date, nullable=False)
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class PaymentTrackerEntry(Base):
+    """One row per QIC document (a premium invoice or a credit/cancellation
+    endorsement) that HealthCross earns a fee on - the same shape as the
+    real "Payment Tracker" working sheet: a client-facing leg (what QIC
+    invoiced the client/broker, and whether the client has paid), and an
+    HC-facing leg (HC's own fee on that premium, invoiced to the client, and
+    whether HC has collected it).
+
+    `doc_no` is normalized (see app.finance.common.normalize_doc_no) so it
+    joins cleanly against QicSoaLine.doc_no despite the two systems
+    formatting the same document number differently ("128-93727" here vs.
+    "128 - 93727" in a QIC export).
+
+    Company-wide, not tied to any underwriting Case - a Case is a submission
+    being risk-scored; a PaymentTrackerEntry is a bound policy/endorsement
+    already earning HC a fee.
+    """
+
+    __tablename__ = "payment_tracker_entries"
+
+    id = Column(Integer, primary_key=True)
+
+    invoice_mode = Column(String, nullable=True)  # "Manual" / "Auto"
+    source_name = Column(String, nullable=True)  # broker company name, or "Direct Channel"
+    channel = Column(String, nullable=False)  # "broker" / "direct" / "group"
+    division = Column(String, nullable=True)  # branch, e.g. "Dubai Branch"
+    client_code = Column(String, nullable=True)
+    main_policy_holder = Column(String, nullable=True)
+    sub_group_name = Column(String, nullable=True)
+    policy_no = Column(String, nullable=True)
+    policy_period_from = Column(Date, nullable=True)
+    policy_period_to = Column(Date, nullable=True)
+    endorsement_no = Column(String, nullable=True)
+    endorsement_type = Column(String, nullable=True)  # Inception / Addition / Deletion / Modification
+
+    doc_date = Column(Date, nullable=True)
+    due_date = Column(Date, nullable=True)
+    # Normalized join key against QicSoaLine.doc_no - see class docstring.
+    doc_no = Column(String, nullable=True, index=True)
+    doc_no_raw = Column(String, nullable=True)
+    doc_code = Column(String, nullable=True)  # "128" (debit) / "228" (credit) prefix
+    client_doc_no = Column(String, nullable=True)
+
+    invoice_amount = Column(Float, nullable=True)
+    premium_excl_vat = Column(Float, nullable=True)
+    basmah = Column(Float, nullable=True)
+    icp = Column(Float, nullable=True)
+    client_vat = Column(Float, nullable=True)
+    client_payment_status = Column(String, nullable=True)  # "Settled" / "Outstanding"
+    healthcross_doc = Column(String, nullable=True)  # internal HC doc/invoice number, once raised
+    client_premium_amount_excl_tax = Column(Float, nullable=True)
+
+    product = Column(String, nullable=True)  # tier label, e.g. "Silver", "Gold/Bronze" (mixed group)
+    # True when the fee wasn't computed from FeeRateCard - a negotiated
+    # Group/case-to-case rate, or a mixed-tier Product the rate card can't
+    # band cleanly. Mirrors the source sheet's literal "manual calc" entries.
+    is_manual_fee = Column(Boolean, default=False)
+    hc_fee_pct = Column(Float, nullable=True)
+    hc_fees = Column(Float, nullable=True)
+    vat_pct = Column(Float, default=0.05)
+    vat_amount = Column(Float, nullable=True)
+    total_value = Column(Float, nullable=True)
+
+    invoice_type = Column(String, nullable=True)  # "Debit" / "Credit"
+    invoice_status = Column(String, nullable=True)  # "Due for collection" / "Outstanding"
+    invoice_raised_period = Column(String, nullable=True)  # free-text label, e.g. "Sept'25", "Raised Mar 26"
+    hc_payment_status = Column(String, nullable=True)  # "Received" / blank
+    payment_receive_date = Column(Date, nullable=True)
+    # Raw text when the source's payment-receive value wasn't a clean date
+    # (e.g. "Received Oct'25") - kept verbatim rather than dropped.
+    payment_receive_note = Column(String, nullable=True)
+
+    source_batch = Column(String, nullable=True)  # which upload this row came from, for audit/traceability
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class QicSoaLine(Base):
+    """One raw line from a QIC Statement of Account export - the ground
+    truth HealthCross reconciles its own PaymentTrackerEntry rows against.
+    QIC exports vary in shape (a "Debit LC"/"Credit LC" pair of columns in
+    one export, a single signed AMOUNT + Dr/Cr flag in another) - both are
+    normalized to the same debit_amount/credit_amount/dr_cr fields here by
+    app.ingestion.qic_soa so every downstream query only deals with one
+    shape regardless of which export produced it.
+
+    `doc_no` is normalized the same way as PaymentTrackerEntry.doc_no - see
+    that class's docstring.
+    """
+
+    __tablename__ = "qic_soa_lines"
+
+    id = Column(Integer, primary_key=True)
+
+    doc_no = Column(String, nullable=True, index=True)
+    doc_no_raw = Column(String, nullable=True)
+    tran_code = Column(String, nullable=True)
+    doc_date = Column(Date, nullable=True)
+    tran_type = Column(String, nullable=True)
+    doc_due_date = Column(Date, nullable=True)
+    lob_code = Column(String, nullable=True)
+    policy_no = Column(String, nullable=True)
+    insured_name = Column(String, nullable=True)
+    insured_code = Column(String, nullable=True)
+    currency = Column(String, nullable=True)
+    doc_desc = Column(Text, nullable=True)
+    debit_amount = Column(Float, default=0)
+    credit_amount = Column(Float, default=0)
+    dr_cr = Column(String, nullable=True)  # "D" / "C"
+    sequence_no = Column(Integer, nullable=True)
+    policy_from_date = Column(Date, nullable=True)
+    policy_to_date = Column(Date, nullable=True)
+    cust_code = Column(String, nullable=True)
+    cust_name = Column(String, nullable=True)
+    endorsement_no = Column(String, nullable=True)
+    pol_comms_doc = Column(String, nullable=True)
+    branch = Column(String, nullable=True)
+    gross_amount = Column(Float, nullable=True)
+    age_band = Column(String, nullable=True)
+    prod_code = Column(String, nullable=True)
+    cust_group_code = Column(String, nullable=True)
+    cust_group_name = Column(String, nullable=True)
+    broker_name = Column(String, nullable=True)
+    control_account = Column(Text, nullable=True)
+    cal_year = Column(String, nullable=True)
+    doc_created_by = Column(String, nullable=True)
+    installment_number = Column(String, nullable=True)
+    endorsement_type = Column(String, nullable=True)
+
+    # Label for which SOA export this line came from (e.g. "2026-06",
+    # "2026-07 recon") - set at upload time, lets a period-over-period
+    # comparison of two QIC SOA exports be run without re-uploading.
+    statement_period = Column(String, nullable=True, index=True)
+    imported_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class BankTransaction(Base):
+    """One raw line from an HC bank account statement export - used to
+    confirm a QIC payment marked "Received" in the PaymentTrackerEntry
+    ledger actually landed in the bank (see app.finance.reconciliation),
+    and as the source-of-truth for treasury/cash-flow reporting.
+    """
+
+    __tablename__ = "bank_transactions"
+
+    id = Column(Integer, primary_key=True)
+
+    account_number = Column(String, nullable=True)
+    txn_date = Column(Date, nullable=True)
+    value_date = Column(Date, nullable=True)
+    reference_number = Column(String, nullable=True)
+    description = Column(Text, nullable=True)
+    credit_amount = Column(Float, default=0)
+    debit_amount = Column(Float, default=0)
+    balance = Column(Float, nullable=True)
+    currency = Column(String, default="AED")
+
+    statement_period = Column(String, nullable=True, index=True)
+    imported_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class Employee(Base):
+    """HC payroll roster. monthly_salary is the recurring default used both
+    to display current headcount cost and to auto-generate this month's
+    salary ExpenseEntry rows (see POST /finance/expenses/generate) - an
+    individual month's actual paid amount can still differ (e.g. a partial
+    month, an installment) since that's recorded on the ExpenseEntry itself,
+    never by editing this roster row.
+    """
+
+    __tablename__ = "employees"
+
+    id = Column(Integer, primary_key=True)
+    full_name = Column(String, nullable=False)
+    role_title = Column(String, nullable=True)
+    monthly_salary = Column(Float, nullable=False)
+    currency = Column(String, default="AED")
+    start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class RecurringExpense(Base):
+    """A template for a recurring non-salary expense (e.g. Nivotime's portal
+    support/maintenance fee, ABH's outsourced accounting fee, Etisalat).
+    `default_amount` is None for a variable-cost item like Etisalat, whose
+    actual monthly amount depends on usage and is entered fresh each period
+    on its ExpenseEntry rather than defaulted from here.
+    """
+
+    __tablename__ = "recurring_expenses"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    category = Column(String, nullable=False)  # e.g. "software", "telecom", "outsourced_services", "rent"
+    default_amount = Column(Float, nullable=True)
+    currency = Column(String, default="AED")
+    expense_type = Column(String, nullable=False)  # "fixed" / "variable"
+    is_active = Column(Boolean, default=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class ExpenseEntry(Base):
+    """One actual expense for one calendar month - salaries (linked to
+    Employee), recurring non-salary costs (linked to RecurringExpense), and
+    genuinely one-off expenses (neither link set) all live in this single
+    table so cash-flow and forecasting only need to sum one place.
+    """
+
+    __tablename__ = "expense_entries"
+
+    id = Column(Integer, primary_key=True)
+    period = Column(Date, nullable=False, index=True)  # first-of-month marker, e.g. 2026-07-01
+    category = Column(String, nullable=False)
+    expense_type = Column(String, nullable=False)  # "fixed" / "variable"
+    description = Column(String, nullable=True)
+    amount = Column(Float, nullable=False)
+    currency = Column(String, default="AED")
+
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
+    recurring_expense_id = Column(Integer, ForeignKey("recurring_expenses.id"), nullable=True)
+
+    payment_date = Column(Date, nullable=True)
+    source = Column(String, default="manual")  # "manual" / "generated" / "bank_matched"
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    employee = relationship("Employee")
+    recurring_expense = relationship("RecurringExpense")
+
+
 class ReferenceBenefitPlan(Base):
     """One insurer/tier's table of benefits, uploaded once into a shared
     reference library rather than attached to any particular case - powers
