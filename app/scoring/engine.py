@@ -21,6 +21,51 @@ class ScoringWeights:
     overage_loading_cap: float = DEFAULT_OVERAGE_LOADING_CAP
 
 
+def _effective_weights(has_claims: bool, weights: ScoringWeights) -> dict:
+    """The weights actually used for one scorecard run. Most New Business
+    cases have no claims history at all to draw on (an incumbent insurer's
+    claims either don't exist yet or aren't shared) - scoring them with a
+    fixed claims-experience weight still in the blend means that slot's
+    forced-neutral (1.0) score dilutes the real signal from demographic/
+    benefits/industry down to whatever fraction of the total weight remains,
+    even though there's nothing genuinely uninformative being contributed.
+    When there are no claims at all, w_claims_experience is dropped
+    entirely and redistributed proportionally across the other three, so
+    they still carry their full combined weight rather than being diluted
+    by a placeholder. Any real claims history (even a short, low-
+    credibility one) keeps the configured weight as-is - claims_experience_
+    risk's own credibility blending already fades a thin claims sample
+    toward neutral without needing to touch the weights themselves.
+    """
+    if has_claims:
+        return {
+            "demographic": weights.w_demographic,
+            "claims_experience": weights.w_claims_experience,
+            "benefit_richness": weights.w_benefit_richness,
+            "industry": weights.w_industry,
+        }
+
+    remaining = weights.w_demographic + weights.w_benefit_richness + weights.w_industry
+    if remaining <= 0:
+        # Degenerate configuration (all weight on claims alone) - nothing
+        # sensible to redistribute to, so fall back to using it as-is.
+        return {
+            "demographic": weights.w_demographic,
+            "claims_experience": weights.w_claims_experience,
+            "benefit_richness": weights.w_benefit_richness,
+            "industry": weights.w_industry,
+        }
+
+    total = weights.w_demographic + weights.w_claims_experience + weights.w_benefit_richness + weights.w_industry
+    scale = total / remaining
+    return {
+        "demographic": weights.w_demographic * scale,
+        "claims_experience": 0.0,
+        "benefit_richness": weights.w_benefit_richness * scale,
+        "industry": weights.w_industry * scale,
+    }
+
+
 def _case_network_tier_score(benefit_plans: List[dict]) -> float:
     """Member-count-weighted blend of each existing-role plan's network tier
     richness (see app/reference/network_tiers.py), so a case split across a
@@ -79,12 +124,13 @@ def compute_scorecard(
     benefits = benefit_richness_risk(benefit_plans)
     claims_exp = claims_experience_risk(claims, member_count=len(census), estimated_annual_premium=estimated_annual_premium)
     industry_score = industry_risk(industry)
+    effective_weights = _effective_weights(bool(claims), weights)
 
     raw_composite = (
-        weights.w_demographic * demo["score"]
-        + weights.w_claims_experience * claims_exp["score"]
-        + weights.w_benefit_richness * benefits["score"]
-        + weights.w_industry * industry_score
+        effective_weights["demographic"] * demo["score"]
+        + effective_weights["claims_experience"] * claims_exp["score"]
+        + effective_weights["benefit_richness"] * benefits["score"]
+        + effective_weights["industry"] * industry_score
     )
 
     composite_score = max(
@@ -110,11 +156,15 @@ def compute_scorecard(
             "claims_experience": claims_exp,
             "industry_multiplier": industry_score,
             "network_tier_score": round(case_network_tier_score, 4),
+            # The weights ACTUALLY applied to this scorecard (see
+            # _effective_weights) - not necessarily the same as the
+            # ScoringWeightSet's configured values, when claims were
+            # unavailable and claims_experience's weight was redistributed.
             "weights_used": {
-                "demographic": weights.w_demographic,
-                "claims_experience": weights.w_claims_experience,
-                "benefit_richness": weights.w_benefit_richness,
-                "industry": weights.w_industry,
+                "demographic": round(effective_weights["demographic"], 4),
+                "claims_experience": round(effective_weights["claims_experience"], 4),
+                "benefit_richness": round(effective_weights["benefit_richness"], 4),
+                "industry": round(effective_weights["industry"], 4),
                 "zone_multipliers": weights.zone_multipliers,
                 "zone_maternity_multipliers": weights.zone_maternity_multipliers,
                 "zone_network_multipliers": weights.zone_network_multipliers,

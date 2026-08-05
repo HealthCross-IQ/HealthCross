@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -7,8 +7,67 @@ from app.database import get_db
 from app.models import db_models as models
 from app.models import schemas
 from app.scoring.engine import ScoringWeights, compute_scorecard
+from app.scoring.rules.portfolio_analysis import (
+    summarize_burning_cost_overall,
+    summarize_population_mix,
+    summarize_portfolio,
+)
 
 router = APIRouter(prefix="/cases", tags=["scoring"])
+
+
+def _portfolio_reference(db: Session, case: models.Case) -> Optional[dict]:
+    """Best-effort 'book reference' context from Portfolio Analysis for this
+    case's scorecard - HealthCross's own already-booked members' burning
+    cost (matched to this case's own HealthCross quote network(s) when one
+    has been uploaded, else the whole book's overall figure) and population
+    mix (nationality zone/gender/age), shown alongside the scorecard purely
+    for the underwriter to weigh. Never feeds into the composite score
+    itself - most New Business cases have no claims of their own to score
+    against, and this is real market context, not a substitute for that
+    case's own experience. Returns None whenever Portfolio Analysis isn't
+    set up yet (no members/claims/rate card uploaded) - this is optional
+    supporting context, not a requirement of scoring a case.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+
+    try:
+        results = _run_analysis(db, as_of=_get_stored_as_of(db))
+    except HTTPException:
+        return None
+
+    quoted_networks = sorted({
+        b.network_type for b in case.benefit_plans if b.role == "quoted" and b.network_type
+    })
+
+    burning_cost = None
+    if quoted_networks:
+        by_network = {r["network"]: r for r in summarize_portfolio(results, "network")}
+        matched = [by_network[n] for n in quoted_networks if n in by_network and by_network[n].get("burning_cost") is not None]
+        if matched:
+            burning_cost = {
+                "basis": "network",
+                "networks": [m["network"] for m in matched],
+                "rows": [
+                    {
+                        "network": m["network"],
+                        "burning_cost": m["burning_cost"],
+                        "member_count": m["member_count"],
+                        "earned_member_years": m["earned_member_years"],
+                    }
+                    for m in matched
+                ],
+            }
+    if burning_cost is None:
+        overall = summarize_burning_cost_overall(results)
+        if overall is not None:
+            burning_cost = {"basis": "whole_book", **overall}
+
+    population_mix = summarize_population_mix(results)
+
+    if burning_cost is None and population_mix is None:
+        return None
+    return {"burning_cost": burning_cost, "population_mix": population_mix}
 
 
 def _active_weight_set(db: Session) -> models.ScoringWeightSet:
@@ -108,6 +167,10 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
         weights=weights,
         estimated_annual_premium=payload.estimated_annual_premium,
     )
+
+    portfolio_reference = _portfolio_reference(db, case)
+    if portfolio_reference is not None:
+        result["details"]["portfolio_reference"] = portfolio_reference
 
     scorecard = models.Scorecard(
         case_id=case.id,

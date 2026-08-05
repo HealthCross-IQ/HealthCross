@@ -19,6 +19,17 @@ def auto_migrate_missing_columns(engine: Engine, base: DeclarativeMeta) -> None:
     inspector = inspect(engine)
     existing_tables = set(inspector.get_table_names())
 
+    # Collected here rather than run immediately after each ALTER TABLE -
+    # interleaving ALTER TABLE (DDL) and UPDATE (DML) statement-by-statement
+    # confuses SQLite/pysqlite's legacy autocommit transaction tracking
+    # enough to silently drop some of the LATER ALTER TABLEs once the
+    # transaction commits (reproduced directly: with the two interleaved,
+    # only the first couple of a table's new columns actually persisted;
+    # with all ALTER TABLEs run to completion first, every one persists).
+    # So every ALTER TABLE runs to completion first, and only once they're
+    # all done does a second pass backfill existing rows.
+    backfills: list = []  # (table_name, column_name, default_value)
+
     with engine.begin() as conn:
         for table in base.metadata.sorted_tables:
             if table.name not in existing_tables:
@@ -30,3 +41,27 @@ def auto_migrate_missing_columns(engine: Engine, base: DeclarativeMeta) -> None:
                     continue
                 col_type = column.type.compile(dialect=conn.dialect)
                 conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'))
+
+                # A new column with a scalar Python-side default (e.g.
+                # Column(Float, default=1.0)) only gets that default applied
+                # by SQLAlchemy on a fresh INSERT - ALTER TABLE ADD COLUMN
+                # leaves every EXISTING row's new column as a real SQL NULL,
+                # not the model's default. Left alone, that NULL silently
+                # flows into any code that reads it (e.g. a None nationality-
+                # zone multiplier reaching an arithmetic expression expecting
+                # a float), crashing far from here with no obvious
+                # connection to "this column is new". Backfilling existing
+                # rows to the same default a new row would get closes that
+                # gap for every column, not just ones we happen to remember
+                # to special-case.
+                default = column.default
+                if default is not None and default.is_scalar:
+                    backfills.append((table.name, column.name, default.arg))
+
+    if backfills:
+        with engine.begin() as conn:
+            for table_name, column_name, default_value in backfills:
+                conn.execute(
+                    text(f'UPDATE "{table_name}" SET "{column_name}" = :default WHERE "{column_name}" IS NULL'),
+                    {"default": default_value},
+                )

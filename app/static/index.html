@@ -2293,12 +2293,70 @@ async function loadLatestScorecard() {
           <tr><th>Network tier score</th><td>${sc.details.network_tier_score ?? 'n/a'} <span style="color:var(--ink-muted);">(0=cheapest network, 1=Platinum-tier)</span></td></tr>
           <tr><th>Claims loss ratio</th><td>${sc.details.claims_experience.loss_ratio ?? 'n/a'}</td></tr>
         </table>
+        ${scorecardWeightsUsedHtml(sc)}
       </div>
+      ${scorecardPortfolioReferenceHtml(sc)}
     `;
     bindChartTooltips(area);
   } catch (err) {
     area.innerHTML = '';
   }
+}
+
+function scorecardWeightsUsedHtml(sc) {
+  const used = sc.details.weights_used;
+  if (!used) return '';
+  const noClaims = used.claims_experience === 0;
+  return `
+    <div class="hint" style="margin-top:10px;">
+      Weights used: Demographic ${(used.demographic * 100).toFixed(1)}% &middot;
+      Claims exp. ${(used.claims_experience * 100).toFixed(1)}% &middot;
+      Benefit richness ${(used.benefit_richness * 100).toFixed(1)}% &middot;
+      Industry ${(used.industry * 100).toFixed(1)}%
+      ${noClaims ? '<span class="tier-pill dir-review" style="margin-left:6px;">No claims - reweighted</span>' : ''}
+    </div>
+  `;
+}
+
+function scorecardPortfolioReferenceHtml(sc) {
+  const ref = sc.details.portfolio_reference;
+  if (!ref) return '';
+
+  const bc = ref.burning_cost;
+  let burningCostHtml = '<div class="hint">No burning cost data available yet.</div>';
+  if (bc && bc.basis === 'network') {
+    burningCostHtml = bc.rows.map(r => `
+      <div class="hint" style="margin:2px 0;">
+        <strong>${escapeHtml(r.network)}</strong>: AED ${r.burning_cost.toLocaleString()} per member per year
+        (${r.member_count.toLocaleString()} members, ${r.earned_member_years.toLocaleString()} earned member-years)
+      </div>
+    `).join('');
+  } else if (bc && bc.basis === 'whole_book' && bc.burning_cost != null) {
+    burningCostHtml = `
+      <div class="hint">
+        Whole-book average (no matching HealthCross quote network found): AED ${bc.burning_cost.toLocaleString()} per member per year
+        (${bc.member_count.toLocaleString()} members, ${bc.earned_member_years.toLocaleString()} earned member-years)
+      </div>
+    `;
+  }
+
+  const mix = ref.population_mix;
+  const mixHtml = mix ? `
+    <div class="hint" style="margin-top:6px;">
+      Book population: avg age ${mix.avg_age ?? '-'} &middot;
+      ${Object.entries(mix.nationality_zone_mix).map(([z, pct]) => `${escapeHtml(z)} ${(pct * 100).toFixed(0)}%`).join(', ')} &middot;
+      ${Object.entries(mix.gender_mix).map(([g, pct]) => `${escapeHtml(g)} ${(pct * 100).toFixed(0)}%`).join(', ')}
+    </div>
+  ` : '';
+
+  return `
+    <div class="card">
+      <h3>Portfolio Analysis reference</h3>
+      <div class="hint">HealthCross's own already-booked book, shown for context only - not used in the score above.</div>
+      ${burningCostHtml}
+      ${mixHtml}
+    </div>
+  `;
 }
 
 async function recordOutcome(event) {

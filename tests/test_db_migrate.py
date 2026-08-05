@@ -46,3 +46,26 @@ def test_auto_migrate_is_idempotent():
     # Running twice against an already-current schema must not error.
     auto_migrate_missing_columns(engine, Base)
     auto_migrate_missing_columns(engine, Base)
+
+
+def test_auto_migrate_backfills_existing_rows_with_the_columns_default():
+    # Regression test: a persistent SQLite DB created before
+    # zone_1_asia_network_multiplier (or any other Column(..., default=...))
+    # existed has a real row that predates it. ALTER TABLE ADD COLUMN alone
+    # leaves that row's new column as a genuine SQL NULL, not the model's
+    # default - which used to crash scoring far away in
+    # app/scoring/rules/demographic.py the first time that NULL reached an
+    # arithmetic expression expecting a float.
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text("CREATE TABLE scoring_weight_sets (id INTEGER PRIMARY KEY, version INTEGER NOT NULL)"))
+        conn.execute(text("INSERT INTO scoring_weight_sets (id, version) VALUES (1, 1)"))
+
+    Base.metadata.create_all(bind=engine)
+    auto_migrate_missing_columns(engine, Base)
+
+    with engine.begin() as conn:
+        row = conn.execute(
+            text("SELECT zone_1_asia_network_multiplier, overage_age_threshold FROM scoring_weight_sets WHERE id = 1")
+        ).one()
+    assert row == (1.0, 50)

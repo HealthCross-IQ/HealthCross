@@ -485,3 +485,60 @@ def summarize_burning_cost_by_product_network(member_results: List[dict]) -> Lis
         )
     rows.sort(key=lambda r: (r["product"], r["network"]))
     return rows
+
+
+def summarize_burning_cost_overall(member_results: List[dict]) -> Optional[dict]:
+    """The whole book's own burning cost, with no grouping at all - a
+    fallback reference for a case whose proposed network isn't known yet
+    (no HealthCross quote uploaded), so there's still SOME real-book figure
+    to show rather than nothing. Returns None only when there's no earned
+    exposure to divide by (e.g. an empty book).
+    """
+    member_count = 0
+    actual_claims = 0.0
+    earned_member_years = 0.0
+    for r in member_results:
+        if not r.get("in_scope", True):
+            continue
+        member_count += 1
+        actual_claims += r.get("actual_claims") or 0.0
+        earned_member_years += r.get("earned_premium_fraction") or 0.0
+
+    if not earned_member_years:
+        return None
+    return {
+        "member_count": member_count,
+        "actual_claims": round(actual_claims, 2),
+        "earned_member_years": round(earned_member_years, 4),
+        "burning_cost": round(actual_claims / earned_member_years, 2),
+    }
+
+
+def summarize_population_mix(member_results: List[dict]) -> Optional[dict]:
+    """The whole book's own population composition (nationality zone mix,
+    gender mix, average age) - a reference for comparing a case's own
+    census against real HealthCross book norms, the same way
+    summarize_burning_cost_overall gives a claims-cost reference. Purely
+    informational context, not a scoring input. Returns None for an empty
+    book.
+    """
+    in_scope = [r for r in member_results if r.get("in_scope", True)]
+    if not in_scope:
+        return None
+
+    total = len(in_scope)
+    zone_counts: Dict[str, int] = defaultdict(int)
+    gender_counts: Dict[str, int] = defaultdict(int)
+    ages = []
+    for r in in_scope:
+        zone_counts[r.get("nationality_zone") or "Unmapped"] += 1
+        gender_counts[r.get("gender") or "Unmapped"] += 1
+        if r.get("age") is not None:
+            ages.append(r["age"])
+
+    return {
+        "member_count": total,
+        "avg_age": round(sum(ages) / len(ages), 1) if ages else None,
+        "nationality_zone_mix": {zone: round(count / total, 4) for zone, count in zone_counts.items()},
+        "gender_mix": {gender: round(count / total, 4) for gender, count in gender_counts.items()},
+    }

@@ -98,3 +98,57 @@ def test_score_within_bounds_and_has_tier():
     result = compute_scorecard(census, [plan], [], "technology", weights)
     assert 0 <= result["composite_score"] <= 100
     assert result["risk_tier"] in {"Preferred", "Standard", "Substandard", "Decline/Refer"}
+
+
+def test_claims_weight_is_dropped_and_redistributed_when_no_claims_exist():
+    # Most New Business cases have no claims history at all (an incumbent
+    # insurer's claims either don't exist or aren't shared) - claims_
+    # experience_risk already returns a forced-neutral 1.0 in that case, but
+    # that neutral value shouldn't still occupy 35% of the composite,
+    # diluting the real demographic/benefit/industry signal down to 65%
+    # of its natural weight.
+    weights = ScoringWeights()  # 0.30/0.35/0.20/0.15
+    census = _census()
+    plan = _plan()
+
+    no_claims_result = compute_scorecard(census, [plan], [], "technology", weights)
+    used = no_claims_result["details"]["weights_used"]
+    assert used["claims_experience"] == 0.0
+    # The other three still sum to the full original total (1.0), just
+    # redistributed proportionally rather than diluted by a dead weight.
+    assert round(used["demographic"] + used["benefit_richness"] + used["industry"], 4) == 1.0
+    # Proportions between the three are preserved: demographic (0.30) is
+    # still 1.5x benefit_richness (0.20) after redistribution.
+    assert round(used["demographic"] / used["benefit_richness"], 2) == round(0.30 / 0.20, 2)
+
+
+def test_real_claims_history_keeps_the_configured_weights_unchanged():
+    weights = ScoringWeights()
+    census = _census(n=100)
+    plan = _plan(member_count=100)
+    claims = [{"amount_paid": 100, "policy_year": 2025} for _ in range(10)]
+
+    result = compute_scorecard(census, [plan], claims, "technology", weights, estimated_annual_premium=300_000)
+    used = result["details"]["weights_used"]
+    assert used["claims_experience"] == weights.w_claims_experience
+    assert used["demographic"] == weights.w_demographic
+
+
+def test_dropping_claims_weight_amplifies_the_remaining_signal():
+    # With claims weight redistributed away (not just neutrally diluting),
+    # a case with an elevated demographic risk should score MORE extreme
+    # (further from neutral) than if that same 35% had instead been
+    # spent on a forced-neutral claims placeholder.
+    weights = ScoringWeights()
+    older_census = _census(n=50, age=55)  # 41-59 age band -> elevated risk
+    plan = _plan()
+
+    result = compute_scorecard(older_census, [plan], [], "technology", weights)
+    raw_composite_diluted = (
+        weights.w_demographic * result["demographic_risk"]
+        + weights.w_claims_experience * result["claims_experience_risk"]
+        + weights.w_benefit_richness * result["benefit_richness_risk"]
+        + weights.w_industry * result["industry_risk"]
+    )
+    diluted_score = max(0.0, min(100.0, (raw_composite_diluted - 0.5) / (2.0 - 0.5) * 100))
+    assert result["composite_score"] > round(diluted_score, 2)

@@ -30,8 +30,14 @@ def test_ensure_default_weight_set_seeds_informed_zone_and_overage_defaults(tmp_
     active = db.query(models.ScoringWeightSet).filter_by(is_active=True).first()
     assert active.version == 1
     assert active.zone_1_asia_multiplier == main._SEEDED_ZONE_1_ASIA_MULTIPLIER
+    assert active.zone_2_middle_east_multiplier == main._SEEDED_ZONE_2_MIDDLE_EAST_MULTIPLIER
+    assert active.zone_3_europe_americas_multiplier == main._SEEDED_ZONE_3_EUROPE_AMERICAS_MULTIPLIER
     assert active.zone_2_middle_east_maternity_multiplier == main._SEEDED_ZONE_2_MIDDLE_EAST_MATERNITY_MULTIPLIER
     assert active.zone_3_europe_americas_network_multiplier == main._SEEDED_ZONE_3_EUROPE_AMERICAS_NETWORK_MULTIPLIER
+    assert active.w_demographic == main._SEEDED_W_DEMOGRAPHIC
+    assert active.w_claims_experience == main._SEEDED_W_CLAIMS_EXPERIENCE
+    assert active.w_benefit_richness == main._SEEDED_W_BENEFIT_RICHNESS
+    assert active.w_industry == main._SEEDED_W_INDUSTRY
     db.close()
 
 
@@ -64,6 +70,10 @@ def test_ensure_default_weight_set_backfills_an_existing_version_1_set(tmp_path,
     db = session_local()
     active = db.query(models.ScoringWeightSet).filter_by(is_active=True).first()
     assert active.zone_1_asia_multiplier == main._SEEDED_ZONE_1_ASIA_MULTIPLIER
+    assert active.zone_2_middle_east_multiplier == main._SEEDED_ZONE_2_MIDDLE_EAST_MULTIPLIER
+    assert active.zone_3_europe_americas_multiplier == main._SEEDED_ZONE_3_EUROPE_AMERICAS_MULTIPLIER
+    assert active.w_demographic == main._SEEDED_W_DEMOGRAPHIC
+    assert active.w_industry == main._SEEDED_W_INDUSTRY
     db.close()
 
 

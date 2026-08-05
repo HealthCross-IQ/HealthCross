@@ -122,6 +122,32 @@ def test_zone_network_multiplier_is_scaled_by_network_tier_score():
     assert loaded_rich_network["score"] > loaded_cheap_network["score"]
 
 
+def test_a_none_multiplier_value_falls_back_to_neutral_instead_of_crashing():
+    # Regression test: a real ScoringWeightSet row can have one of these
+    # zone multiplier columns present but NULL - e.g. a column added after
+    # that row already existed in a persistent SQLite DB (see
+    # app/db_migrate.py) - so the caller-built dict can carry a real key
+    # with a None value, not just a missing key. `.get(zone, 1.0)` alone
+    # only covers a MISSING key; a present-but-None value used to reach
+    # `network_zone_multiplier - 1` directly and crash with a TypeError.
+    member = [
+        {"age": 30, "gender": "F", "marital_status": "married", "relation": "employee", "nationality_zone": "zone_2_middle_east"}
+    ]
+    result = demographic_risk(
+        member,
+        zone_multipliers={"zone_2_middle_east": None},
+        zone_maternity_multipliers={"zone_2_middle_east": None},
+        zone_network_multipliers={"zone_2_middle_east": None},
+    )
+    neutral = demographic_risk(
+        member,
+        zone_multipliers={"zone_2_middle_east": 1.0},
+        zone_maternity_multipliers={"zone_2_middle_east": 1.0},
+        zone_network_multipliers={"zone_2_middle_east": 1.0},
+    )
+    assert result["score"] == neutral["score"]
+
+
 def test_overage_loading_is_distinct_from_the_age_band_multiplier():
     # Two members with the same age-band multiplier (both fall in 41-59),
     # but only one is actually over the overage threshold (50) - the older

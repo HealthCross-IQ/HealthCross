@@ -12,6 +12,8 @@ from app.scoring.rules.portfolio_analysis import (
     resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
+    summarize_burning_cost_overall,
+    summarize_population_mix,
     summarize_portfolio,
 )
 
@@ -689,3 +691,52 @@ def test_summarize_burning_cost_by_product_network_skips_members_missing_either_
     results = [analyze_portfolio_member(_member(), {}, RATE_CARDS, [], {})]
     rows = summarize_burning_cost_by_product_network(results)
     assert rows == []
+
+
+def test_summarize_burning_cost_overall_aggregates_the_whole_book():
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [{"date_of_treatment": None, "final_amount": 2000.0}]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2"), {"Acme Sub LLC": "Gold"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": None, "final_amount": 4000.0}]},
+        ),
+    ]
+    overall = summarize_burning_cost_overall(results)
+    assert overall["member_count"] == 2
+    assert overall["actual_claims"] == 6000.0
+    assert overall["burning_cost"] is not None
+
+
+def test_summarize_burning_cost_overall_returns_none_for_no_earned_exposure():
+    assert summarize_burning_cost_overall([]) is None
+
+
+def test_summarize_population_mix_reports_zone_and_gender_percentages():
+    results = [
+        analyze_portfolio_member(_member(beneficiary_id="M1", nationality_zone="zone_1_asia", gender="M", age=30), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M2", nationality_zone="zone_1_asia", gender="F", age=40), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M3", nationality_zone="zone_2_middle_east", gender="M", age=50), {}, RATE_CARDS, [], {}),
+    ]
+    mix = summarize_population_mix(results)
+    assert mix["member_count"] == 3
+    assert mix["avg_age"] == 40.0
+    assert mix["nationality_zone_mix"]["zone_1_asia"] == round(2 / 3, 4)
+    assert mix["nationality_zone_mix"]["zone_2_middle_east"] == round(1 / 3, 4)
+    assert mix["gender_mix"]["M"] == round(2 / 3, 4)
+    assert mix["gender_mix"]["F"] == round(1 / 3, 4)
+
+
+def test_summarize_population_mix_excludes_out_of_scope_members():
+    results = [
+        analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M2", network_type_raw="MSH Intl Network"), {}, RATE_CARDS, [], {}),
+    ]
+    mix = summarize_population_mix(results)
+    assert mix["member_count"] == 1
+
+
+def test_summarize_population_mix_returns_none_for_an_empty_book():
+    assert summarize_population_mix([]) is None

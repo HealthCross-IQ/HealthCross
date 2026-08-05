@@ -113,12 +113,17 @@ def _member_risk_multiplier(
         if marital_status == "married" and age is not None and MATERNITY_AGE_MIN <= age <= MATERNITY_AGE_MAX:
             multiplier *= MATERNITY_LOADING
             if zone_maternity_multipliers:
-                multiplier *= zone_maternity_multipliers.get(zone, 1.0)
+                # `or 1.0`, not just a .get() default - a stored weight-set
+                # row can have this zone's own key present but NULL (e.g. a
+                # column added after that row already existed; see
+                # app/db_migrate.py), which .get(zone, 1.0) would pass
+                # straight through as None instead of falling back.
+                multiplier *= zone_maternity_multipliers.get(zone) or 1.0
 
-    multiplier *= zone_multipliers.get(zone, 1.0)
+    multiplier *= zone_multipliers.get(zone) or 1.0
 
     if zone_network_multipliers:
-        network_zone_multiplier = zone_network_multipliers.get(zone, 1.0)
+        network_zone_multiplier = zone_network_multipliers.get(zone) or 1.0
         multiplier *= 1 + (network_zone_multiplier - 1) * network_tier_score
 
     return multiplier

@@ -26,9 +26,20 @@ STATIC_DIR = Path(__file__).parent / "static"
 # to wait on the recalibration loop from scratch - still fully adjustable
 # afterward, either by real outcomes accumulating (app/feedback/
 # recalibration.py) or directly via PATCH /admin/weights/active.
-_SEEDED_ZONE_1_ASIA_MULTIPLIER = 0.90  # more Asian population -> favorable
+_SEEDED_ZONE_1_ASIA_MULTIPLIER = 0.90  # very favorable - lowest risk zone
+_SEEDED_ZONE_3_EUROPE_AMERICAS_MULTIPLIER = 0.95  # mildly favorable - second-best zone
+_SEEDED_ZONE_2_MIDDLE_EAST_MULTIPLIER = 1.15  # highest-risk zone
 _SEEDED_ZONE_2_MIDDLE_EAST_MATERNITY_MULTIPLIER = 1.15  # Arab/Middle East maternity exposure -> risky
 _SEEDED_ZONE_3_EUROPE_AMERICAS_NETWORK_MULTIPLIER = 1.20  # Europe/Americas on a rich network -> risky
+
+# Demographic and claims experience are the most reliably-captured signals
+# a case actually has (census data is always real; industry classification
+# often isn't captured correctly), so industry carries less weight than an
+# even split would give it, with that difference going to demographic.
+_SEEDED_W_DEMOGRAPHIC = 0.35
+_SEEDED_W_CLAIMS_EXPERIENCE = 0.35
+_SEEDED_W_BENEFIT_RICHNESS = 0.20
+_SEEDED_W_INDUSTRY = 0.10
 
 
 def _ensure_default_weight_set() -> None:
@@ -39,11 +50,13 @@ def _ensure_default_weight_set() -> None:
             db.add(
                 models.ScoringWeightSet(
                     version=1,
-                    w_demographic=0.30,
-                    w_claims_experience=0.35,
-                    w_benefit_richness=0.20,
-                    w_industry=0.15,
+                    w_demographic=_SEEDED_W_DEMOGRAPHIC,
+                    w_claims_experience=_SEEDED_W_CLAIMS_EXPERIENCE,
+                    w_benefit_richness=_SEEDED_W_BENEFIT_RICHNESS,
+                    w_industry=_SEEDED_W_INDUSTRY,
                     zone_1_asia_multiplier=_SEEDED_ZONE_1_ASIA_MULTIPLIER,
+                    zone_2_middle_east_multiplier=_SEEDED_ZONE_2_MIDDLE_EAST_MULTIPLIER,
+                    zone_3_europe_americas_multiplier=_SEEDED_ZONE_3_EUROPE_AMERICAS_MULTIPLIER,
                     zone_2_middle_east_maternity_multiplier=_SEEDED_ZONE_2_MIDDLE_EAST_MATERNITY_MULTIPLIER,
                     zone_3_europe_americas_network_multiplier=_SEEDED_ZONE_3_EUROPE_AMERICAS_NETWORK_MULTIPLIER,
                     is_active=True,
@@ -57,7 +70,13 @@ def _ensure_default_weight_set() -> None:
             # been touched) - an installation that already exists from
             # before these seeded values were added would otherwise be
             # stuck on the old neutral (1.0) placeholders forever.
+            active.w_demographic = _SEEDED_W_DEMOGRAPHIC
+            active.w_claims_experience = _SEEDED_W_CLAIMS_EXPERIENCE
+            active.w_benefit_richness = _SEEDED_W_BENEFIT_RICHNESS
+            active.w_industry = _SEEDED_W_INDUSTRY
             active.zone_1_asia_multiplier = _SEEDED_ZONE_1_ASIA_MULTIPLIER
+            active.zone_2_middle_east_multiplier = _SEEDED_ZONE_2_MIDDLE_EAST_MULTIPLIER
+            active.zone_3_europe_americas_multiplier = _SEEDED_ZONE_3_EUROPE_AMERICAS_MULTIPLIER
             active.zone_2_middle_east_maternity_multiplier = _SEEDED_ZONE_2_MIDDLE_EAST_MATERNITY_MULTIPLIER
             active.zone_3_europe_americas_network_multiplier = _SEEDED_ZONE_3_EUROPE_AMERICAS_NETWORK_MULTIPLIER
             db.commit()
