@@ -289,6 +289,7 @@ async function loadTracker() {
     <div class="card">
       <h3>Tracker entries</h3>
       <div class="row">
+        <div><label>Search (doc no. or client)</label><input type="text" id="trackerSearch" placeholder="Type to search&hellip;" oninput="renderTrackerTable()" /></div>
         <div><label>Filter: HC Payment Status</label>
           <select id="trackerFilterStatus" onchange="loadTrackerTable()">
             <option value="">All</option>
@@ -298,6 +299,7 @@ async function loadTracker() {
         </div>
         <div><button onclick="loadTrackerTable()">Refresh</button></div>
       </div>
+      <div class="hint">Click a column header to sort.</div>
       <div class="table-wrap" id="trackerTable"><div class="empty-state">Loading&hellip;</div></div>
     </div>
   `;
@@ -513,6 +515,20 @@ async function uploadTracker() {
   }
 }
 
+let trackerTableRows = [];
+let trackerSort = { key: null, dir: 1 };
+
+const TRACKER_COLUMNS = [
+  { key: 'doc_no', label: 'Doc No' },
+  { key: 'main_policy_holder', label: 'Client' },
+  { key: 'channel', label: 'Channel' },
+  { key: 'product', label: 'Product' },
+  { key: 'total_value', label: 'Total Value' },
+  { key: 'client_payment_status', label: 'Client Status' },
+  { key: 'hc_payment_status', label: 'HC Status' },
+  { key: 'payment_receive_date', label: 'Received' },
+];
+
 async function loadTrackerTable() {
   const el = document.getElementById('trackerTable');
   const status = document.getElementById('trackerFilterStatus').value;
@@ -520,37 +536,76 @@ async function loadTrackerTable() {
   try {
     let url = '/finance/payment-tracker';
     if (status) url += `?hc_payment_status=${encodeURIComponent(status)}`;
-    const rows = await api(url);
-    if (!rows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet - upload a file above.</div>`; return; }
-    const shown = rows.slice(0, 100);
-    el.innerHTML = `
-      <table>
-        <thead><tr>
-          <th>Doc No</th><th>Client</th><th>Channel</th><th>Product</th>
-          <th>Total Value</th><th>Client Status</th><th>HC Status</th><th>Received</th><th></th>
-        </tr></thead>
-        <tbody>
-          ${shown.map(r => `
-            <tr>
-              <td>${esc(r.doc_no)}</td>
-              <td>${esc(r.main_policy_holder)}</td>
-              <td>${esc(r.channel)}</td>
-              <td>${esc(r.product)}</td>
-              <td>${money(r.total_value)}</td>
-              <td>${statusPill(r.client_payment_status)}</td>
-              <td>${statusPill(r.hc_payment_status)}</td>
-              <td>${esc(r.payment_receive_date || r.payment_receive_note || '—')}</td>
-              <td>${(r.hc_payment_status || '').toLowerCase().startsWith('received') ? '' :
-                `<button class="small" onclick="markReceived(${r.id})">Mark Received</button>`}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-      ${rows.length > 100 ? `<div class="hint">Showing first 100 of ${rows.length} rows.</div>` : ''}
-    `;
+    trackerTableRows = await api(url);
+    renderTrackerTable();
   } catch (e) {
     el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
   }
+}
+
+function sortTrackerTable(key) {
+  if (trackerSort.key === key) trackerSort.dir *= -1;
+  else trackerSort = { key, dir: 1 };
+  renderTrackerTable();
+}
+
+function renderTrackerTable() {
+  const el = document.getElementById('trackerTable');
+  if (!trackerTableRows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet - upload a file above.</div>`; return; }
+
+  const search = (document.getElementById('trackerSearch').value || '').trim().toLowerCase();
+  let rows = trackerTableRows;
+  if (search) {
+    rows = rows.filter(r =>
+      (r.doc_no || '').toLowerCase().includes(search) ||
+      (r.main_policy_holder || '').toLowerCase().includes(search)
+    );
+  }
+
+  if (trackerSort.key) {
+    const key = trackerSort.key;
+    const dir = trackerSort.dir;
+    rows = rows.slice().sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (typeof av === 'string' || typeof bv === 'string') {
+        av = (av || '').toString().toLowerCase();
+        bv = (bv || '').toString().toLowerCase();
+        return av < bv ? -dir : av > bv ? dir : 0;
+      }
+      av = av ?? -Infinity; bv = bv ?? -Infinity;
+      return (av - bv) * dir;
+    });
+  }
+
+  if (!rows.length) { el.innerHTML = `<div class="empty-state">No rows match your search.</div>`; return; }
+
+  const shown = rows.slice(0, 100);
+  const arrow = key => trackerSort.key === key ? (trackerSort.dir === 1 ? ' &#9650;' : ' &#9660;') : '';
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        ${TRACKER_COLUMNS.map(c => `<th style="cursor:pointer;" onclick="sortTrackerTable('${c.key}')">${c.label}${arrow(c.key)}</th>`).join('')}
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${shown.map(r => `
+          <tr>
+            <td>${esc(r.doc_no)}</td>
+            <td>${esc(r.main_policy_holder)}</td>
+            <td>${esc(r.channel)}</td>
+            <td>${esc(r.product)}</td>
+            <td>${money(r.total_value)}</td>
+            <td>${statusPill(r.client_payment_status)}</td>
+            <td>${statusPill(r.hc_payment_status)}</td>
+            <td>${esc(r.payment_receive_date || r.payment_receive_note || '—')}</td>
+            <td>${(r.hc_payment_status || '').toLowerCase().startsWith('received') ? '' :
+              `<button class="small" onclick="markReceived(${r.id})">Mark Received</button>`}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    ${rows.length > 100 ? `<div class="hint">Showing first 100 of ${rows.length} matching rows.</div>` : ''}
+  `;
 }
 
 function statusPill(status) {
