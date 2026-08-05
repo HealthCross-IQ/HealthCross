@@ -1,0 +1,3077 @@
+From fc8b0862d2e8e914dc0ab4091a256b53e39d287e Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Wed, 5 Aug 2026 08:33:06 +0000
+Subject: [PATCH] Add HC Finance Status module: fee tracking, reconciliation,
+ expenses
+
+Adds a company-wide finance module alongside the existing underwriting
+engine: a commission fee engine banding HC's % by channel (broker/direct)
+and plan tier per the agreed rate card, with manual overrides for
+Group/mixed-tier business; a payment tracker plus ingestion for the
+working tracker spreadsheet, QIC Statement of Account exports (both real
+export shapes seen), and HC's own bank statement; three reconciliation
+reports (tracker vs. QIC SOA, QIC SOA period-over-period, tracker
+"Received" rows vs. bank credits); and payroll/recurring/expense tracking
+feeding a monthly cash-flow report and a documented-assumption expense
+forecast. All ingestion and fee-calculation logic was validated against
+real sample tracker/SOA/bank-statement data before landing.
+
+Backend/API only in this pass - see README's Known limitations for the
+planned web UI follow-up.
+
+Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01QE4CbcfpXtPF4puHaKyeNX
+---
+ README.md                               | 115 ++++++
+ app/api/routes_finance.py               | 512 ++++++++++++++++++++++++
+ app/finance/__init__.py                 |   0
+ app/finance/cash_flow.py                | 134 +++++++
+ app/finance/common.py                   |  22 +
+ app/finance/fee_engine.py               | 109 +++++
+ app/finance/reconciliation.py           | 214 ++++++++++
+ app/ingestion/bank_statement.py         | 117 ++++++
+ app/ingestion/payment_tracker.py        | 208 ++++++++++
+ app/ingestion/qic_soa.py                | 154 +++++++
+ app/main.py                             |  46 ++-
+ app/models/db_models.py                 | 262 ++++++++++++
+ app/models/schemas.py                   | 387 ++++++++++++++++++
+ tests/conftest.py                       |  10 +
+ tests/test_api_finance.py               | 139 +++++++
+ tests/test_finance_cash_flow.py         |  55 +++
+ tests/test_finance_fee_engine.py        |  49 +++
+ tests/test_finance_reconciliation.py    |  87 ++++
+ tests/test_ingestion_bank_statement.py  |  50 +++
+ tests/test_ingestion_payment_tracker.py |  83 ++++
+ tests/test_ingestion_qic_soa.py         |  73 ++++
+ 21 files changed, 2825 insertions(+), 1 deletion(-)
+ create mode 100644 app/api/routes_finance.py
+ create mode 100644 app/finance/__init__.py
+ create mode 100644 app/finance/cash_flow.py
+ create mode 100644 app/finance/common.py
+ create mode 100644 app/finance/fee_engine.py
+ create mode 100644 app/finance/reconciliation.py
+ create mode 100644 app/ingestion/bank_statement.py
+ create mode 100644 app/ingestion/payment_tracker.py
+ create mode 100644 app/ingestion/qic_soa.py
+ create mode 100644 tests/test_api_finance.py
+ create mode 100644 tests/test_finance_cash_flow.py
+ create mode 100644 tests/test_finance_fee_engine.py
+ create mode 100644 tests/test_finance_reconciliation.py
+ create mode 100644 tests/test_ingestion_bank_statement.py
+ create mode 100644 tests/test_ingestion_payment_tracker.py
+ create mode 100644 tests/test_ingestion_qic_soa.py
+
+diff --git a/README.md b/README.md
+index a39b604..afcae98 100644
+--- a/README.md
++++ b/README.md
+@@ -532,6 +532,107 @@ uploads accept drag-and-drop onto their row in addition to the file picker.
+ - `GET /admin/weights` - full version history of scoring weight sets
+ - `POST /admin/recalibrate` - trigger recalibration from recorded outcomes
+ 
++## HC Finance Status module
++
++Separate from the underwriting/scoring system above - this tracks the
++commission HealthCross itself earns as a marketing/distribution company,
++not a case's risk. HC earns a % of premium (excl. VAT) on every medical
++insurance policy sold through the platform via Qatar Insurance Co. (QIC),
++tracks collection of that fee, reconciles its own records against QIC's
++and the bank's, and tracks HC's own operating expenses. Company-wide, not
++tied to any Case - a Case is a submission being risk-scored; a
++`PaymentTrackerEntry` is a bound policy/endorsement already earning a fee.
++
++**The fee rate card** (`app/finance/fee_engine.py`, seeded on startup by
++`app/main.py`) bands HC's commission by sales channel x plan tier:
++
++| Channel | Bronze/Silver | Gold/Platinum |
++|---|---|---|
++| Broker-introduced | 6.5% | 5% |
++| Direct | 11.5% | 10% |
++| Group (case-to-case) | negotiated - never rate-carded | |
++
++A `Product` value naming a single tier (e.g. "Silver") bands automatically;
++one naming tiers from both bands at once (e.g. "Gold/Bronze", a real value
++seen on mixed-tier groups) can't be banded, and - like every Group/
++case-to-case row - requires an explicit manual rate instead of a rate-card
++lookup, mirroring the "manual calc" convention already used in the working
++payment tracker this module replaces. `compute_hc_fee()` returns the fee,
++5% VAT on the fee, and a `details` sub-dict recording exactly how the rate
++was chosen, the same transparency principle as the scorecard's own
++`details`.
++
++**Payment tracker** (`app/models/db_models.py`'s `PaymentTrackerEntry`,
++`app/ingestion/payment_tracker.py`) - one row per QIC document (a premium
++invoice or a credit/cancellation endorsement): a client-facing leg (what
++QIC invoiced, and whether the client has paid) and an HC-facing leg (HC's
++fee on that premium, and whether HC has collected it).
++`POST /finance/payment-tracker/upload` bulk-imports the existing working
++tracker spreadsheet (any of its "Payment Tracker"/"Ledgers"/"Eman"-shaped
++sheets - `?sheet_name=`) preserving each row's already-computed fee figures
++exactly as issued, rather than recalculating them through the fee engine -
++a bootstrap import should reproduce historical invoices verbatim, including
++any manual roundings. `POST /finance/payment-tracker` creates a new entry
++going forward instead, computing the fee live via `compute_hc_fee()`.
++`doc_no` is normalized (`app/finance/common.py`) so "128-93727" and
++"128 - 93727" - the tracker's and QIC's own differing formats for the same
++document - join as the same key.
++
++**QIC Statement of Account** (`QicSoaLine`, `app/ingestion/qic_soa.py`,
++`POST /finance/qic-soa/upload?statement_period=`) - the ground truth
++HealthCross reconciles against. QIC's own export shape has varied across
++real samples (separate Debit LC/Credit LC columns vs. a single signed
++AMOUNT + Dr/Cr flag); both normalize onto the same debit/credit fields.
++`statement_period` labels which export a line came from and re-uploading
++the same label replaces that period's rows.
++
++**Bank statement** (`BankTransaction`, `app/ingestion/bank_statement.py`,
++`POST /finance/bank-statement/upload`) - an account-details block (Account
++Holder/Number/Currency/period) sits above the real transaction table on a
++real export, so the parser scans for the `Date/Value Date/Reference
++Number/Description` header row rather than assuming row 1.
++
++**Three reconciliation reports** (`app/finance/reconciliation.py`, pure
++functions over plain dicts, unit-testable without a database):
++- `GET /finance/reconciliation/tracker-vs-qic?statement_period=` - does
++  every tracker doc exist (and match in amount) on QIC's SOA, and vice
++  versa - `matched` / `amount_mismatch` / `missing_in_qic` /
++  `missing_in_tracker`.
++- `GET /finance/reconciliation/qic-periods?period_a=&period_b=` - two QIC
++  SOA exports (e.g. a month's export vs. a later "recon" re-export) should
++  describe the same documents; reports only what `changed` / is
++  `only_in_a` / `only_in_b` between them, not the full matching set.
++- `GET /finance/reconciliation/tracker-vs-bank` - every tracker row HC
++  marked "Received" should be backed by a real inbound QIC credit. QIC
++  settles HC's fee in periodic batched remittances rather than one wire per
++  invoice, so this sums every "Received" row sharing a `payment_receive_date`
++  and matches that total against the nearest bank credit within a date
++  window, rather than attempting a one-to-one match.
++
++**Expenses** (`Employee`, `RecurringExpense`, `ExpenseEntry`) - a payroll
++roster (`POST /finance/employees`), templates for recurring non-salary
++costs like a portal-support fee or a usage-based telecom bill
++(`POST /finance/recurring-expenses`, `expense_type` "fixed" or "variable" -
++a variable template has no `default_amount`, since its real cost is only
++known once billed), and the actual monthly expense ledger itself
++(`POST /finance/expenses`, or `POST /finance/expenses/generate?period=` to
++auto-create this month's salary + fixed-recurring rows from the roster/
++templates, skipping anyone who already has one so it's safe to re-run).
++
++**Cash flow and expense forecast** (`app/finance/cash_flow.py`):
++- `GET /finance/cash-flow?year=` - actual monthly HC-fee inflow (tracker
++  rows HC has collected, grouped by `payment_receive_date`) vs. actual
++  monthly outflow (`ExpenseEntry` rows), with a running cumulative balance.
++- `GET /finance/expense-forecast?year=&as_of=` - a month with real
++  `ExpenseEntry` rows reports its actuals; a month with none projects fixed
++  costs from the active employee/recurring-expense run-rate and variable
++  costs from a trailing average of recent actuals - a documented,
++  explainable method (returned in the response's `assumptions`), the same
++  philosophy as `claims_projection.py`'s burning-cost method, not a
++  black-box number.
++- `GET /finance/summary` - fees invoiced/received/outstanding and
++  year-to-date expenses/net, for a single at-a-glance dashboard figure.
++
+ ## Running it
+ 
+ ```bash
+@@ -572,6 +673,10 @@ parsing (including the broker's real "Member List" / "CLIENT & PLAN
+ details" template layout), every demographic rule above in isolation, the
+ combined scoring engine, the recalibration logistic regressions, and a full
+ create-case → upload → score → record-outcome → recalibrate flow through
++the API. For the finance module: the fee engine's rate-card/manual-override
++logic, the payment tracker/QIC SOA/bank statement parsers (against both
++real QIC export shapes), all three reconciliation reports, cash flow, the
++expense forecast, and a full upload → reconcile → cash-flow flow through
+ the API.
+ 
+ ## Known limitations / next steps
+@@ -589,3 +694,13 @@ the API.
+ - **No authentication/authorization layer** - this is a scoring engine
+   service, meant to sit behind the existing portal's auth, not to be
+   internet-facing on its own.
++- **HC Finance Status has no web UI tab yet** - it's API/`/docs`-only for
++  now, deliberately built and verified as a backend layer first (data
++  model, ingestion, fee engine, reconciliation, cash flow/forecast) before
++  extending `app/static/index.html`'s tab system to it.
++- **Bank reconciliation matching is date/amount-window based, not
++  reference-number based** - QIC's inward remittance doesn't carry a
++  reference back to individual tracker rows, so `tracker-vs-bank` groups by
++  `payment_receive_date` and matches the nearest bank credit within a
++  tolerance rather than a hard 1:1 link. Works well when payment dates are
++  recorded accurately; a mis-dated tracker row won't match.
+diff --git a/app/api/routes_finance.py b/app/api/routes_finance.py
+new file mode 100644
+index 0000000..0e70bee
+--- /dev/null
++++ b/app/api/routes_finance.py
+@@ -0,0 +1,512 @@
++from datetime import date, datetime
++from typing import List, Optional
++
++from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
++from sqlalchemy.orm import Session
++
++from app.database import get_db
++from app.finance.cash_flow import forecast_expenses, monthly_cash_flow
++from app.finance.common import normalize_doc_no
++from app.finance.fee_engine import FeeRate, compute_hc_fee
++from app.finance.reconciliation import (
++    compare_qic_soa_periods,
++    reconcile_tracker_received_vs_bank,
++    reconcile_tracker_vs_qic_soa,
++)
++from app.ingestion.bank_statement import parse_bank_statement
++from app.ingestion.payment_tracker import parse_payment_tracker
++from app.ingestion.qic_soa import parse_qic_soa
++from app.models import db_models as models
++from app.models import schemas
++
++router = APIRouter(prefix="/finance", tags=["finance"])
++
++
++def _to_dict(obj) -> dict:
++    return {c.name: getattr(obj, c.name) for c in obj.__table__.columns}
++
++
++def _active_fee_rates(db: Session) -> List[FeeRate]:
++    rows = db.query(models.FeeRateCard).filter_by(is_active=True).all()
++    return [FeeRate(channel=r.channel, tier_band=r.tier_band, fee_pct=r.fee_pct) for r in rows]
++
++
++def _get_or_404(db: Session, model, obj_id: int, label: str):
++    obj = db.get(model, obj_id)
++    if not obj:
++        raise HTTPException(status_code=404, detail=f"{label} not found")
++    return obj
++
++
++# ---------------------------------------------------------------------------
++# Fee rate cards
++# ---------------------------------------------------------------------------
++
++
++@router.post("/fee-rate-cards", response_model=schemas.FeeRateCardOut)
++def create_fee_rate_card(payload: schemas.FeeRateCardCreate, db: Session = Depends(get_db)):
++    card = models.FeeRateCard(**payload.model_dump())
++    db.add(card)
++    db.commit()
++    db.refresh(card)
++    return card
++
++
++@router.get("/fee-rate-cards", response_model=List[schemas.FeeRateCardOut])
++def list_fee_rate_cards(active_only: bool = True, db: Session = Depends(get_db)):
++    q = db.query(models.FeeRateCard)
++    if active_only:
++        q = q.filter_by(is_active=True)
++    return q.order_by(models.FeeRateCard.channel, models.FeeRateCard.tier_band).all()
++
++
++# ---------------------------------------------------------------------------
++# Payment tracker
++# ---------------------------------------------------------------------------
++
++
++def _get_tracker_entry_or_404(db: Session, entry_id: int) -> models.PaymentTrackerEntry:
++    return _get_or_404(db, models.PaymentTrackerEntry, entry_id, "Payment tracker entry")
++
++
++@router.post("/payment-tracker", response_model=schemas.PaymentTrackerEntryOut)
++def create_payment_tracker_entry(payload: schemas.PaymentTrackerEntryCreate, db: Session = Depends(get_db)):
++    """Creates one payment tracker entry going forward, computing HC's fee
++    via app.finance.fee_engine (rate-card lookup, or the supplied
++    manual_fee_pct for a Group/mixed-tier row) - distinct from
++    /payment-tracker/upload, which imports historical rows with their
++    already-computed fee figures preserved as-is.
++    """
++    try:
++        fee = compute_hc_fee(
++            channel=payload.channel,
++            product=payload.product,
++            premium_excl_vat=payload.premium_excl_vat,
++            rate_cards=_active_fee_rates(db),
++            manual_fee_pct=payload.manual_fee_pct,
++        )
++    except ValueError as exc:
++        raise HTTPException(status_code=400, detail=str(exc))
++
++    data = payload.model_dump(exclude={"manual_fee_pct", "doc_no"})
++    entry = models.PaymentTrackerEntry(
++        **data,
++        doc_no=normalize_doc_no(payload.doc_no),
++        doc_no_raw=payload.doc_no,
++        is_manual_fee=fee["is_manual_fee"],
++        hc_fee_pct=fee["hc_fee_pct"],
++        hc_fees=fee["hc_fees"],
++        vat_pct=fee["vat_pct"],
++        vat_amount=fee["vat_amount"],
++        total_value=fee["total_value"],
++    )
++    db.add(entry)
++    db.commit()
++    db.refresh(entry)
++    return entry
++
++
++@router.get("/payment-tracker", response_model=List[schemas.PaymentTrackerEntryOut])
++def list_payment_tracker_entries(
++    channel: Optional[str] = None,
++    hc_payment_status: Optional[str] = None,
++    client_payment_status: Optional[str] = None,
++    doc_no: Optional[str] = None,
++    db: Session = Depends(get_db),
++):
++    q = db.query(models.PaymentTrackerEntry)
++    if channel:
++        q = q.filter_by(channel=channel)
++    if hc_payment_status:
++        q = q.filter_by(hc_payment_status=hc_payment_status)
++    if client_payment_status:
++        q = q.filter_by(client_payment_status=client_payment_status)
++    if doc_no:
++        q = q.filter_by(doc_no=normalize_doc_no(doc_no))
++    return q.order_by(models.PaymentTrackerEntry.doc_date.desc()).all()
++
++
++@router.get("/payment-tracker/{entry_id}", response_model=schemas.PaymentTrackerEntryOut)
++def get_payment_tracker_entry(entry_id: int, db: Session = Depends(get_db)):
++    return _get_tracker_entry_or_404(db, entry_id)
++
++
++@router.patch("/payment-tracker/{entry_id}", response_model=schemas.PaymentTrackerEntryOut)
++def update_payment_tracker_entry(entry_id: int, payload: schemas.PaymentTrackerEntryUpdate, db: Session = Depends(get_db)):
++    entry = _get_tracker_entry_or_404(db, entry_id)
++    for field, value in payload.model_dump(exclude_unset=True).items():
++        setattr(entry, field, value)
++    db.commit()
++    db.refresh(entry)
++    return entry
++
++
++@router.post("/payment-tracker/upload", response_model=List[schemas.PaymentTrackerEntryOut])
++def upload_payment_tracker(
++    file: UploadFile = File(...),
++    sheet_name: Optional[str] = Query(
++        None, description="Workbook sheet to read (e.g. 'Payment Tracker', 'Ledgers', 'Eman'). Defaults to the first sheet."
++    ),
++    mode: str = Query(
++        "append",
++        description=(
++            "'append' (default): add these rows to the existing tracker - the normal case, since "
++            "each upload is usually a fresh period's rows. 'replace': wipe every existing payment "
++            "tracker row first - use for a full bootstrap re-import of the master file."
++        ),
++    ),
++    db: Session = Depends(get_db),
++):
++    try:
++        parsed = parse_payment_tracker(file.file, file.filename, sheet_name=sheet_name or 0)
++    except Exception as exc:
++        raise HTTPException(status_code=400, detail=f"Could not parse payment tracker file: {exc}")
++    if not parsed:
++        raise HTTPException(status_code=400, detail="No payment tracker rows found in file")
++
++    if mode == "replace":
++        db.query(models.PaymentTrackerEntry).delete()
++
++    entries = [models.PaymentTrackerEntry(source_batch=file.filename, **row) for row in parsed]
++    db.add_all(entries)
++    db.commit()
++    for entry in entries:
++        db.refresh(entry)
++    return entries
++
++
++# ---------------------------------------------------------------------------
++# QIC Statement of Account
++# ---------------------------------------------------------------------------
++
++
++@router.get("/qic-soa", response_model=List[schemas.QicSoaLineOut])
++def list_qic_soa_lines(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
++    q = db.query(models.QicSoaLine)
++    if statement_period:
++        q = q.filter_by(statement_period=statement_period)
++    return q.order_by(models.QicSoaLine.doc_date.desc()).all()
++
++
++@router.post("/qic-soa/upload", response_model=List[schemas.QicSoaLineOut])
++def upload_qic_soa(
++    file: UploadFile = File(...),
++    statement_period: str = Query(
++        ...,
++        description=(
++            "A label for which SOA export this is (e.g. '2026-06', '2026-07-recon') - lets "
++            "GET /finance/reconciliation/qic-periods compare two uploads, and re-uploading the SAME "
++            "label replaces that period's rows rather than duplicating them."
++        ),
++    ),
++    sheet_name: Optional[str] = Query(None),
++    db: Session = Depends(get_db),
++):
++    try:
++        parsed = parse_qic_soa(file.file, file.filename, sheet_name=sheet_name or 0)
++    except Exception as exc:
++        raise HTTPException(status_code=400, detail=f"Could not parse QIC SOA file: {exc}")
++    if not parsed:
++        raise HTTPException(status_code=400, detail="No QIC SOA rows found in file")
++
++    # Replace, not accumulate - re-uploading the same statement_period label
++    # is a refresh of that period's export, not a second copy of it.
++    db.query(models.QicSoaLine).filter_by(statement_period=statement_period).delete()
++
++    lines = [models.QicSoaLine(statement_period=statement_period, **row) for row in parsed]
++    db.add_all(lines)
++    db.commit()
++    for line in lines:
++        db.refresh(line)
++    return lines
++
++
++# ---------------------------------------------------------------------------
++# Bank statement
++# ---------------------------------------------------------------------------
++
++
++@router.get("/bank-transactions", response_model=List[schemas.BankTransactionOut])
++def list_bank_transactions(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
++    q = db.query(models.BankTransaction)
++    if statement_period:
++        q = q.filter_by(statement_period=statement_period)
++    return q.order_by(models.BankTransaction.txn_date.desc()).all()
++
++
++@router.post("/bank-statement/upload", response_model=List[schemas.BankTransactionOut])
++def upload_bank_statement(
++    file: UploadFile = File(...),
++    statement_period: Optional[str] = Query(
++        None, description="Optional label for this statement (e.g. '2026-07'). Re-uploading the SAME label replaces that period's rows."
++    ),
++    sheet_name: Optional[str] = Query(None),
++    db: Session = Depends(get_db),
++):
++    try:
++        parsed = parse_bank_statement(file.file, file.filename, sheet_name=sheet_name or 0)
++    except Exception as exc:
++        raise HTTPException(status_code=400, detail=f"Could not parse bank statement file: {exc}")
++    if not parsed:
++        raise HTTPException(status_code=400, detail="No bank transactions found in file")
++
++    if statement_period:
++        db.query(models.BankTransaction).filter_by(statement_period=statement_period).delete()
++
++    transactions = [models.BankTransaction(statement_period=statement_period, **row) for row in parsed]
++    db.add_all(transactions)
++    db.commit()
++    for txn in transactions:
++        db.refresh(txn)
++    return transactions
++
++
++# ---------------------------------------------------------------------------
++# Reconciliation reports
++# ---------------------------------------------------------------------------
++
++
++@router.get("/reconciliation/tracker-vs-qic", response_model=schemas.TrackerQicReconciliationOut)
++def get_tracker_vs_qic_reconciliation(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
++    tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
++    qic_query = db.query(models.QicSoaLine)
++    if statement_period:
++        qic_query = qic_query.filter_by(statement_period=statement_period)
++    qic_lines = [_to_dict(e) for e in qic_query.all()]
++    return reconcile_tracker_vs_qic_soa(tracker_entries, qic_lines, statement_period=statement_period)
++
++
++@router.get("/reconciliation/qic-periods", response_model=schemas.SoaPeriodComparisonOut)
++def get_qic_period_comparison(period_a: str, period_b: str, db: Session = Depends(get_db)):
++    lines_a = [_to_dict(e) for e in db.query(models.QicSoaLine).filter_by(statement_period=period_a).all()]
++    lines_b = [_to_dict(e) for e in db.query(models.QicSoaLine).filter_by(statement_period=period_b).all()]
++    if not lines_a:
++        raise HTTPException(status_code=404, detail=f"No QIC SOA lines found for period {period_a!r}")
++    if not lines_b:
++        raise HTTPException(status_code=404, detail=f"No QIC SOA lines found for period {period_b!r}")
++    return compare_qic_soa_periods(lines_a, lines_b, period_a, period_b)
++
++
++@router.get("/reconciliation/tracker-vs-bank", response_model=schemas.BankReconciliationOut)
++def get_tracker_vs_bank_reconciliation(db: Session = Depends(get_db)):
++    tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
++    bank_transactions = [_to_dict(e) for e in db.query(models.BankTransaction).all()]
++    return reconcile_tracker_received_vs_bank(tracker_entries, bank_transactions)
++
++
++# ---------------------------------------------------------------------------
++# Employees
++# ---------------------------------------------------------------------------
++
++
++def _get_employee_or_404(db: Session, employee_id: int) -> models.Employee:
++    return _get_or_404(db, models.Employee, employee_id, "Employee")
++
++
++@router.post("/employees", response_model=schemas.EmployeeOut)
++def create_employee(payload: schemas.EmployeeCreate, db: Session = Depends(get_db)):
++    employee = models.Employee(**payload.model_dump())
++    db.add(employee)
++    db.commit()
++    db.refresh(employee)
++    return employee
++
++
++@router.get("/employees", response_model=List[schemas.EmployeeOut])
++def list_employees(active_only: bool = False, db: Session = Depends(get_db)):
++    q = db.query(models.Employee)
++    if active_only:
++        q = q.filter_by(is_active=True)
++    return q.order_by(models.Employee.full_name).all()
++
++
++@router.patch("/employees/{employee_id}", response_model=schemas.EmployeeOut)
++def update_employee(employee_id: int, payload: schemas.EmployeeUpdate, db: Session = Depends(get_db)):
++    employee = _get_employee_or_404(db, employee_id)
++    for field, value in payload.model_dump(exclude_unset=True).items():
++        setattr(employee, field, value)
++    db.commit()
++    db.refresh(employee)
++    return employee
++
++
++# ---------------------------------------------------------------------------
++# Recurring expenses
++# ---------------------------------------------------------------------------
++
++
++def _get_recurring_expense_or_404(db: Session, recurring_expense_id: int) -> models.RecurringExpense:
++    return _get_or_404(db, models.RecurringExpense, recurring_expense_id, "Recurring expense")
++
++
++@router.post("/recurring-expenses", response_model=schemas.RecurringExpenseOut)
++def create_recurring_expense(payload: schemas.RecurringExpenseCreate, db: Session = Depends(get_db)):
++    recurring = models.RecurringExpense(**payload.model_dump())
++    db.add(recurring)
++    db.commit()
++    db.refresh(recurring)
++    return recurring
++
++
++@router.get("/recurring-expenses", response_model=List[schemas.RecurringExpenseOut])
++def list_recurring_expenses(active_only: bool = False, db: Session = Depends(get_db)):
++    q = db.query(models.RecurringExpense)
++    if active_only:
++        q = q.filter_by(is_active=True)
++    return q.order_by(models.RecurringExpense.name).all()
++
++
++@router.patch("/recurring-expenses/{recurring_expense_id}", response_model=schemas.RecurringExpenseOut)
++def update_recurring_expense(recurring_expense_id: int, payload: schemas.RecurringExpenseUpdate, db: Session = Depends(get_db)):
++    recurring = _get_recurring_expense_or_404(db, recurring_expense_id)
++    for field, value in payload.model_dump(exclude_unset=True).items():
++        setattr(recurring, field, value)
++    db.commit()
++    db.refresh(recurring)
++    return recurring
++
++
++# ---------------------------------------------------------------------------
++# Expense entries
++# ---------------------------------------------------------------------------
++
++
++def _get_expense_entry_or_404(db: Session, expense_id: int) -> models.ExpenseEntry:
++    return _get_or_404(db, models.ExpenseEntry, expense_id, "Expense entry")
++
++
++@router.post("/expenses", response_model=schemas.ExpenseEntryOut)
++def create_expense_entry(payload: schemas.ExpenseEntryCreate, db: Session = Depends(get_db)):
++    data = payload.model_dump()
++    data["period"] = date(data["period"].year, data["period"].month, 1)
++    expense = models.ExpenseEntry(**data, source="manual")
++    db.add(expense)
++    db.commit()
++    db.refresh(expense)
++    return expense
++
++
++@router.get("/expenses", response_model=List[schemas.ExpenseEntryOut])
++def list_expense_entries(
++    year: Optional[int] = None,
++    category: Optional[str] = None,
++    expense_type: Optional[str] = None,
++    db: Session = Depends(get_db),
++):
++    q = db.query(models.ExpenseEntry)
++    if year:
++        q = q.filter(models.ExpenseEntry.period >= date(year, 1, 1), models.ExpenseEntry.period < date(year + 1, 1, 1))
++    if category:
++        q = q.filter_by(category=category)
++    if expense_type:
++        q = q.filter_by(expense_type=expense_type)
++    return q.order_by(models.ExpenseEntry.period.desc()).all()
++
++
++@router.patch("/expenses/{expense_id}", response_model=schemas.ExpenseEntryOut)
++def update_expense_entry(expense_id: int, payload: schemas.ExpenseEntryUpdate, db: Session = Depends(get_db)):
++    expense = _get_expense_entry_or_404(db, expense_id)
++    for field, value in payload.model_dump(exclude_unset=True).items():
++        setattr(expense, field, value)
++    db.commit()
++    db.refresh(expense)
++    return expense
++
++
++@router.post("/expenses/generate", response_model=List[schemas.ExpenseEntryOut])
++def generate_expenses_for_period(
++    period: date = Query(..., description="Any day within the target month - normalized to the 1st."),
++    db: Session = Depends(get_db),
++):
++    """Auto-creates this month's salary (one per active Employee) and fixed
++    RecurringExpense entries, skipping anyone/anything that already has an
++    ExpenseEntry for this period - safe to call again after adding a new
++    employee mid-month without duplicating the ones already generated.
++    """
++    period_start = date(period.year, period.month, 1)
++    existing = db.query(models.ExpenseEntry).filter_by(period=period_start).all()
++    existing_employee_ids = {e.employee_id for e in existing if e.employee_id}
++    existing_recurring_ids = {e.recurring_expense_id for e in existing if e.recurring_expense_id}
++
++    created = []
++    for employee in db.query(models.Employee).filter_by(is_active=True).all():
++        if employee.id in existing_employee_ids:
++            continue
++        created.append(
++            models.ExpenseEntry(
++                period=period_start,
++                category="salary",
++                expense_type="fixed",
++                description=f"{employee.full_name} - {employee.role_title or 'Salary'}",
++                amount=employee.monthly_salary,
++                currency=employee.currency,
++                employee_id=employee.id,
++                source="generated",
++            )
++        )
++
++    for recurring in db.query(models.RecurringExpense).filter_by(is_active=True, expense_type="fixed").all():
++        if recurring.id in existing_recurring_ids or recurring.default_amount is None:
++            continue
++        created.append(
++            models.ExpenseEntry(
++                period=period_start,
++                category=recurring.category,
++                expense_type="fixed",
++                description=recurring.name,
++                amount=recurring.default_amount,
++                currency=recurring.currency,
++                recurring_expense_id=recurring.id,
++                source="generated",
++            )
++        )
++
++    db.add_all(created)
++    db.commit()
++    for expense in created:
++        db.refresh(expense)
++    return created
++
++
++# ---------------------------------------------------------------------------
++# Cash flow, forecast, and summary
++# ---------------------------------------------------------------------------
++
++
++@router.get("/cash-flow", response_model=schemas.CashFlowOut)
++def get_cash_flow(year: int, db: Session = Depends(get_db)):
++    tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
++    expense_entries = [_to_dict(e) for e in db.query(models.ExpenseEntry).all()]
++    return monthly_cash_flow(tracker_entries, expense_entries, year)
++
++
++@router.get("/expense-forecast", response_model=schemas.ExpenseForecastOut)
++def get_expense_forecast(year: int, as_of: Optional[date] = None, db: Session = Depends(get_db)):
++    expense_entries = [_to_dict(e) for e in db.query(models.ExpenseEntry).all()]
++    employees = [_to_dict(e) for e in db.query(models.Employee).all()]
++    recurring_expenses = [_to_dict(e) for e in db.query(models.RecurringExpense).all()]
++    return forecast_expenses(expense_entries, employees, recurring_expenses, year, as_of=as_of or date.today())
++
++
++@router.get("/summary", response_model=schemas.FinanceSummaryOut)
++def get_finance_summary(db: Session = Depends(get_db)):
++    entries = db.query(models.PaymentTrackerEntry).all()
++    total_invoiced = sum(e.total_value or 0 for e in entries)
++    total_received = sum(
++        e.total_value or 0 for e in entries if (e.hc_payment_status or "").strip().lower().startswith("received")
++    )
++    current_year = date.today().year
++    ytd_expenses = sum(
++        e.amount or 0
++        for e in db.query(models.ExpenseEntry)
++        .filter(models.ExpenseEntry.period >= date(current_year, 1, 1))
++        .all()
++    )
++    return schemas.FinanceSummaryOut(
++        total_hc_fees_invoiced=round(total_invoiced, 2),
++        total_hc_fees_received=round(total_received, 2),
++        total_outstanding=round(total_invoiced - total_received, 2),
++        ytd_expenses=round(ytd_expenses, 2),
++        ytd_net=round(total_received - ytd_expenses, 2),
++        as_of=datetime.utcnow(),
++    )
+diff --git a/app/finance/__init__.py b/app/finance/__init__.py
+new file mode 100644
+index 0000000..e69de29
+diff --git a/app/finance/cash_flow.py b/app/finance/cash_flow.py
+new file mode 100644
+index 0000000..eef51ca
+--- /dev/null
++++ b/app/finance/cash_flow.py
+@@ -0,0 +1,134 @@
++"""Two computed finance reports, both pure functions over plain dicts (see
++app/finance/reconciliation.py for the same convention and why):
++
++1. monthly_cash_flow - actual monthly HC-fee inflow (PaymentTrackerEntry
++   rows HC has actually collected) vs. actual monthly outflow
++   (ExpenseEntry rows), for a given calendar year.
++2. forecast_expenses - a month with real ExpenseEntry rows reports its
++   actuals as-is; a month with none projects fixed costs from the active
++   Employee/RecurringExpense run-rate and variable costs from a trailing
++   average of recent actuals - documented, explainable assumptions rather
++   than a black-box projection, matching how the rest of this codebase
++   (e.g. claims_projection.py's burning-cost method) always states its
++   forecasting method plainly.
++"""
++from collections import defaultdict
++from datetime import date
++from typing import Dict, List
++
++MONTHS = [f"{m:02d}" for m in range(1, 13)]
++
++
++def _period_key(d: date) -> str:
++    return f"{d.year}-{d.month:02d}"
++
++
++def monthly_cash_flow(tracker_entries: List[dict], expense_entries: List[dict], year: int) -> dict:
++    """Inflow is grouped by payment_receive_date's month, not
++    invoice_raised_period - the latter is free text (e.g. "Raised Mar 26")
++    and not reliably parseable to a calendar month.
++    """
++    inflow_by_month: Dict[str, float] = defaultdict(float)
++    for entry in tracker_entries:
++        status = (entry.get("hc_payment_status") or "").strip().lower()
++        receive_date = entry.get("payment_receive_date")
++        if not status.startswith("received") or receive_date is None or receive_date.year != year:
++            continue
++        inflow_by_month[_period_key(receive_date)] += entry.get("total_value") or 0
++
++    outflow_by_month: Dict[str, float] = defaultdict(float)
++    for expense in expense_entries:
++        period = expense.get("period")
++        if period is None or period.year != year:
++            continue
++        outflow_by_month[_period_key(period)] += expense.get("amount") or 0
++
++    months = []
++    cumulative = 0.0
++    total_inflow = total_outflow = 0.0
++    for m in MONTHS:
++        key = f"{year}-{m}"
++        inflow = round(inflow_by_month.get(key, 0.0), 2)
++        outflow = round(outflow_by_month.get(key, 0.0), 2)
++        net = round(inflow - outflow, 2)
++        cumulative = round(cumulative + net, 2)
++        total_inflow += inflow
++        total_outflow += outflow
++        months.append({"period": key, "inflow": inflow, "outflow": outflow, "net": net, "cumulative": cumulative})
++
++    return {
++        "year": year,
++        "months": months,
++        "total_inflow": round(total_inflow, 2),
++        "total_outflow": round(total_outflow, 2),
++        "total_net": round(total_inflow - total_outflow, 2),
++    }
++
++
++def forecast_expenses(
++    expense_entries: List[dict],
++    employees: List[dict],
++    recurring_expenses: List[dict],
++    year: int,
++    as_of: date,
++    trailing_months: int = 3,
++) -> dict:
++    actual_by_month: Dict[str, Dict[str, float]] = defaultdict(lambda: {"fixed": 0.0, "variable": 0.0})
++    for expense in expense_entries:
++        period = expense.get("period")
++        if period is None:
++            continue
++        bucket = "variable" if expense.get("expense_type") == "variable" else "fixed"
++        actual_by_month[_period_key(period)][bucket] += expense.get("amount") or 0
++
++    fixed_run_rate = sum(e.get("monthly_salary") or 0 for e in employees if e.get("is_active", True))
++    fixed_run_rate += sum(
++        r.get("default_amount") or 0
++        for r in recurring_expenses
++        if r.get("is_active", True) and r.get("expense_type") == "fixed"
++    )
++
++    # Trailing average of variable spend from actual months strictly before
++    # `as_of`, most-recent-first, so the average never looks ahead at the
++    # very month it's being used to forecast.
++    variable_history = []
++    for m in range(1, 13):
++        month_date = date(year, m, 1)
++        if month_date >= date(as_of.year, as_of.month, 1):
++            break
++        key = _period_key(month_date)
++        if key in actual_by_month:
++            variable_history.append(actual_by_month[key]["variable"])
++    recent = variable_history[-trailing_months:]
++    trailing_variable = round(sum(recent) / len(recent), 2) if recent else 0.0
++
++    months = []
++    total_actual = total_forecast = 0.0
++    for m in range(1, 13):
++        key = f"{year}-{m:02d}"
++        is_actual = key in actual_by_month
++        if is_actual:
++            fixed = round(actual_by_month[key]["fixed"], 2)
++            variable = round(actual_by_month[key]["variable"], 2)
++        else:
++            fixed = round(fixed_run_rate, 2)
++            variable = trailing_variable
++        total = round(fixed + variable, 2)
++        if is_actual:
++            total_actual += total
++        else:
++            total_forecast += total
++        months.append({"period": key, "fixed": fixed, "variable": variable, "total": total, "is_actual": is_actual})
++
++    return {
++        "year": year,
++        "months": months,
++        "total_actual": round(total_actual, 2),
++        "total_forecast": round(total_forecast, 2),
++        "assumptions": {
++            "fixed_monthly_run_rate": round(fixed_run_rate, 2),
++            "trailing_variable_monthly_avg": trailing_variable,
++            "trailing_months_used": len(recent),
++            "as_of": as_of.isoformat(),
++        },
++    }
+diff --git a/app/finance/common.py b/app/finance/common.py
+new file mode 100644
+index 0000000..48911ee
+--- /dev/null
++++ b/app/finance/common.py
+@@ -0,0 +1,22 @@
++"""Shared helpers used by both the finance ingestion parsers and the
++reconciliation reports.
++"""
++import re
++from typing import Any, Optional
++
++
++def normalize_doc_no(value: Any) -> Optional[str]:
++    """Normalizes a QIC document number to one canonical form so
++    PaymentTrackerEntry.doc_no joins cleanly against QicSoaLine.doc_no
++    despite the two systems formatting the same document differently -
++    the payment tracker writes "128-93727", a QIC SOA export writes
++    "128 - 93727". Both become "128-93727": collapse any whitespace around
++    a hyphen, and strip other stray whitespace.
++    """
++    if value is None:
++        return None
++    text = str(value).strip()
++    if not text or text.lower() == "nan":
++        return None
++    text = re.sub(r"\s*-\s*", "-", text)
++    return text
+diff --git a/app/finance/fee_engine.py b/app/finance/fee_engine.py
+new file mode 100644
+index 0000000..57fdbf5
+--- /dev/null
++++ b/app/finance/fee_engine.py
+@@ -0,0 +1,109 @@
++"""Computes HC's commission fee on a policy/endorsement premium - the %
++HealthCross earns from Qatar Insurance Co. (QIC) for medical insurance
++business sold through the platform.
++
++Rate banding is channel x tier:
++  - Broker-introduced business: 6.5% (Bronze/Silver) / 5% (Gold/Platinum)
++  - Direct business: 11.5% (Bronze/Silver) / 10% (Gold/Platinum)
++  - Group/case-to-case business isn't banded at all - it's a negotiated
++    rate entered manually per row (see `manual_fee_pct`).
++
++Mirrors app/scoring/engine.py's shape: one small pure function, a plain
++list of active rates (sourced from the FeeRateCard table), and an
++orchestrating `compute_hc_fee()` that returns both the headline numbers
++and a `details` sub-dict recording exactly how the rate was chosen - fee
++math should be as auditable as the risk scorecard is.
++"""
++from dataclasses import dataclass
++from typing import Dict, List, Optional
++
++VAT_PCT = 0.05
++
++# Tiers banded into the two rate-card bands the fee table distinguishes.
++# A Product value naming exactly one tier bands cleanly; a mixed value
++# (e.g. "Gold/Bronze", a real value seen on tracker rows for a group whose
++# members span more than one tier) can't be banded automatically - see
++# _band_for_product.
++_BRONZE_SILVER_TIERS = {"bronze", "silver"}
++_GOLD_PLATINUM_TIERS = {"gold", "platinum"}
++
++
++@dataclass
++class FeeRate:
++    channel: str  # "broker" / "direct"
++    tier_band: str  # "bronze_silver" / "gold_platinum"
++    fee_pct: float
++
++
++def _band_for_product(product: Optional[str]) -> Optional[str]:
++    """Bands a Product/tier label onto "bronze_silver" or "gold_platinum".
++
++    Returns None when the label doesn't resolve to a single band - either
++    it names no recognized tier, or it names tiers from BOTH bands at once
++    (e.g. "Gold/Bronze") - in either case the caller must supply a manual
++    rate rather than have one inferred.
++    """
++    if not product:
++        return None
++    tokens = {t.strip().lower() for t in product.replace("/", " ").split() if t.strip()}
++    in_bronze_silver = bool(tokens & _BRONZE_SILVER_TIERS)
++    in_gold_platinum = bool(tokens & _GOLD_PLATINUM_TIERS)
++    if in_bronze_silver and not in_gold_platinum:
++        return "bronze_silver"
++    if in_gold_platinum and not in_bronze_silver:
++        return "gold_platinum"
++    return None
++
++
++def compute_hc_fee(
++    channel: str,
++    product: Optional[str],
++    premium_excl_vat: float,
++    rate_cards: List[FeeRate],
++    manual_fee_pct: Optional[float] = None,
++    vat_pct: float = VAT_PCT,
++) -> Dict:
++    """Computes HC's fee on one policy/endorsement premium.
++
++    `channel` is "broker", "direct", or "group". Group business, and any
++    "broker"/"direct" row whose `product` doesn't band cleanly (see
++    _band_for_product), REQUIRES `manual_fee_pct` - there's no rate-card
++    fallback to guess from, matching the source tracker's "manual calc"
++    convention rather than inventing a rate.
++    """
++    tier_band = _band_for_product(product)
++    is_manual = manual_fee_pct is not None or channel == "group" or tier_band is None
++
++    if is_manual:
++        if manual_fee_pct is None:
++            raise ValueError(
++                f"No fee rate available for channel={channel!r} product={product!r} - "
++                "a Group/mixed-tier row needs an explicit manual_fee_pct."
++            )
++        fee_pct = manual_fee_pct
++        rate_source = "manual"
++    else:
++        match = next((r for r in rate_cards if r.channel == channel and r.tier_band == tier_band), None)
++        if match is None:
++            raise ValueError(f"No active FeeRateCard row for channel={channel!r} tier_band={tier_band!r}")
++        fee_pct = match.fee_pct
++        rate_source = "rate_card"
++
++    hc_fees = round(premium_excl_vat * fee_pct, 2)
++    vat_amount = round(hc_fees * vat_pct, 2)
++    total_value = round(hc_fees + vat_amount, 2)
++
++    return {
++        "hc_fee_pct": fee_pct,
++        "hc_fees": hc_fees,
++        "vat_pct": vat_pct,
++        "vat_amount": vat_amount,
++        "total_value": total_value,
++        "is_manual_fee": is_manual,
++        "details": {
++            "channel": channel,
++            "product": product,
++            "tier_band": tier_band,
++            "rate_source": rate_source,
++        },
++    }
+diff --git a/app/finance/reconciliation.py b/app/finance/reconciliation.py
+new file mode 100644
+index 0000000..3aea533
+--- /dev/null
++++ b/app/finance/reconciliation.py
+@@ -0,0 +1,214 @@
++"""Three reconciliation reports HealthCross runs over its finance data,
++each a pure function over plain dicts (never touching the DB directly) so
++they can be unit tested without a database - see app/api/routes_finance.py
++for how ORM rows are converted to dicts before being passed in here.
++
++1. reconcile_tracker_vs_qic_soa - does every Payment Tracker doc exist (and
++   match in amount) on QIC's own Statement of Account, and vice versa.
++2. compare_qic_soa_periods - two QIC SOA exports (e.g. this month's vs. a
++   later "recon" re-export) should describe the same underlying documents;
++   flags what changed between them per doc.
++3. reconcile_tracker_received_vs_bank - every PaymentTrackerEntry HC marked
++   "Received" should be backed by a real inbound QIC credit in the bank
++   statement. QIC settles HC's fee in periodic batched remittances rather
++   than one wire per invoice, so this matches "everything marked Received
++   on the same date" (summed) against the nearest bank credit within a
++   date window, not one row at a time.
++"""
++from collections import defaultdict
++from datetime import date
++from typing import Dict, List, Optional
++
++AMOUNT_TOLERANCE = 0.05
++
++
++def reconcile_tracker_vs_qic_soa(
++    tracker_entries: List[dict],
++    qic_soa_lines: List[dict],
++    statement_period: Optional[str] = None,
++    amount_tolerance: float = AMOUNT_TOLERANCE,
++) -> dict:
++    qic_by_doc: Dict[str, dict] = {}
++    for line in qic_soa_lines:
++        doc_no = line.get("doc_no")
++        if doc_no:
++            qic_by_doc[doc_no] = line
++
++    matched_tracker_docs = set()
++    rows = []
++    for entry in tracker_entries:
++        doc_no = entry.get("doc_no")
++        if not doc_no:
++            continue
++        qic_line = qic_by_doc.get(doc_no)
++        tracker_amount = entry.get("invoice_amount")
++        if qic_line is None:
++            status = "missing_in_qic"
++            qic_amount = None
++            variance = None
++        else:
++            matched_tracker_docs.add(doc_no)
++            qic_amount = qic_line.get("gross_amount")
++            variance = (
++                round((tracker_amount or 0) - (qic_amount or 0), 2)
++                if tracker_amount is not None and qic_amount is not None
++                else None
++            )
++            status = "matched" if variance is not None and abs(variance) <= amount_tolerance else "amount_mismatch"
++
++        rows.append(
++            {
++                "doc_no": doc_no,
++                "client_name": entry.get("main_policy_holder"),
++                "tracker_entry_id": entry.get("id"),
++                "tracker_total_value": tracker_amount,
++                "qic_soa_line_id": qic_line.get("id") if qic_line else None,
++                "qic_gross_amount": qic_amount,
++                "variance": variance,
++                "status": status,
++            }
++        )
++
++    for doc_no, qic_line in qic_by_doc.items():
++        if doc_no in matched_tracker_docs:
++            continue
++        rows.append(
++            {
++                "doc_no": doc_no,
++                "client_name": qic_line.get("insured_name"),
++                "tracker_entry_id": None,
++                "tracker_total_value": None,
++                "qic_soa_line_id": qic_line.get("id"),
++                "qic_gross_amount": qic_line.get("gross_amount"),
++                "variance": None,
++                "status": "missing_in_tracker",
++            }
++        )
++
++    return {
++        "statement_period": statement_period,
++        "total_tracker_rows": len({r["doc_no"] for r in rows if r["tracker_entry_id"] is not None}),
++        "total_qic_rows": len(qic_by_doc),
++        "matched_count": sum(1 for r in rows if r["status"] == "matched"),
++        "mismatched_count": sum(1 for r in rows if r["status"] == "amount_mismatch"),
++        "missing_in_qic_count": sum(1 for r in rows if r["status"] == "missing_in_qic"),
++        "missing_in_tracker_count": sum(1 for r in rows if r["status"] == "missing_in_tracker"),
++        "rows": rows,
++    }
++
++
++def compare_qic_soa_periods(
++    lines_a: List[dict],
++    lines_b: List[dict],
++    period_a: str,
++    period_b: str,
++    amount_tolerance: float = AMOUNT_TOLERANCE,
++) -> dict:
++    # A document can carry more than one installment line at the same
++    # Gross Amount (e.g. two due dates on one invoice) - doc_no is still the
++    # right comparison key since what matters here is "does this document
++    # still describe the same amount in both exports", not per-installment
++    # detail, so later lines for a repeated doc_no simply overwrite earlier
++    # ones rather than being treated as a conflict.
++    by_doc_a = {line["doc_no"]: line for line in lines_a if line.get("doc_no")}
++    by_doc_b = {line["doc_no"]: line for line in lines_b if line.get("doc_no")}
++
++    rows = []
++    for doc_no in sorted(set(by_doc_a) | set(by_doc_b)):
++        in_a = by_doc_a.get(doc_no)
++        in_b = by_doc_b.get(doc_no)
++        if in_a is not None and in_b is None:
++            rows.append({"doc_no": doc_no, "period_a_amount": in_a.get("gross_amount"), "period_b_amount": None, "variance": None, "status": "only_in_a"})
++        elif in_b is not None and in_a is None:
++            rows.append({"doc_no": doc_no, "period_a_amount": None, "period_b_amount": in_b.get("gross_amount"), "variance": None, "status": "only_in_b"})
++        else:
++            amount_a, amount_b = in_a.get("gross_amount"), in_b.get("gross_amount")
++            variance = round((amount_a or 0) - (amount_b or 0), 2)
++            if abs(variance) > amount_tolerance:
++                rows.append({"doc_no": doc_no, "period_a_amount": amount_a, "period_b_amount": amount_b, "variance": variance, "status": "changed"})
++            # Unchanged docs aren't included in the row list - a
++            # reconciliation report should surface differences, not
++            # reproduce the entire (usually much larger) matching set.
++
++    return {
++        "period_a": period_a,
++        "period_b": period_b,
++        "changed_count": sum(1 for r in rows if r["status"] == "changed"),
++        "only_in_a_count": sum(1 for r in rows if r["status"] == "only_in_a"),
++        "only_in_b_count": sum(1 for r in rows if r["status"] == "only_in_b"),
++        "rows": rows,
++    }
++
++
++def reconcile_tracker_received_vs_bank(
++    tracker_entries: List[dict],
++    bank_transactions: List[dict],
++    date_tolerance_days: int = 10,
++    amount_tolerance: float = 1.0,
++) -> dict:
++    received = [
++        t
++        for t in tracker_entries
++        if (t.get("hc_payment_status") or "").strip().lower().startswith("received") and t.get("payment_receive_date")
++    ]
++
++    groups: Dict[date, List[dict]] = defaultdict(list)
++    for entry in received:
++        groups[entry["payment_receive_date"]].append(entry)
++
++    candidate_credits = [b for b in bank_transactions if (b.get("credit_amount") or 0) > 0]
++    matched_bank_ids = set()
++    rows = []
++
++    for receive_date, entries in sorted(groups.items()):
++        expected_total = round(sum(e.get("total_value") or 0 for e in entries), 2)
++        best_match, best_diff = None, None
++        for bank_txn in candidate_credits:
++            if bank_txn.get("id") in matched_bank_ids or not bank_txn.get("txn_date"):
++                continue
++            if abs((bank_txn["txn_date"] - receive_date).days) > date_tolerance_days:
++                continue
++            diff = abs((bank_txn.get("credit_amount") or 0) - expected_total)
++            if diff <= amount_tolerance and (best_diff is None or diff < best_diff):
++                best_match, best_diff = bank_txn, diff
++
++        if best_match is not None:
++            matched_bank_ids.add(best_match["id"])
++
++        for entry in entries:
++            rows.append(
++                {
++                    "tracker_entry_id": entry.get("id"),
++                    "doc_no": entry.get("doc_no"),
++                    "client_name": entry.get("main_policy_holder"),
++                    "total_value": entry.get("total_value"),
++                    "payment_receive_date": receive_date,
++                    "bank_transaction_id": best_match.get("id") if best_match else None,
++                    "bank_credit_amount": best_match.get("credit_amount") if best_match else None,
++                    "bank_txn_date": best_match.get("txn_date") if best_match else None,
++                    "status": "matched" if best_match else "no_bank_match",
++                }
++            )
++
++    for bank_txn in candidate_credits:
++        if bank_txn.get("id") not in matched_bank_ids:
++            rows.append(
++                {
++                    "tracker_entry_id": None,
++                    "doc_no": None,
++                    "client_name": None,
++                    "total_value": None,
++                    "payment_receive_date": None,
++                    "bank_transaction_id": bank_txn.get("id"),
++                    "bank_credit_amount": bank_txn.get("credit_amount"),
++                    "bank_txn_date": bank_txn.get("txn_date"),
++                    "status": "unmatched_bank_credit",
++                }
++            )
++
++    return {
++        "matched_count": sum(1 for r in rows if r["status"] == "matched"),
++        "unmatched_tracker_count": sum(1 for r in rows if r["status"] == "no_bank_match"),
++        "unmatched_bank_count": sum(1 for r in rows if r["status"] == "unmatched_bank_credit"),
++        "rows": rows,
++    }
+diff --git a/app/ingestion/bank_statement.py b/app/ingestion/bank_statement.py
+new file mode 100644
+index 0000000..c9eff5e
+--- /dev/null
++++ b/app/ingestion/bank_statement.py
+@@ -0,0 +1,117 @@
++"""Parser for an HC bank account statement export (e.g. the
++"Account transactions Statement Report" format: an account-details block -
++Account Holder Name / Account Number / Account Type / Currency / statement
++period - sits above the real transaction table, rather than a header on
++row 1 like most spreadsheets this app parses elsewhere).
++
++Used to confirm a QIC payment marked "Received" on a PaymentTrackerEntry
++actually landed in the bank (see app.finance.reconciliation), and as the
++source-of-truth for cash-flow reporting.
++"""
++from typing import Any, BinaryIO, List, Optional
++
++import pandas as pd
++
++_EXPECTED_HEADERS = {"date", "value date", "reference number", "description"}
++# The account-details block and the real transaction header are both near
++# the top of the sheet on every real export seen - cap the scan rather than
++# reading the whole file just to locate one row.
++_HEADER_SCAN_ROWS = 30
++
++
++def _find_header_row(raw: pd.DataFrame) -> Optional[int]:
++    for i in range(min(_HEADER_SCAN_ROWS, len(raw))):
++        row_values = {str(v).strip().lower() for v in raw.iloc[i].tolist() if pd.notna(v)}
++        if _EXPECTED_HEADERS.issubset(row_values):
++            return i
++    return None
++
++
++def _find_labeled_value(raw: pd.DataFrame, label: str) -> Optional[str]:
++    """Looks up a value from the account-details block, where column A
++    holds a label (e.g. "Account Number") and column B holds its value.
++    """
++    for i in range(min(_HEADER_SCAN_ROWS, len(raw))):
++        first_cell = raw.iloc[i, 0]
++        if pd.notna(first_cell) and str(first_cell).strip().lower() == label.lower():
++            second_cell = raw.iloc[i, 1] if raw.shape[1] > 1 else None
++            return str(second_cell).strip() if pd.notna(second_cell) else None
++    return None
++
++
++def _amount(value: Any) -> float:
++    """Amount columns come through as either a real number or a string with
++    thousands separators and a leading sign (e.g. "-175.00", "297,313.93").
++    A blank cell means nothing was posted to that column - 0, not missing.
++    """
++    if pd.isna(value):
++        return 0.0
++    if isinstance(value, (int, float)):
++        return float(value)
++    text = str(value).strip().replace(",", "")
++    if not text:
++        return 0.0
++    try:
++        return float(text)
++    except ValueError:
++        return 0.0
++
++
++def _float_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    return _amount(value)
++
++
++def _date_or_none(value: Any):
++    if pd.isna(value):
++        return None
++    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
++    return parsed.date() if pd.notna(parsed) else None
++
++
++def _str_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    return str(value).strip() or None
++
++
++def parse_bank_statement(file: BinaryIO, filename: str, sheet_name: Any = 0) -> List[dict]:
++    if filename.lower().endswith(".csv"):
++        raw = pd.read_csv(file, header=None)
++    else:
++        raw = pd.read_excel(file, sheet_name=sheet_name, header=None)
++
++    header_row = _find_header_row(raw)
++    if header_row is None:
++        raise ValueError(
++            "Could not find the transaction table header (Date / Value Date / "
++            "Reference Number / Description) in this bank statement"
++        )
++
++    account_number = _find_labeled_value(raw, "Account Number")
++    currency = _find_labeled_value(raw, "Account Currency") or "AED"
++
++    headers = [str(v).strip().lower() if pd.notna(v) else "" for v in raw.iloc[header_row].tolist()]
++    data = raw.iloc[header_row + 1 :].copy()
++    data.columns = headers
++
++    records = []
++    for _, row in data.iterrows():
++        date_value = row.get("date")
++        if pd.isna(date_value):
++            continue
++        records.append(
++            {
++                "account_number": account_number,
++                "txn_date": _date_or_none(date_value),
++                "value_date": _date_or_none(row.get("value date")),
++                "reference_number": _str_or_none(row.get("reference number")),
++                "description": _str_or_none(row.get("description")),
++                "credit_amount": _amount(row.get("credit")),
++                "debit_amount": abs(_amount(row.get("debit"))),
++                "balance": _float_or_none(row.get("balance")),
++                "currency": currency,
++            }
++        )
++    return records
+diff --git a/app/ingestion/payment_tracker.py b/app/ingestion/payment_tracker.py
+new file mode 100644
+index 0000000..a28af0f
+--- /dev/null
++++ b/app/ingestion/payment_tracker.py
+@@ -0,0 +1,208 @@
++"""Parser for the "Payment Tracker" working sheet - HC's per-invoice ledger
++of QIC premium documents and the HC fee earned on each, e.g. the real
++"Payment Tracker" / "Ledgers" / "Eman" sheets of the working payment
++tracker workbook (their column sets differ slightly release to release;
++the alias map below covers the variants seen across all three).
++
++Historical rows are imported with whatever hc_fees/vat_amount/total_value
++the sheet itself already computed, rather than recalculated through
++app.finance.fee_engine - a bootstrap import should preserve the actual
++historical invoiced figures (including any manual roundings/adjustments)
++exactly as issued, not silently rewrite them. New entries created going
++forward (POST /finance/payment-tracker) use the fee engine instead.
++"""
++from typing import Any, BinaryIO, Dict, List
++
++import pandas as pd
++
++from app.finance.common import normalize_doc_no
++from app.ingestion.column_mapping import map_columns
++
++PAYMENT_TRACKER_ALIASES: Dict[str, List[str]] = {
++    "invoice_mode": ["invoice mode"],
++    "source_name": ["source"],
++    "division": ["division", "branch"],
++    "client_code": ["client code", "client  code", "qic code"],
++    "main_policy_holder": ["main policy holder"],
++    "sub_group_name": ["sub group name"],
++    "policy_no": ["policy no.", "policy no", "policy number"],
++    "policy_period_from": ["policy period fm dt", "policy period from date"],
++    "policy_period_to": ["policy period to dt", "policy period to date"],
++    "endorsement_no": ["endorsement"],
++    "endorsement_type": ["endo. type", "endo type", "endorsement type"],
++    "doc_date": ["doc. date", "doc date"],
++    "due_date": ["due date"],
++    "doc_no": ["docno.", "doc no", "docno"],
++    "doc_code": ["doccode.", "doc code", "doccode"],
++    "client_doc_no": ["client docno.", "client doc no"],
++    "invoice_amount": ["invoice amount"],
++    "premium_excl_vat": ["premium ( excl vat)", "premium excl vat", "premium"],
++    "basmah": ["basmah"],
++    "icp": ["icp"],
++    "client_vat": ["client vat"],
++    "client_payment_status": ["client payment status"],
++    "healthcross_doc": ["healthcross doc"],
++    "client_premium_amount_excl_tax": [
++        "client premium amount ( excl tax)",
++        "client premium amount excl tax",
++        "premium amount settled ( excl tax)",
++        "premium amount settled excl tax",
++    ],
++    "product": ["product"],
++    "hc_fee_pct_raw": ["hc fee %", "hc fee pct"],
++    "hc_fees": ["hc fees"],
++    "vat_amount": ["vat 5%"],
++    "total_value": ["total value"],
++    "invoice_type": ["invoice type"],
++    "invoice_status": ["invoice status"],
++    "invoice_raised_period": ["invoiced raised", "invoice raised", "hc settlement"],
++    "hc_payment_status": ["hc payment status"],
++    "payment_receive_date_raw": ["payment receive date"],
++}
++
++
++def _infer_channel(source_name: Any) -> str:
++    """"Direct"/"Direct Channel" in the Source column means direct
++    business; anything else is a broker company name. There's no signal in
++    this sheet for a negotiated Group/case-to-case row - that channel is
++    set manually (see PaymentTrackerEntryCreate.channel) rather than
++    inferred here.
++    """
++    if source_name is None:
++        return "broker"
++    normalized = str(source_name).strip().lower()
++    if normalized in ("direct", "direct channel"):
++        return "direct"
++    return "broker"
++
++
++def _str_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    if isinstance(value, float) and value.is_integer():
++        return str(int(value))
++    return str(value).strip() or None
++
++
++def _float_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++# A plausibility floor for parsed dates - "Oct'25" and similar free-text
++# period labels sometimes parse "successfully" via dateutil's lenient
++# fallback (e.g. as day=25/month=10 of year 1) rather than failing outright,
++# so a bare pd.notna() check isn't enough to trust the result.
++_MIN_PLAUSIBLE_YEAR = 2000
++
++
++def _date_or_none(value: Any):
++    if pd.isna(value):
++        return None
++    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
++    if pd.isna(parsed) or parsed.year < _MIN_PLAUSIBLE_YEAR:
++        return None
++    return parsed.date()
++
++
++def _fee_pct_or_none(value: Any):
++    """HC Fee % is a numeric rate (e.g. 0.115) on a rate-card row, or the
++    literal text "manual calc" on a negotiated/mixed-tier row - see
++    app.finance.fee_engine._band_for_product for why some Products can't be
++    banded automatically.
++    """
++    if pd.isna(value):
++        return None
++    if isinstance(value, (int, float)):
++        return float(value)
++    return None
++
++
++def _is_manual_fee(value: Any) -> bool:
++    if pd.isna(value):
++        return False
++    return not isinstance(value, (int, float))
++
++
++def _payment_receive_fields(value: Any):
++    """Payment Receive Date holds a real date on most rows but a free-text
++    period label (e.g. "Oct'25") on others - return (date, note), only one
++    of which is ever set.
++    """
++    if pd.isna(value):
++        return None, None
++    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
++    if pd.notna(parsed) and parsed.year >= _MIN_PLAUSIBLE_YEAR:
++        return parsed.date(), None
++    return None, str(value).strip() or None
++
++
++def parse_payment_tracker(file: BinaryIO, filename: str, sheet_name: Any = 0) -> List[dict]:
++    if filename.lower().endswith(".csv"):
++        df = pd.read_csv(file)
++    else:
++        df = pd.read_excel(file, sheet_name=sheet_name)
++
++    df = map_columns(df, PAYMENT_TRACKER_ALIASES)
++
++    records = []
++    for _, row in df.iterrows():
++        doc_no_raw = row.get("doc_no")
++        # Blank rows (trailing pivot-table scratch rows in the source
++        # workbook, or a stray blank line) carry no policy/doc identity at
++        # all - skip rather than importing an empty entry.
++        if pd.isna(doc_no_raw) and pd.isna(row.get("policy_no")):
++            continue
++
++        source_name = _str_or_none(row.get("source_name"))
++        records.append(
++            {
++                "invoice_mode": _str_or_none(row.get("invoice_mode")),
++                "source_name": source_name,
++                "channel": _infer_channel(source_name),
++                "division": _str_or_none(row.get("division")),
++                "client_code": _str_or_none(row.get("client_code")),
++                "main_policy_holder": _str_or_none(row.get("main_policy_holder")),
++                "sub_group_name": _str_or_none(row.get("sub_group_name")),
++                "policy_no": _str_or_none(row.get("policy_no")),
++                "policy_period_from": _date_or_none(row.get("policy_period_from")),
++                "policy_period_to": _date_or_none(row.get("policy_period_to")),
++                "endorsement_no": _str_or_none(row.get("endorsement_no")),
++                "endorsement_type": _str_or_none(row.get("endorsement_type")),
++                "doc_date": _date_or_none(row.get("doc_date")),
++                "due_date": _date_or_none(row.get("due_date")),
++                "doc_no": normalize_doc_no(doc_no_raw),
++                "doc_no_raw": _str_or_none(doc_no_raw),
++                "doc_code": _str_or_none(row.get("doc_code")),
++                "client_doc_no": _str_or_none(row.get("client_doc_no")),
++                "invoice_amount": _float_or_none(row.get("invoice_amount")),
++                "premium_excl_vat": _float_or_none(row.get("premium_excl_vat")),
++                "basmah": _float_or_none(row.get("basmah")),
++                "icp": _float_or_none(row.get("icp")),
++                "client_vat": _float_or_none(row.get("client_vat")),
++                "client_payment_status": _str_or_none(row.get("client_payment_status")),
++                "healthcross_doc": _str_or_none(row.get("healthcross_doc")),
++                "client_premium_amount_excl_tax": _float_or_none(row.get("client_premium_amount_excl_tax")),
++                "product": _str_or_none(row.get("product")),
++                "is_manual_fee": _is_manual_fee(row.get("hc_fee_pct_raw")),
++                "hc_fee_pct": _fee_pct_or_none(row.get("hc_fee_pct_raw")),
++                "hc_fees": _float_or_none(row.get("hc_fees")),
++                "vat_amount": _float_or_none(row.get("vat_amount")),
++                "total_value": _float_or_none(row.get("total_value")),
++                "invoice_type": _str_or_none(row.get("invoice_type")),
++                "invoice_status": _str_or_none(row.get("invoice_status")),
++                "invoice_raised_period": _str_or_none(row.get("invoice_raised_period")),
++                "hc_payment_status": _str_or_none(row.get("hc_payment_status")),
++                **dict(
++                    zip(
++                        ("payment_receive_date", "payment_receive_note"),
++                        _payment_receive_fields(row.get("payment_receive_date_raw")),
++                    )
++                ),
++            }
++        )
++    return records
+diff --git a/app/ingestion/qic_soa.py b/app/ingestion/qic_soa.py
+new file mode 100644
+index 0000000..9a954da
+--- /dev/null
++++ b/app/ingestion/qic_soa.py
+@@ -0,0 +1,154 @@
++"""Parser for a QIC Statement of Account (SOA) export - the ground truth
++HealthCross reconciles its own Payment Tracker against (see
++app.finance.reconciliation).
++
++QIC's own export shape has varied across two real samples seen so far:
++one carries separate "Debit LC"/"Credit LC" amount columns, the other a
++single signed "AMOUNT" column plus a "Dr/Cr" flag. Both are normalized here
++onto the same debit_amount/credit_amount pair so every downstream query
++only deals with one shape, regardless of which export produced a given
++QicSoaLine row.
++"""
++from typing import Any, BinaryIO, Dict, List, Optional
++
++import pandas as pd
++
++from app.finance.common import normalize_doc_no
++from app.ingestion.column_mapping import map_columns
++
++QIC_SOA_ALIASES: Dict[str, List[str]] = {
++    "doc_no": ["doc no"],
++    "tran_code": ["tran code"],
++    "doc_date": ["doc dt", "doc date"],
++    "tran_type": ["tran type"],
++    "doc_due_date": ["doc due date"],
++    "lob_code": ["lob code"],
++    "policy_no": ["policy no"],
++    "insured_name": ["insured name"],
++    "insured_code": ["insured code"],
++    "currency": ["currency"],
++    "doc_desc": ["doc desc"],
++    "debit_lc": ["debit lc"],
++    "credit_lc": ["credit lc"],
++    "amount": ["amount"],
++    "sequence_no": ["sequence no"],
++    "dr_cr": ["dr/cr", "dr cr"],
++    "policy_from_date": ["policy from date"],
++    "policy_to_date": ["policy to date"],
++    "cust_code": ["cust code"],
++    "cust_name": ["cust name"],
++    "endorsement_no": ["endorsement no"],
++    "pol_comms_doc": ["pol/comms doc", "pol comms doc"],
++    "branch": ["branch"],
++    "gross_amount": ["gross amount"],
++    "age_band": ["age band"],
++    "prod_code": ["prod code"],
++    "cust_group_code": ["cust group code"],
++    "cust_group_name": ["cust group name"],
++    "broker_name": ["broker name"],
++    "control_account": ["control account"],
++    "cal_year": ["cal year"],
++    "doc_created_by": ["doc created by"],
++    "installment_number": ["installment number"],
++    "endorsement_type": ["endorsement type"],
++}
++
++
++def _str_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    if isinstance(value, float) and value.is_integer():
++        return str(int(value))
++    return str(value).strip() or None
++
++
++def _float_or_none(value: Any) -> Any:
++    if pd.isna(value):
++        return None
++    try:
++        return float(value)
++    except (TypeError, ValueError):
++        return None
++
++
++def _date_or_none(value: Any):
++    if pd.isna(value):
++        return None
++    parsed = pd.to_datetime(value, errors="coerce", dayfirst=True)
++    return parsed.date() if pd.notna(parsed) else None
++
++
++def _amounts(row: pd.Series) -> Optional[Dict[str, float]]:
++    """Normalizes whichever amount shape this export uses onto
++    (debit_amount, credit_amount), both >= 0.
++    """
++    has_split_columns = "debit_lc" in row.index or "credit_lc" in row.index
++    if has_split_columns:
++        debit = _float_or_none(row.get("debit_lc")) or 0.0
++        credit = _float_or_none(row.get("credit_lc")) or 0.0
++        return {"debit_amount": debit, "credit_amount": credit}
++
++    amount = _float_or_none(row.get("amount"))
++    if amount is None:
++        return {"debit_amount": 0.0, "credit_amount": 0.0}
++    dr_cr = _str_or_none(row.get("dr_cr"))
++    magnitude = abs(amount)
++    is_credit = (dr_cr and dr_cr.upper().startswith("C")) or (not dr_cr and amount < 0)
++    if is_credit:
++        return {"debit_amount": 0.0, "credit_amount": magnitude}
++    return {"debit_amount": magnitude, "credit_amount": 0.0}
++
++
++def parse_qic_soa(file: BinaryIO, filename: str, sheet_name: Any = 0) -> List[dict]:
++    if filename.lower().endswith(".csv"):
++        df = pd.read_csv(file)
++    else:
++        df = pd.read_excel(file, sheet_name=sheet_name)
++
++    df = map_columns(df, QIC_SOA_ALIASES)
++
++    records = []
++    for _, row in df.iterrows():
++        doc_no_raw = row.get("doc_no")
++        if pd.isna(doc_no_raw):
++            continue
++
++        dr_cr = _str_or_none(row.get("dr_cr"))
++        records.append(
++            {
++                "doc_no": normalize_doc_no(doc_no_raw),
++                "doc_no_raw": _str_or_none(doc_no_raw),
++                "tran_code": _str_or_none(row.get("tran_code")),
++                "doc_date": _date_or_none(row.get("doc_date")),
++                "tran_type": _str_or_none(row.get("tran_type")),
++                "doc_due_date": _date_or_none(row.get("doc_due_date")),
++                "lob_code": _str_or_none(row.get("lob_code")),
++                "policy_no": _str_or_none(row.get("policy_no")),
++                "insured_name": _str_or_none(row.get("insured_name")),
++                "insured_code": _str_or_none(row.get("insured_code")),
++                "currency": _str_or_none(row.get("currency")),
++                "doc_desc": _str_or_none(row.get("doc_desc")),
++                **_amounts(row),
++                "dr_cr": dr_cr,
++                "sequence_no": int(row["sequence_no"]) if pd.notna(row.get("sequence_no")) else None,
++                "policy_from_date": _date_or_none(row.get("policy_from_date")),
++                "policy_to_date": _date_or_none(row.get("policy_to_date")),
++                "cust_code": _str_or_none(row.get("cust_code")),
++                "cust_name": _str_or_none(row.get("cust_name")),
++                "endorsement_no": _str_or_none(row.get("endorsement_no")),
++                "pol_comms_doc": _str_or_none(row.get("pol_comms_doc")),
++                "branch": _str_or_none(row.get("branch")),
++                "gross_amount": _float_or_none(row.get("gross_amount")),
++                "age_band": _str_or_none(row.get("age_band")),
++                "prod_code": _str_or_none(row.get("prod_code")),
++                "cust_group_code": _str_or_none(row.get("cust_group_code")),
++                "cust_group_name": _str_or_none(row.get("cust_group_name")),
++                "broker_name": _str_or_none(row.get("broker_name")),
++                "control_account": _str_or_none(row.get("control_account")),
++                "cal_year": _str_or_none(row.get("cal_year")),
++                "doc_created_by": _str_or_none(row.get("doc_created_by")),
++                "installment_number": _str_or_none(row.get("installment_number")),
++                "endorsement_type": _str_or_none(row.get("endorsement_type")),
++            }
++        )
++    return records
+diff --git a/app/main.py b/app/main.py
+index 832a1de..878b9e9 100644
+--- a/app/main.py
++++ b/app/main.py
+@@ -1,10 +1,19 @@
++import datetime
+ from contextlib import asynccontextmanager
+ from pathlib import Path
+ 
+ from fastapi import FastAPI
+ from fastapi.responses import FileResponse
+ 
+-from app.api import routes_admin, routes_analysis, routes_cases, routes_feedback, routes_reference_plans, routes_scoring
++from app.api import (
++    routes_admin,
++    routes_analysis,
++    routes_cases,
++    routes_feedback,
++    routes_finance,
++    routes_reference_plans,
++    routes_scoring,
++)
+ from app.database import Base, SessionLocal, engine
+ from app.db_migrate import auto_migrate_missing_columns
+ from app.models import db_models as models
+@@ -32,11 +41,45 @@ def _ensure_default_weight_set() -> None:
+         db.close()
+ 
+ 
++# The 4 rates HealthCross earns as % of premium (excl. VAT), by sales
++# channel and plan tier band - see app/finance/fee_engine.py. Group/
++# case-to-case business isn't seeded here at all since it's always a
++# manual per-row rate, not a rate-card lookup.
++_DEFAULT_FEE_RATES = [
++    ("broker", "bronze_silver", 0.065),
++    ("broker", "gold_platinum", 0.05),
++    ("direct", "bronze_silver", 0.115),
++    ("direct", "gold_platinum", 0.10),
++]
++
++
++def _ensure_default_fee_rate_cards() -> None:
++    db = SessionLocal()
++    try:
++        if not db.query(models.FeeRateCard).filter_by(is_active=True).first():
++            today = datetime.date.today()
++            for channel, tier_band, fee_pct in _DEFAULT_FEE_RATES:
++                db.add(
++                    models.FeeRateCard(
++                        channel=channel,
++                        tier_band=tier_band,
++                        fee_pct=fee_pct,
++                        effective_from=today,
++                        is_active=True,
++                        notes="Initial baseline rate card",
++                    )
++                )
++            db.commit()
++    finally:
++        db.close()
++
++
+ @asynccontextmanager
+ async def lifespan(app: FastAPI):
+     Base.metadata.create_all(bind=engine)
+     auto_migrate_missing_columns(engine, Base)
+     _ensure_default_weight_set()
++    _ensure_default_fee_rate_cards()
+     yield
+ 
+ 
+@@ -48,6 +91,7 @@ app.include_router(routes_feedback.router)
+ app.include_router(routes_admin.router)
+ app.include_router(routes_analysis.router)
+ app.include_router(routes_reference_plans.router)
++app.include_router(routes_finance.router)
+ 
+ 
+ @app.get("/health")
+diff --git a/app/models/db_models.py b/app/models/db_models.py
+index 131624b..678a208 100644
+--- a/app/models/db_models.py
++++ b/app/models/db_models.py
+@@ -299,6 +299,268 @@ class Outcome(Base):
+     scorecard = relationship("Scorecard")
+ 
+ 
++class FeeRateCard(Base):
++    """HC's commission rate table: the % of premium (excl. VAT) HealthCross
++    earns on medical insurance sold through the platform, banded by sales
++    channel (broker-introduced vs. direct) and plan tier. A negotiated
++    Group/case-to-case rate isn't stored here at all - it's entered directly
++    as a manual override on the PaymentTrackerEntry it applies to (see
++    PaymentTrackerEntry.is_manual_fee), exactly mirroring the "manual calc"
++    convention already used in the working payment tracker.
++
++    Versioned like ScoringWeightSet - a rate change is a new row with a
++    fresh effective_from rather than an edit, so historical
++    PaymentTrackerEntry rows stay explainable against whatever rate applied
++    when they were invoiced.
++    """
++
++    __tablename__ = "fee_rate_cards"
++
++    id = Column(Integer, primary_key=True)
++    channel = Column(String, nullable=False)  # "broker" / "direct"
++    tier_band = Column(String, nullable=False)  # "bronze_silver" / "gold_platinum"
++    fee_pct = Column(Float, nullable=False)
++    effective_from = Column(Date, nullable=False)
++    is_active = Column(Boolean, default=True)
++    notes = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++
++class PaymentTrackerEntry(Base):
++    """One row per QIC document (a premium invoice or a credit/cancellation
++    endorsement) that HealthCross earns a fee on - the same shape as the
++    real "Payment Tracker" working sheet: a client-facing leg (what QIC
++    invoiced the client/broker, and whether the client has paid), and an
++    HC-facing leg (HC's own fee on that premium, invoiced to the client, and
++    whether HC has collected it).
++
++    `doc_no` is normalized (see app.finance.common.normalize_doc_no) so it
++    joins cleanly against QicSoaLine.doc_no despite the two systems
++    formatting the same document number differently ("128-93727" here vs.
++    "128 - 93727" in a QIC export).
++
++    Company-wide, not tied to any underwriting Case - a Case is a submission
++    being risk-scored; a PaymentTrackerEntry is a bound policy/endorsement
++    already earning HC a fee.
++    """
++
++    __tablename__ = "payment_tracker_entries"
++
++    id = Column(Integer, primary_key=True)
++
++    invoice_mode = Column(String, nullable=True)  # "Manual" / "Auto"
++    source_name = Column(String, nullable=True)  # broker company name, or "Direct Channel"
++    channel = Column(String, nullable=False)  # "broker" / "direct" / "group"
++    division = Column(String, nullable=True)  # branch, e.g. "Dubai Branch"
++    client_code = Column(String, nullable=True)
++    main_policy_holder = Column(String, nullable=True)
++    sub_group_name = Column(String, nullable=True)
++    policy_no = Column(String, nullable=True)
++    policy_period_from = Column(Date, nullable=True)
++    policy_period_to = Column(Date, nullable=True)
++    endorsement_no = Column(String, nullable=True)
++    endorsement_type = Column(String, nullable=True)  # Inception / Addition / Deletion / Modification
++
++    doc_date = Column(Date, nullable=True)
++    due_date = Column(Date, nullable=True)
++    # Normalized join key against QicSoaLine.doc_no - see class docstring.
++    doc_no = Column(String, nullable=True, index=True)
++    doc_no_raw = Column(String, nullable=True)
++    doc_code = Column(String, nullable=True)  # "128" (debit) / "228" (credit) prefix
++    client_doc_no = Column(String, nullable=True)
++
++    invoice_amount = Column(Float, nullable=True)
++    premium_excl_vat = Column(Float, nullable=True)
++    basmah = Column(Float, nullable=True)
++    icp = Column(Float, nullable=True)
++    client_vat = Column(Float, nullable=True)
++    client_payment_status = Column(String, nullable=True)  # "Settled" / "Outstanding"
++    healthcross_doc = Column(String, nullable=True)  # internal HC doc/invoice number, once raised
++    client_premium_amount_excl_tax = Column(Float, nullable=True)
++
++    product = Column(String, nullable=True)  # tier label, e.g. "Silver", "Gold/Bronze" (mixed group)
++    # True when the fee wasn't computed from FeeRateCard - a negotiated
++    # Group/case-to-case rate, or a mixed-tier Product the rate card can't
++    # band cleanly. Mirrors the source sheet's literal "manual calc" entries.
++    is_manual_fee = Column(Boolean, default=False)
++    hc_fee_pct = Column(Float, nullable=True)
++    hc_fees = Column(Float, nullable=True)
++    vat_pct = Column(Float, default=0.05)
++    vat_amount = Column(Float, nullable=True)
++    total_value = Column(Float, nullable=True)
++
++    invoice_type = Column(String, nullable=True)  # "Debit" / "Credit"
++    invoice_status = Column(String, nullable=True)  # "Due for collection" / "Outstanding"
++    invoice_raised_period = Column(String, nullable=True)  # free-text label, e.g. "Sept'25", "Raised Mar 26"
++    hc_payment_status = Column(String, nullable=True)  # "Received" / blank
++    payment_receive_date = Column(Date, nullable=True)
++    # Raw text when the source's payment-receive value wasn't a clean date
++    # (e.g. "Received Oct'25") - kept verbatim rather than dropped.
++    payment_receive_note = Column(String, nullable=True)
++
++    source_batch = Column(String, nullable=True)  # which upload this row came from, for audit/traceability
++    notes = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=datetime.datetime.utcnow)
++    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
++
++
++class QicSoaLine(Base):
++    """One raw line from a QIC Statement of Account export - the ground
++    truth HealthCross reconciles its own PaymentTrackerEntry rows against.
++    QIC exports vary in shape (a "Debit LC"/"Credit LC" pair of columns in
++    one export, a single signed AMOUNT + Dr/Cr flag in another) - both are
++    normalized to the same debit_amount/credit_amount/dr_cr fields here by
++    app.ingestion.qic_soa so every downstream query only deals with one
++    shape regardless of which export produced it.
++
++    `doc_no` is normalized the same way as PaymentTrackerEntry.doc_no - see
++    that class's docstring.
++    """
++
++    __tablename__ = "qic_soa_lines"
++
++    id = Column(Integer, primary_key=True)
++
++    doc_no = Column(String, nullable=True, index=True)
++    doc_no_raw = Column(String, nullable=True)
++    tran_code = Column(String, nullable=True)
++    doc_date = Column(Date, nullable=True)
++    tran_type = Column(String, nullable=True)
++    doc_due_date = Column(Date, nullable=True)
++    lob_code = Column(String, nullable=True)
++    policy_no = Column(String, nullable=True)
++    insured_name = Column(String, nullable=True)
++    insured_code = Column(String, nullable=True)
++    currency = Column(String, nullable=True)
++    doc_desc = Column(Text, nullable=True)
++    debit_amount = Column(Float, default=0)
++    credit_amount = Column(Float, default=0)
++    dr_cr = Column(String, nullable=True)  # "D" / "C"
++    sequence_no = Column(Integer, nullable=True)
++    policy_from_date = Column(Date, nullable=True)
++    policy_to_date = Column(Date, nullable=True)
++    cust_code = Column(String, nullable=True)
++    cust_name = Column(String, nullable=True)
++    endorsement_no = Column(String, nullable=True)
++    pol_comms_doc = Column(String, nullable=True)
++    branch = Column(String, nullable=True)
++    gross_amount = Column(Float, nullable=True)
++    age_band = Column(String, nullable=True)
++    prod_code = Column(String, nullable=True)
++    cust_group_code = Column(String, nullable=True)
++    cust_group_name = Column(String, nullable=True)
++    broker_name = Column(String, nullable=True)
++    control_account = Column(Text, nullable=True)
++    cal_year = Column(String, nullable=True)
++    doc_created_by = Column(String, nullable=True)
++    installment_number = Column(String, nullable=True)
++    endorsement_type = Column(String, nullable=True)
++
++    # Label for which SOA export this line came from (e.g. "2026-06",
++    # "2026-07 recon") - set at upload time, lets a period-over-period
++    # comparison of two QIC SOA exports be run without re-uploading.
++    statement_period = Column(String, nullable=True, index=True)
++    imported_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++
++class BankTransaction(Base):
++    """One raw line from an HC bank account statement export - used to
++    confirm a QIC payment marked "Received" in the PaymentTrackerEntry
++    ledger actually landed in the bank (see app.finance.reconciliation),
++    and as the source-of-truth for treasury/cash-flow reporting.
++    """
++
++    __tablename__ = "bank_transactions"
++
++    id = Column(Integer, primary_key=True)
++
++    account_number = Column(String, nullable=True)
++    txn_date = Column(Date, nullable=True)
++    value_date = Column(Date, nullable=True)
++    reference_number = Column(String, nullable=True)
++    description = Column(Text, nullable=True)
++    credit_amount = Column(Float, default=0)
++    debit_amount = Column(Float, default=0)
++    balance = Column(Float, nullable=True)
++    currency = Column(String, default="AED")
++
++    statement_period = Column(String, nullable=True, index=True)
++    imported_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++
++class Employee(Base):
++    """HC payroll roster. monthly_salary is the recurring default used both
++    to display current headcount cost and to auto-generate this month's
++    salary ExpenseEntry rows (see POST /finance/expenses/generate) - an
++    individual month's actual paid amount can still differ (e.g. a partial
++    month, an installment) since that's recorded on the ExpenseEntry itself,
++    never by editing this roster row.
++    """
++
++    __tablename__ = "employees"
++
++    id = Column(Integer, primary_key=True)
++    full_name = Column(String, nullable=False)
++    role_title = Column(String, nullable=True)
++    monthly_salary = Column(Float, nullable=False)
++    currency = Column(String, default="AED")
++    start_date = Column(Date, nullable=True)
++    end_date = Column(Date, nullable=True)
++    is_active = Column(Boolean, default=True)
++    notes = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++
++class RecurringExpense(Base):
++    """A template for a recurring non-salary expense (e.g. Nivotime's portal
++    support/maintenance fee, ABH's outsourced accounting fee, Etisalat).
++    `default_amount` is None for a variable-cost item like Etisalat, whose
++    actual monthly amount depends on usage and is entered fresh each period
++    on its ExpenseEntry rather than defaulted from here.
++    """
++
++    __tablename__ = "recurring_expenses"
++
++    id = Column(Integer, primary_key=True)
++    name = Column(String, nullable=False)
++    category = Column(String, nullable=False)  # e.g. "software", "telecom", "outsourced_services", "rent"
++    default_amount = Column(Float, nullable=True)
++    currency = Column(String, default="AED")
++    expense_type = Column(String, nullable=False)  # "fixed" / "variable"
++    is_active = Column(Boolean, default=True)
++    notes = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++
++class ExpenseEntry(Base):
++    """One actual expense for one calendar month - salaries (linked to
++    Employee), recurring non-salary costs (linked to RecurringExpense), and
++    genuinely one-off expenses (neither link set) all live in this single
++    table so cash-flow and forecasting only need to sum one place.
++    """
++
++    __tablename__ = "expense_entries"
++
++    id = Column(Integer, primary_key=True)
++    period = Column(Date, nullable=False, index=True)  # first-of-month marker, e.g. 2026-07-01
++    category = Column(String, nullable=False)
++    expense_type = Column(String, nullable=False)  # "fixed" / "variable"
++    description = Column(String, nullable=True)
++    amount = Column(Float, nullable=False)
++    currency = Column(String, default="AED")
++
++    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)
++    recurring_expense_id = Column(Integer, ForeignKey("recurring_expenses.id"), nullable=True)
++
++    payment_date = Column(Date, nullable=True)
++    source = Column(String, default="manual")  # "manual" / "generated" / "bank_matched"
++    notes = Column(Text, nullable=True)
++    created_at = Column(DateTime, default=datetime.datetime.utcnow)
++
++    employee = relationship("Employee")
++    recurring_expense = relationship("RecurringExpense")
++
++
+ class ReferenceBenefitPlan(Base):
+     """One insurer/tier's table of benefits, uploaded once into a shared
+     reference library rather than attached to any particular case - powers
+diff --git a/app/models/schemas.py b/app/models/schemas.py
+index 27dd0bb..491a665 100644
+--- a/app/models/schemas.py
++++ b/app/models/schemas.py
+@@ -276,6 +276,393 @@ class ReferenceBenefitPlanSummary(BaseModel):
+     created_at: datetime
+ 
+ 
++class FeeRateCardCreate(BaseModel):
++    channel: str  # "broker" / "direct"
++    tier_band: str  # "bronze_silver" / "gold_platinum"
++    fee_pct: float
++    effective_from: date
++    notes: Optional[str] = None
++
++
++class FeeRateCardOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    channel: str
++    tier_band: str
++    fee_pct: float
++    effective_from: date
++    is_active: bool
++    notes: Optional[str] = None
++    created_at: datetime
++
++
++class PaymentTrackerEntryCreate(BaseModel):
++    invoice_mode: Optional[str] = None
++    source_name: Optional[str] = None
++    channel: str  # "broker" / "direct" / "group"
++    division: Optional[str] = None
++    client_code: Optional[str] = None
++    main_policy_holder: Optional[str] = None
++    sub_group_name: Optional[str] = None
++    policy_no: Optional[str] = None
++    policy_period_from: Optional[date] = None
++    policy_period_to: Optional[date] = None
++    endorsement_no: Optional[str] = None
++    endorsement_type: Optional[str] = None
++    doc_date: Optional[date] = None
++    due_date: Optional[date] = None
++    doc_no: Optional[str] = None
++    doc_code: Optional[str] = None
++    client_doc_no: Optional[str] = None
++    invoice_amount: Optional[float] = None
++    premium_excl_vat: float
++    basmah: Optional[float] = None
++    icp: Optional[float] = None
++    client_vat: Optional[float] = None
++    client_payment_status: Optional[str] = None
++    healthcross_doc: Optional[str] = None
++    client_premium_amount_excl_tax: Optional[float] = None
++    product: str
++    # Set to force a negotiated/Group case-to-case rate instead of looking
++    # one up on the FeeRateCard - mirrors the source tracker's "manual calc"
++    # convention. Also required when `product` mixes tiers (e.g.
++    # "Gold/Bronze") since the rate card can't band that automatically.
++    manual_fee_pct: Optional[float] = None
++    invoice_type: Optional[str] = None
++    invoice_status: Optional[str] = None
++    invoice_raised_period: Optional[str] = None
++    hc_payment_status: Optional[str] = None
++    payment_receive_date: Optional[date] = None
++    notes: Optional[str] = None
++
++
++class PaymentTrackerEntryUpdate(BaseModel):
++    client_payment_status: Optional[str] = None
++    healthcross_doc: Optional[str] = None
++    invoice_status: Optional[str] = None
++    invoice_raised_period: Optional[str] = None
++    hc_payment_status: Optional[str] = None
++    payment_receive_date: Optional[date] = None
++    payment_receive_note: Optional[str] = None
++    notes: Optional[str] = None
++
++
++class PaymentTrackerEntryOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    invoice_mode: Optional[str] = None
++    source_name: Optional[str] = None
++    channel: str
++    division: Optional[str] = None
++    client_code: Optional[str] = None
++    main_policy_holder: Optional[str] = None
++    sub_group_name: Optional[str] = None
++    policy_no: Optional[str] = None
++    policy_period_from: Optional[date] = None
++    policy_period_to: Optional[date] = None
++    endorsement_no: Optional[str] = None
++    endorsement_type: Optional[str] = None
++    doc_date: Optional[date] = None
++    due_date: Optional[date] = None
++    doc_no: Optional[str] = None
++    doc_no_raw: Optional[str] = None
++    doc_code: Optional[str] = None
++    client_doc_no: Optional[str] = None
++    invoice_amount: Optional[float] = None
++    premium_excl_vat: Optional[float] = None
++    basmah: Optional[float] = None
++    icp: Optional[float] = None
++    client_vat: Optional[float] = None
++    client_payment_status: Optional[str] = None
++    healthcross_doc: Optional[str] = None
++    client_premium_amount_excl_tax: Optional[float] = None
++    product: Optional[str] = None
++    is_manual_fee: bool
++    hc_fee_pct: Optional[float] = None
++    hc_fees: Optional[float] = None
++    vat_pct: Optional[float] = None
++    vat_amount: Optional[float] = None
++    total_value: Optional[float] = None
++    invoice_type: Optional[str] = None
++    invoice_status: Optional[str] = None
++    invoice_raised_period: Optional[str] = None
++    hc_payment_status: Optional[str] = None
++    payment_receive_date: Optional[date] = None
++    payment_receive_note: Optional[str] = None
++    source_batch: Optional[str] = None
++    notes: Optional[str] = None
++    created_at: datetime
++    updated_at: datetime
++
++
++class QicSoaLineOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    doc_no: Optional[str] = None
++    doc_no_raw: Optional[str] = None
++    tran_code: Optional[str] = None
++    doc_date: Optional[date] = None
++    tran_type: Optional[str] = None
++    doc_due_date: Optional[date] = None
++    lob_code: Optional[str] = None
++    policy_no: Optional[str] = None
++    insured_name: Optional[str] = None
++    insured_code: Optional[str] = None
++    currency: Optional[str] = None
++    doc_desc: Optional[str] = None
++    debit_amount: float
++    credit_amount: float
++    dr_cr: Optional[str] = None
++    sequence_no: Optional[int] = None
++    policy_from_date: Optional[date] = None
++    policy_to_date: Optional[date] = None
++    cust_code: Optional[str] = None
++    cust_name: Optional[str] = None
++    endorsement_no: Optional[str] = None
++    pol_comms_doc: Optional[str] = None
++    branch: Optional[str] = None
++    gross_amount: Optional[float] = None
++    age_band: Optional[str] = None
++    prod_code: Optional[str] = None
++    cust_group_code: Optional[str] = None
++    cust_group_name: Optional[str] = None
++    broker_name: Optional[str] = None
++    control_account: Optional[str] = None
++    cal_year: Optional[str] = None
++    doc_created_by: Optional[str] = None
++    installment_number: Optional[str] = None
++    endorsement_type: Optional[str] = None
++    statement_period: Optional[str] = None
++    imported_at: datetime
++
++
++class BankTransactionOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    account_number: Optional[str] = None
++    txn_date: Optional[date] = None
++    value_date: Optional[date] = None
++    reference_number: Optional[str] = None
++    description: Optional[str] = None
++    credit_amount: float
++    debit_amount: float
++    balance: Optional[float] = None
++    currency: str
++    statement_period: Optional[str] = None
++    imported_at: datetime
++
++
++class EmployeeCreate(BaseModel):
++    full_name: str
++    role_title: Optional[str] = None
++    monthly_salary: float
++    currency: str = "AED"
++    start_date: Optional[date] = None
++    notes: Optional[str] = None
++
++
++class EmployeeUpdate(BaseModel):
++    full_name: Optional[str] = None
++    role_title: Optional[str] = None
++    monthly_salary: Optional[float] = None
++    currency: Optional[str] = None
++    start_date: Optional[date] = None
++    end_date: Optional[date] = None
++    is_active: Optional[bool] = None
++    notes: Optional[str] = None
++
++
++class EmployeeOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    full_name: str
++    role_title: Optional[str] = None
++    monthly_salary: float
++    currency: str
++    start_date: Optional[date] = None
++    end_date: Optional[date] = None
++    is_active: bool
++    notes: Optional[str] = None
++    created_at: datetime
++
++
++class RecurringExpenseCreate(BaseModel):
++    name: str
++    category: str
++    default_amount: Optional[float] = None
++    currency: str = "AED"
++    expense_type: str  # "fixed" / "variable"
++    notes: Optional[str] = None
++
++
++class RecurringExpenseUpdate(BaseModel):
++    name: Optional[str] = None
++    category: Optional[str] = None
++    default_amount: Optional[float] = None
++    currency: Optional[str] = None
++    expense_type: Optional[str] = None
++    is_active: Optional[bool] = None
++    notes: Optional[str] = None
++
++
++class RecurringExpenseOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    name: str
++    category: str
++    default_amount: Optional[float] = None
++    currency: str
++    expense_type: str
++    is_active: bool
++    notes: Optional[str] = None
++    created_at: datetime
++
++
++class ExpenseEntryCreate(BaseModel):
++    period: date  # any day in the month is accepted; normalized to the 1st
++    category: str
++    expense_type: str  # "fixed" / "variable"
++    description: Optional[str] = None
++    amount: float
++    currency: str = "AED"
++    employee_id: Optional[int] = None
++    recurring_expense_id: Optional[int] = None
++    payment_date: Optional[date] = None
++    notes: Optional[str] = None
++
++
++class ExpenseEntryUpdate(BaseModel):
++    category: Optional[str] = None
++    expense_type: Optional[str] = None
++    description: Optional[str] = None
++    amount: Optional[float] = None
++    payment_date: Optional[date] = None
++    notes: Optional[str] = None
++
++
++class ExpenseEntryOut(BaseModel):
++    model_config = ConfigDict(from_attributes=True)
++
++    id: int
++    period: date
++    category: str
++    expense_type: str
++    description: Optional[str] = None
++    amount: float
++    currency: str
++    employee_id: Optional[int] = None
++    recurring_expense_id: Optional[int] = None
++    payment_date: Optional[date] = None
++    source: str
++    notes: Optional[str] = None
++    created_at: datetime
++
++
++class DocReconciliationRow(BaseModel):
++    doc_no: str
++    client_name: Optional[str] = None
++    tracker_entry_id: Optional[int] = None
++    tracker_total_value: Optional[float] = None
++    qic_soa_line_id: Optional[int] = None
++    qic_gross_amount: Optional[float] = None
++    variance: Optional[float] = None
++    status: str  # "matched" / "amount_mismatch" / "missing_in_qic" / "missing_in_tracker"
++
++
++class TrackerQicReconciliationOut(BaseModel):
++    statement_period: Optional[str] = None
++    total_tracker_rows: int
++    total_qic_rows: int
++    matched_count: int
++    mismatched_count: int
++    missing_in_qic_count: int
++    missing_in_tracker_count: int
++    rows: List[DocReconciliationRow]
++
++
++class SoaPeriodComparisonRow(BaseModel):
++    doc_no: str
++    period_a_amount: Optional[float] = None
++    period_b_amount: Optional[float] = None
++    variance: Optional[float] = None
++    status: str  # "unchanged" / "changed" / "only_in_a" / "only_in_b"
++
++
++class SoaPeriodComparisonOut(BaseModel):
++    period_a: str
++    period_b: str
++    changed_count: int
++    only_in_a_count: int
++    only_in_b_count: int
++    rows: List[SoaPeriodComparisonRow]
++
++
++class BankReconciliationRow(BaseModel):
++    tracker_entry_id: Optional[int] = None
++    doc_no: Optional[str] = None
++    client_name: Optional[str] = None
++    total_value: Optional[float] = None
++    payment_receive_date: Optional[date] = None
++    bank_transaction_id: Optional[int] = None
++    bank_credit_amount: Optional[float] = None
++    bank_txn_date: Optional[date] = None
++    status: str  # "matched" / "no_bank_match" / "unmatched_bank_credit"
++
++
++class BankReconciliationOut(BaseModel):
++    matched_count: int
++    unmatched_tracker_count: int
++    unmatched_bank_count: int
++    rows: List[BankReconciliationRow]
++
++
++class CashFlowMonth(BaseModel):
++    period: str  # "2026-07"
++    inflow: float
++    outflow: float
++    net: float
++    cumulative: float
++
++
++class CashFlowOut(BaseModel):
++    year: int
++    months: List[CashFlowMonth]
++    total_inflow: float
++    total_outflow: float
++    total_net: float
++
++
++class ExpenseForecastMonth(BaseModel):
++    period: str
++    fixed: float
++    variable: float
++    total: float
++    is_actual: bool  # True if based on real ExpenseEntry rows, False if forecast
++
++
++class ExpenseForecastOut(BaseModel):
++    year: int
++    months: List[ExpenseForecastMonth]
++    total_actual: float
++    total_forecast: float
++    assumptions: Dict[str, Any]
++
++
++class FinanceSummaryOut(BaseModel):
++    total_hc_fees_invoiced: float
++    total_hc_fees_received: float
++    total_outstanding: float
++    ytd_expenses: float
++    ytd_net: float
++    as_of: datetime
++
++
+ class PlanDetailsOut(BaseModel):
+     model_config = ConfigDict(from_attributes=True)
+ 
+diff --git a/tests/conftest.py b/tests/conftest.py
+index 9b6aed3..1880571 100644
+--- a/tests/conftest.py
++++ b/tests/conftest.py
+@@ -1,3 +1,5 @@
++import datetime
++
+ import pytest
+ from fastapi.testclient import TestClient
+ from sqlalchemy import create_engine
+@@ -35,6 +37,14 @@ def client(tmp_path):
+             is_active=True,
+         )
+     )
++    today = datetime.date.today()
++    for channel, tier_band, fee_pct in [
++        ("broker", "bronze_silver", 0.065),
++        ("broker", "gold_platinum", 0.05),
++        ("direct", "bronze_silver", 0.115),
++        ("direct", "gold_platinum", 0.10),
++    ]:
++        db.add(models.FeeRateCard(channel=channel, tier_band=tier_band, fee_pct=fee_pct, effective_from=today, is_active=True))
+     db.commit()
+     db.close()
+ 
+diff --git a/tests/test_api_finance.py b/tests/test_api_finance.py
+new file mode 100644
+index 0000000..e5d72b6
+--- /dev/null
++++ b/tests/test_api_finance.py
+@@ -0,0 +1,139 @@
++import io
++
++import pandas as pd
++
++
++def _xlsx_bytes(df: pd.DataFrame) -> bytes:
++    buf = io.BytesIO()
++    df.to_excel(buf, index=False)
++    buf.seek(0)
++    return buf.read()
++
++
++def _upload(client, path, filename, df):
++    return client.post(
++        path,
++        files={"file": (filename, _xlsx_bytes(df), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
++    )
++
++
++def test_create_payment_tracker_entry_computes_fee_from_rate_card(client):
++    resp = client.post("/finance/payment-tracker", json={"channel": "direct", "product": "Silver", "premium_excl_vat": 200000})
++    assert resp.status_code == 200
++    body = resp.json()
++    assert body["hc_fee_pct"] == 0.115
++    assert body["hc_fees"] == 23000.0
++    assert body["is_manual_fee"] is False
++
++
++def test_create_payment_tracker_entry_requires_manual_rate_for_group(client):
++    resp = client.post("/finance/payment-tracker", json={"channel": "group", "product": "Gold", "premium_excl_vat": 50000})
++    assert resp.status_code == 400
++
++    resp = client.post("/finance/payment-tracker", json={"channel": "group", "product": "Gold", "premium_excl_vat": 50000, "manual_fee_pct": 0.08})
++    assert resp.status_code == 200
++    assert resp.json()["is_manual_fee"] is True
++
++
++def test_payment_tracker_upload_and_update_status(client):
++    df = pd.DataFrame(
++        [
++            {
++                "Source": "Direct Channel",
++                "Policy No.": "P1",
++                "DocNo.": "128-1",
++                "Premium\n( excl VAT)": 100000.0,
++                "Product": "Silver",
++                "HC Fee %": 0.115,
++                "HC Fees": 11500.0,
++                "Total Value": 12075.0,
++            }
++        ]
++    )
++    resp = _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", df)
++    assert resp.status_code == 200
++    rows = resp.json()
++    assert len(rows) == 1
++    entry_id = rows[0]["id"]
++    assert rows[0]["doc_no"] == "128-1"
++
++    resp = client.patch(f"/finance/payment-tracker/{entry_id}", json={"hc_payment_status": "Received", "payment_receive_date": "2026-07-24"})
++    assert resp.status_code == 200
++    assert resp.json()["hc_payment_status"] == "Received"
++
++    resp = client.get("/finance/payment-tracker", params={"hc_payment_status": "Received"})
++    assert resp.status_code == 200
++    assert len(resp.json()) == 1
++
++
++def test_qic_soa_upload_replaces_same_period_and_reconciles_against_tracker(client):
++    tracker_df = pd.DataFrame(
++        [{"Source": "Direct Channel", "Policy No.": "P1", "DocNo.": "128-1", "Invoice amount": 1000.0, "Premium\n( excl VAT)": 1000.0, "Product": "Silver"}]
++    )
++    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
++
++    soa_df = pd.DataFrame([{"Doc No": "128 - 1", "Gross Amount": 1000.0, "AMOUNT": 1000.0, "Dr/Cr": "D", "Insured Name": "Acme"}])
++    resp = _upload(client, "/finance/qic-soa/upload?statement_period=2026-06", "soa.xlsx", soa_df)
++    assert resp.status_code == 200
++    assert len(resp.json()) == 1
++
++    # Re-uploading the same period replaces, not accumulates.
++    resp = _upload(client, "/finance/qic-soa/upload?statement_period=2026-06", "soa.xlsx", soa_df)
++    assert len(resp.json()) == 1
++    resp = client.get("/finance/qic-soa", params={"statement_period": "2026-06"})
++    assert len(resp.json()) == 1
++
++    resp = client.get("/finance/reconciliation/tracker-vs-qic", params={"statement_period": "2026-06"})
++    assert resp.status_code == 200
++    body = resp.json()
++    assert body["matched_count"] == 1
++    assert body["missing_in_qic_count"] == 0
++
++
++def test_employees_recurring_expenses_and_generate(client):
++    resp = client.post("/finance/employees", json={"full_name": "Sheetal", "role_title": "Head of Operations", "monthly_salary": 30000, "currency": "AED"})
++    assert resp.status_code == 200
++
++    resp = client.post("/finance/recurring-expenses", json={"name": "Nivotime", "category": "software", "default_amount": 5000, "expense_type": "fixed"})
++    assert resp.status_code == 200
++
++    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-15"})
++    assert resp.status_code == 200
++    generated = resp.json()
++    assert len(generated) == 2
++    assert {e["period"] for e in generated} == {"2026-08-01"}
++
++    # Calling again for the same period doesn't duplicate.
++    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-01"})
++    assert resp.json() == []
++
++    resp = client.get("/finance/expenses", params={"year": 2026})
++    assert len(resp.json()) == 2
++
++
++def test_cash_flow_and_summary_endpoints(client):
++    tracker_df = pd.DataFrame(
++        [
++            {
++                "Source": "Direct Channel",
++                "Policy No.": "P1",
++                "DocNo.": "128-1",
++                "Premium\n( excl VAT)": 100000.0,
++                "Product": "Silver",
++                "HC Fee %": 0.115,
++                "Total Value": 12075.0,
++                "HC Payment Status": "Received",
++                "Payment Receive Date": pd.Timestamp("2026-03-06"),
++            }
++        ]
++    )
++    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
++
++    resp = client.get("/finance/cash-flow", params={"year": 2026})
++    assert resp.status_code == 200
++    body = resp.json()
++    assert body["total_inflow"] == 12075.0
++
++    resp = client.get("/finance/summary")
++    assert resp.status_code == 200
++    assert resp.json()["total_hc_fees_received"] == 12075.0
+diff --git a/tests/test_finance_cash_flow.py b/tests/test_finance_cash_flow.py
+new file mode 100644
+index 0000000..e5b8eeb
+--- /dev/null
++++ b/tests/test_finance_cash_flow.py
+@@ -0,0 +1,55 @@
++from datetime import date
++
++from app.finance.cash_flow import forecast_expenses, monthly_cash_flow
++
++
++def test_monthly_cash_flow_groups_by_receive_month_and_accumulates():
++    tracker_entries = [
++        {"hc_payment_status": "Received", "payment_receive_date": date(2026, 3, 6), "total_value": 1000.0},
++        {"hc_payment_status": "Received", "payment_receive_date": date(2026, 3, 20), "total_value": 500.0},
++        {"hc_payment_status": "Received", "payment_receive_date": date(2026, 4, 6), "total_value": 200.0},
++        # Not received - excluded
++        {"hc_payment_status": "Outstanding", "payment_receive_date": None, "total_value": 999.0},
++        # Wrong year - excluded
++        {"hc_payment_status": "Received", "payment_receive_date": date(2025, 3, 6), "total_value": 999.0},
++    ]
++    expenses = [
++        {"period": date(2026, 3, 1), "amount": 300.0},
++        {"period": date(2026, 4, 1), "amount": 100.0},
++    ]
++
++    result = monthly_cash_flow(tracker_entries, expenses, 2026)
++
++    by_period = {m["period"]: m for m in result["months"]}
++    assert by_period["2026-03"]["inflow"] == 1500.0
++    assert by_period["2026-03"]["outflow"] == 300.0
++    assert by_period["2026-03"]["net"] == 1200.0
++    assert by_period["2026-04"]["cumulative"] == 1200.0 + (200.0 - 100.0)
++    assert result["total_inflow"] == 1700.0
++    assert result["total_outflow"] == 400.0
++
++
++def test_forecast_expenses_uses_actuals_then_run_rate_and_trailing_average():
++    employees = [{"monthly_salary": 10000.0, "is_active": True}, {"monthly_salary": 5000.0, "is_active": False}]
++    recurring = [
++        {"default_amount": 5000.0, "expense_type": "fixed", "is_active": True},
++        {"default_amount": None, "expense_type": "variable", "is_active": True},
++    ]
++    expenses = [
++        {"period": date(2026, 5, 1), "amount": 200.0, "expense_type": "variable"},
++        {"period": date(2026, 6, 1), "amount": 400.0, "expense_type": "variable"},
++    ]
++
++    result = forecast_expenses(expenses, employees, recurring, year=2026, as_of=date(2026, 7, 5), trailing_months=3)
++
++    by_period = {m["period"]: m for m in result["months"]}
++    # Inactive employee's salary is excluded from the fixed run-rate
++    assert result["assumptions"]["fixed_monthly_run_rate"] == 15000.0
++    # A month with real ExpenseEntry rows reports the actual, not the projection
++    assert by_period["2026-05"]["is_actual"] is True
++    assert by_period["2026-05"]["variable"] == 200.0
++    # A month with no recorded rows projects fixed run-rate + trailing variable avg
++    assert by_period["2026-08"]["is_actual"] is False
++    assert by_period["2026-08"]["fixed"] == 15000.0
++    assert by_period["2026-08"]["variable"] == result["assumptions"]["trailing_variable_monthly_avg"]
++    assert result["assumptions"]["trailing_variable_monthly_avg"] == 300.0  # avg(200, 400)
+diff --git a/tests/test_finance_fee_engine.py b/tests/test_finance_fee_engine.py
+new file mode 100644
+index 0000000..fea6c19
+--- /dev/null
++++ b/tests/test_finance_fee_engine.py
+@@ -0,0 +1,49 @@
++import pytest
++
++from app.finance.fee_engine import FeeRate, compute_hc_fee
++
++RATES = [
++    FeeRate("broker", "bronze_silver", 0.065),
++    FeeRate("broker", "gold_platinum", 0.05),
++    FeeRate("direct", "bronze_silver", 0.115),
++    FeeRate("direct", "gold_platinum", 0.10),
++]
++
++
++def test_direct_silver_matches_rate_card():
++    result = compute_hc_fee("direct", "Silver", 235851.25, RATES)
++    assert result["hc_fee_pct"] == 0.115
++    assert result["hc_fees"] == pytest.approx(27122.89, abs=0.01)
++    assert result["vat_amount"] == pytest.approx(1356.14, abs=0.01)
++    assert result["total_value"] == pytest.approx(28479.03, abs=0.01)
++    assert result["is_manual_fee"] is False
++
++
++def test_broker_gold_platinum_uses_lower_rate():
++    result = compute_hc_fee("broker", "Platinum", 100000, RATES)
++    assert result["hc_fee_pct"] == 0.05
++    assert result["hc_fees"] == 5000.0
++
++
++def test_mixed_tier_product_requires_manual_rate():
++    with pytest.raises(ValueError):
++        compute_hc_fee("broker", "Gold/Bronze", 113975.63, RATES)
++
++    result = compute_hc_fee("broker", "Gold/Bronze", 113975.63, RATES, manual_fee_pct=0.065)
++    assert result["is_manual_fee"] is True
++    assert result["hc_fee_pct"] == 0.065
++    assert result["details"]["rate_source"] == "manual"
++
++
++def test_group_channel_always_requires_manual_rate():
++    with pytest.raises(ValueError):
++        compute_hc_fee("group", "Gold", 50000, RATES)
++
++    result = compute_hc_fee("group", "Gold", 50000, RATES, manual_fee_pct=0.08)
++    assert result["is_manual_fee"] is True
++    assert result["hc_fees"] == 4000.0
++
++
++def test_missing_rate_card_row_raises():
++    with pytest.raises(ValueError):
++        compute_hc_fee("direct", "Silver", 1000, rate_cards=[])
+diff --git a/tests/test_finance_reconciliation.py b/tests/test_finance_reconciliation.py
+new file mode 100644
+index 0000000..5700145
+--- /dev/null
++++ b/tests/test_finance_reconciliation.py
+@@ -0,0 +1,87 @@
++from datetime import date
++
++from app.finance.reconciliation import (
++    compare_qic_soa_periods,
++    reconcile_tracker_received_vs_bank,
++    reconcile_tracker_vs_qic_soa,
++)
++
++
++def test_reconcile_tracker_vs_qic_soa_covers_all_four_outcomes():
++    tracker_entries = [
++        {"id": 1, "doc_no": "128-1", "invoice_amount": 1000.0, "main_policy_holder": "A"},
++        {"id": 2, "doc_no": "128-2", "invoice_amount": 2000.0, "main_policy_holder": "B"},
++        {"id": 3, "doc_no": "128-3", "invoice_amount": 3000.0, "main_policy_holder": "C"},
++    ]
++    qic_lines = [
++        {"id": 10, "doc_no": "128-1", "gross_amount": 1000.0, "insured_name": "A"},  # matched
++        {"id": 11, "doc_no": "128-2", "gross_amount": 2500.0, "insured_name": "B"},  # amount_mismatch
++        # 128-3 missing_in_qic
++        {"id": 12, "doc_no": "128-9", "gross_amount": 500.0, "insured_name": "D"},  # missing_in_tracker
++    ]
++
++    result = reconcile_tracker_vs_qic_soa(tracker_entries, qic_lines, statement_period="2026-06")
++
++    statuses = {row["doc_no"]: row["status"] for row in result["rows"]}
++    assert statuses["128-1"] == "matched"
++    assert statuses["128-2"] == "amount_mismatch"
++    assert statuses["128-3"] == "missing_in_qic"
++    assert statuses["128-9"] == "missing_in_tracker"
++    assert result["matched_count"] == 1
++    assert result["mismatched_count"] == 1
++    assert result["missing_in_qic_count"] == 1
++    assert result["missing_in_tracker_count"] == 1
++
++
++def test_compare_qic_soa_periods_only_reports_differences():
++    lines_a = [
++        {"doc_no": "128-1", "gross_amount": 1000.0},
++        {"doc_no": "128-2", "gross_amount": 2000.0},
++        {"doc_no": "128-3", "gross_amount": 3000.0},
++    ]
++    lines_b = [
++        {"doc_no": "128-1", "gross_amount": 1000.0},  # unchanged - should NOT appear in rows
++        {"doc_no": "128-2", "gross_amount": 2500.0},  # changed
++        {"doc_no": "128-4", "gross_amount": 400.0},  # only_in_b
++        # 128-3 only_in_a
++    ]
++
++    result = compare_qic_soa_periods(lines_a, lines_b, "June", "Recon")
++
++    doc_nos = {row["doc_no"] for row in result["rows"]}
++    assert "128-1" not in doc_nos
++    assert result["changed_count"] == 1
++    assert result["only_in_a_count"] == 1
++    assert result["only_in_b_count"] == 1
++
++
++def test_reconcile_tracker_received_vs_bank_groups_by_date_and_sums():
++    tracker_entries = [
++        {"id": 1, "doc_no": "128-1", "main_policy_holder": "A", "total_value": 1000.0, "hc_payment_status": "Received", "payment_receive_date": date(2026, 7, 24)},
++        {"id": 2, "doc_no": "128-2", "main_policy_holder": "B", "total_value": 2000.0, "hc_payment_status": "Received", "payment_receive_date": date(2026, 7, 24)},
++        # not received - should be ignored entirely
++        {"id": 3, "doc_no": "128-3", "main_policy_holder": "C", "total_value": 500.0, "hc_payment_status": None, "payment_receive_date": None},
++    ]
++    bank_transactions = [
++        {"id": 100, "credit_amount": 3000.0, "txn_date": date(2026, 7, 24)},
++        {"id": 101, "credit_amount": 50000.0, "txn_date": date(2026, 7, 31)},  # unmatched bank credit
++    ]
++
++    result = reconcile_tracker_received_vs_bank(tracker_entries, bank_transactions)
++
++    matched_rows = [r for r in result["rows"] if r["status"] == "matched"]
++    assert {r["tracker_entry_id"] for r in matched_rows} == {1, 2}
++    assert all(r["bank_transaction_id"] == 100 for r in matched_rows)
++    assert result["matched_count"] == 2
++    assert result["unmatched_bank_count"] == 1
++
++
++def test_reconcile_tracker_received_vs_bank_no_match_within_tolerance():
++    tracker_entries = [
++        {"id": 1, "doc_no": "128-1", "main_policy_holder": "A", "total_value": 1000.0, "hc_payment_status": "Received", "payment_receive_date": date(2026, 7, 24)},
++    ]
++    bank_transactions = [{"id": 100, "credit_amount": 5000.0, "txn_date": date(2026, 7, 24)}]
++
++    result = reconcile_tracker_received_vs_bank(tracker_entries, bank_transactions)
++    assert result["rows"][0]["status"] == "no_bank_match"
++    assert result["unmatched_bank_count"] == 1
+diff --git a/tests/test_ingestion_bank_statement.py b/tests/test_ingestion_bank_statement.py
+new file mode 100644
+index 0000000..49c3995
+--- /dev/null
++++ b/tests/test_ingestion_bank_statement.py
+@@ -0,0 +1,50 @@
++import io
++
++import pandas as pd
++import pytest
++
++from app.ingestion.bank_statement import parse_bank_statement
++
++
++def _statement_bytes() -> io.BytesIO:
++    rows = [
++        [None] * 7,
++        ["Account transactions Statement Report", None, None, None, None, None, None],
++        [None] * 7,
++        ["Account Holder Name", "HEALTH CROSS GROUP FZCO", None, None, None, None, None],
++        ["Account Number", "019101729732", None, None, None, None, None],
++        ["Account Currency", "AED", None, None, None, None, None],
++        [None] * 7,
++        ["Date", "Value Date", "Reference Number", "Description", "Credit", "Debit", "Balance"],
++        ["01 Jul 2026", "01 Jul 2026", "REF1", "IPP TRANSFER - SOFTWARE FEE", "", "-175.00", "422,583.19"],
++        ["24 Jul 2026", "24 Jul 2026", "REF2", "Inward Remittance QATAR INSURANCE CO.", "297,313.93", "", "717,128.56"],
++    ]
++    df = pd.DataFrame(rows)
++    buf = io.BytesIO()
++    df.to_excel(buf, index=False, header=False)
++    buf.seek(0)
++    return buf
++
++
++def test_parse_bank_statement_locates_header_below_metadata_block():
++    records = parse_bank_statement(_statement_bytes(), "statement.xlsx")
++    assert len(records) == 2
++    assert records[0]["account_number"] == "019101729732"
++    assert records[0]["currency"] == "AED"
++    assert records[0]["debit_amount"] == 175.0
++    assert records[0]["credit_amount"] == 0.0
++    assert records[0]["balance"] == pytest.approx(422583.19)
++
++    qic_row = records[1]
++    assert qic_row["credit_amount"] == pytest.approx(297313.93)
++    assert qic_row["debit_amount"] == 0.0
++    assert qic_row["txn_date"].isoformat() == "2026-07-24"
++
++
++def test_parse_bank_statement_raises_when_header_not_found():
++    df = pd.DataFrame([["not", "a", "statement"]])
++    buf = io.BytesIO()
++    df.to_excel(buf, index=False, header=False)
++    buf.seek(0)
++    with pytest.raises(ValueError):
++        parse_bank_statement(buf, "statement.xlsx")
+diff --git a/tests/test_ingestion_payment_tracker.py b/tests/test_ingestion_payment_tracker.py
+new file mode 100644
+index 0000000..d64f95a
+--- /dev/null
++++ b/tests/test_ingestion_payment_tracker.py
+@@ -0,0 +1,83 @@
++import io
++
++import pandas as pd
++
++from app.ingestion.payment_tracker import parse_payment_tracker
++
++
++def _xlsx(df: pd.DataFrame) -> io.BytesIO:
++    buf = io.BytesIO()
++    df.to_excel(buf, index=False)
++    buf.seek(0)
++    return buf
++
++
++def test_parse_payment_tracker_numeric_fee_and_channel_inference():
++    df = pd.DataFrame(
++        [
++            {
++                "Source": "Direct Channel",
++                "Policy No.": "P123",
++                "DocNo.": "128-11111",
++                "Client  Code": 12345,
++                "Premium\n( excl VAT)": 100000.0,
++                "Client premium Amount\n( excl tax)": 100000.0,
++                "Product": "Silver",
++                "HC Fee %": 0.115,
++                "HC Fees": 11500.0,
++                "VAT 5%": 575.0,
++                "Total Value": 12075.0,
++                "HC Payment Status": "Received",
++                "Payment Receive Date": pd.Timestamp("2026-04-06"),
++            }
++        ]
++    )
++    records = parse_payment_tracker(_xlsx(df), "tracker.xlsx")
++    assert len(records) == 1
++    row = records[0]
++    assert row["channel"] == "direct"
++    assert row["doc_no"] == "128-11111"
++    assert row["is_manual_fee"] is False
++    assert row["hc_fee_pct"] == 0.115
++    assert row["hc_fees"] == 11500.0
++    assert row["payment_receive_date"].isoformat() == "2026-04-06"
++    assert row["payment_receive_note"] is None
++
++
++def test_parse_payment_tracker_manual_calc_fee_and_broker_channel():
++    df = pd.DataFrame(
++        [
++            {
++                "Source": "Some Broker LLC",
++                "Policy No.": "P456",
++                "DocNo.": "128 - 22222",
++                "Premium\n( excl VAT)": 50000.0,
++                "Product": "Gold/Bronze",
++                "HC Fee %": "manual calc",
++                "HC Fees": 2500.0,
++                "HC Payment Status": "",
++                "Payment Receive Date": "Oct'25",
++            }
++        ]
++    )
++    records = parse_payment_tracker(_xlsx(df), "tracker.xlsx")
++    row = records[0]
++    assert row["channel"] == "broker"
++    # Spaced doc no from the source sheet normalizes the same as an
++    # unspaced one so it can join against a QIC SOA export.
++    assert row["doc_no"] == "128-22222"
++    assert row["is_manual_fee"] is True
++    assert row["hc_fee_pct"] is None
++    assert row["payment_receive_date"] is None
++    assert row["payment_receive_note"] == "Oct'25"
++
++
++def test_parse_payment_tracker_skips_blank_rows():
++    df = pd.DataFrame(
++        [
++            {"Source": "Direct Channel", "Policy No.": "P1", "DocNo.": "128-1", "Premium\n( excl VAT)": 1000.0, "Product": "Silver"},
++            {"Source": None, "Policy No.": None, "DocNo.": None, "Premium\n( excl VAT)": None, "Product": None},
++        ]
++    )
++    records = parse_payment_tracker(_xlsx(df), "tracker.xlsx")
++    assert len(records) == 1
+diff --git a/tests/test_ingestion_qic_soa.py b/tests/test_ingestion_qic_soa.py
+new file mode 100644
+index 0000000..ecc6a7d
+--- /dev/null
++++ b/tests/test_ingestion_qic_soa.py
+@@ -0,0 +1,73 @@
++import io
++
++import pandas as pd
++
++from app.ingestion.qic_soa import parse_qic_soa
++
++
++def _xlsx(df: pd.DataFrame) -> io.BytesIO:
++    buf = io.BytesIO()
++    df.to_excel(buf, index=False)
++    buf.seek(0)
++    return buf
++
++
++def test_parse_qic_soa_debit_credit_columns_shape():
++    df = pd.DataFrame(
++        [
++            {
++                "Doc No": "128 - 173361",
++                "Tran Code": "128",
++                "Doc Dt": "17-APR-2026",
++                "Tran Type": "Premium",
++                "Doc Due Date": "07/05/2026",
++                "Policy No": "P1",
++                "Insured Name": "Acme LLC",
++                "Currency": "AED",
++                "Debit LC": 50434.5,
++                "Credit LC": 0,
++                "Dr/Cr": "D",
++                "Gross Amount": 50434.5,
++                "Cust Group Name": "DIRECT",
++            }
++        ]
++    )
++    records = parse_qic_soa(_xlsx(df), "soa.xlsx")
++    assert len(records) == 1
++    row = records[0]
++    assert row["doc_no"] == "128-173361"
++    assert row["debit_amount"] == 50434.5
++    assert row["credit_amount"] == 0.0
++    assert row["doc_date"].isoformat() == "2026-04-17"
++    # dd/mm/yyyy - due date is after doc date, not before
++    assert row["doc_due_date"].isoformat() == "2026-05-07"
++
++
++def test_parse_qic_soa_signed_amount_shape():
++    df = pd.DataFrame(
++        [
++            {
++                "Doc No": "228 - 93037",
++                "Tran Code": 228,
++                "Doc Dt": "29-MAY-2025",
++                "Tran Type": "Cancellation- followup",
++                "Policy No": "P2",
++                "Insured Name": "Beta LLC",
++                "Currency": "AED",
++                "AMOUNT": -726436.2,
++                "Dr/Cr": "C",
++                "Gross Amount": 726436.2,
++            }
++        ]
++    )
++    records = parse_qic_soa(_xlsx(df), "soa.xlsx")
++    row = records[0]
++    assert row["doc_no"] == "228-93037"
++    assert row["debit_amount"] == 0.0
++    assert row["credit_amount"] == 726436.2
++
++
++def test_parse_qic_soa_skips_rows_without_doc_no():
++    df = pd.DataFrame([{"Doc No": None, "AMOUNT": 100, "Dr/Cr": "D"}])
++    records = parse_qic_soa(_xlsx(df), "soa.xlsx")
++    assert records == []
+-- 
+2.43.0
+
