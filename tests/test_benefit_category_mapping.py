@@ -290,3 +290,46 @@ def test_healthcross_global_maternity_coinsurance_combines_inpatient_and_outpati
 def test_healthcross_global_maternity_coinsurance_returns_none_without_those_rows():
     rows = [{"section": "", "label": "Something else", "value": "Covered", "note": ""}]
     assert healthcross_global_maternity_coinsurance_from_rows(rows) is None
+
+
+def test_orient_aggregate_annual_limit_maps_despite_reversed_word_order():
+    # Orient's own label reverses the usual word order ("Aggregate Annual
+    # Limit" rather than "Annual Aggregate Limit").
+    assert map_label_to_category("", "Aggregate Annual Limit") == "Annual/Indemnity Maximum"
+
+
+def test_orient_territorial_scope_of_coverage_maps_to_area_of_cover():
+    assert map_label_to_category("", "Territorial Scope of Coverage") == "Area of Cover"
+
+
+def test_orient_claims_settlement_reimbursement_clause_does_not_win_area_of_cover():
+    # A real Orient document also has an unrelated claims-settlement row
+    # whose label coincidentally contains "area of coverage" too - the
+    # real Territorial Scope of Coverage row (earlier in the document)
+    # must win the category, not this one.
+    rows = [
+        {"section": "Category A", "label": "Territorial Scope of Coverage", "value": "Worldwide", "note": ""},
+        {
+            "section": "Claims Settlement Out-Patient:",
+            "label": "2. Area of coverage as per Territorial Scope / Outside the Network - Reimbursement basis only",
+            "value": "80% of actual costs or 80% of the UCR as per UAE network tariffs for same or similar treatment whichever is less",
+            "note": "",
+        },
+    ]
+    summary = build_standard_summary_from_rows(rows)
+    assert summary["area_of_cover"] == "Worldwide"
+
+
+def test_orient_deductible_per_consultation_maps_to_outpatient_coinsurance_deductible():
+    assert map_label_to_category("", "Deductible per Consultation") == "Outpatient Co-insurance/Deductible"
+
+
+def test_build_standard_summary_populates_both_coinsurance_and_deductible_fields():
+    # CATEGORY_TO_STANDARD_FIELD is a strict one-to-one mapping, but
+    # "Outpatient Co-insurance/Deductible" must feed both the `coinsurance`
+    # and the separate `deductible` standard field (app/scoring/rules/
+    # benefits_summary.py's STANDARD_FIELDS).
+    rows = [{"section": "Category A", "label": "Deductible per Consultation", "value": "20% max 50", "note": ""}]
+    summary = build_standard_summary_from_rows(rows)
+    assert summary["coinsurance"] == "20% max 50"
+    assert summary["deductible"] == "20% max 50"

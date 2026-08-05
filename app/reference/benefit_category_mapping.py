@@ -31,6 +31,10 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": [
             "annual maximum", "indemnity limit", "overall annual", "plan annual maximum", "sum insured",
             "annual aggregate limit", "annual policy limit", "annual benefit limit",
+            # Orient's own wording reverses the usual word order ("Aggregate
+            # Annual Limit" rather than "Annual Aggregate Limit") - the
+            # keyword above doesn't catch it as a substring at all.
+            "aggregate annual limit",
         ],
     },
     "Area of Cover": {
@@ -38,6 +42,16 @@ CATEGORIES: Dict[str, Dict] = {
         "keywords": [
             "area of cover", "geographical cover", "territory for elective", "geographical scope",
             "basic territory", "area of coverage", "territorial limit",
+            # Orient's own label - checked ahead of the generic "area of
+            # coverage" keyword's own document-order priority doesn't
+            # matter here (both are in the same category), but this phrase
+            # is what the real row states; a DIFFERENT, unrelated row (a
+            # claims-settlement reimbursement clause: "Area of coverage as
+            # per Territorial Scope / Outside the Network...") coincidentally
+            # also contains "area of coverage" and would otherwise win this
+            # category first, since it's a plain substring match with no
+            # awareness of which row is the real coverage-area statement.
+            "territorial scope of coverage",
         ],
     },
     "Pre-existing & Chronic Conditions": {
@@ -144,6 +158,11 @@ CATEGORIES: Dict[str, Dict] = {
             # as the co-payment figure rather than the service's own
             # coverage/limit, which belongs to Diagnostics instead.
             "-copay",
+            # Orient's own per-visit deductible/co-pay row ("Deductible per
+            # Consultation ... 20% max 50") - feeds both `coinsurance` and
+            # `deductible` on the standard summary, see
+            # build_standard_summary_from_rows below.
+            "deductible per consultation",
         ],
     },
     "Antenatal Care": {
@@ -711,11 +730,19 @@ def build_standard_summary_from_rows(rows: List[Dict[str, str]]) -> Dict[str, st
     ):
         category_values["Maternity Co-insurance"] = "NIL"
 
-    return {
+    summary = {
         field: category_values[category_name]
         for category_name, field in CATEGORY_TO_STANDARD_FIELD.items()
         if category_name in category_values
     }
+    # "Outpatient Co-insurance/Deductible" feeds both `coinsurance` and the
+    # standard summary's separate `deductible` field (app/scoring/rules/
+    # benefits_summary.py's STANDARD_FIELDS) - CATEGORY_TO_STANDARD_FIELD
+    # above is a strict one-to-one mapping, so this one category needs its
+    # second field added explicitly rather than through that table.
+    if "Outpatient Co-insurance/Deductible" in category_values:
+        summary.setdefault("deductible", category_values["Outpatient Co-insurance/Deductible"])
+    return summary
 
 
 _FIRST_AMOUNT_RE = re.compile(r"[\d,]+(?:\.\d+)?")
