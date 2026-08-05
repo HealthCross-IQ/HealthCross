@@ -335,6 +335,8 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "actual_vs_standard_pct": None,
             "earned_member_years": 1.0,
             "burning_cost": 0.0,
+            "policy_start_date": None,
+            "network": "MSH Regular",
         }
     ]
 
@@ -574,6 +576,55 @@ def test_summarize_portfolio_by_policy_year_separates_renewal_cohorts():
     assert by_year["2025"]["actual_claims"] == 1000.0
     assert by_year["2026"]["member_count"] == 1
     assert by_year["2026"]["actual_claims"] == 4000.0
+
+
+def test_analyze_portfolio_member_exposes_category_and_policy_start_date():
+    result = analyze_portfolio_member(
+        _member(category="Category A", policy_start_date=date(2026, 5, 1), policy_end_date=date(2027, 4, 30)),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
+    )
+    assert result["category"] == "Category A"
+    assert result["policy_start_date"] == date(2026, 5, 1)
+
+
+def test_summarize_portfolio_by_category_separates_benefit_tiers():
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", category="Category A"),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {"M1": [{"date_of_treatment": None, "final_amount": 1000.0}]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", category="Category B"),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {"M2": [{"date_of_treatment": None, "final_amount": 3000.0}]},
+        ),
+    ]
+    by_category = {r["category"]: r for r in summarize_portfolio(results, "category")}
+    assert by_category["Category A"]["actual_claims"] == 1000.0
+    assert by_category["Category B"]["actual_claims"] == 3000.0
+
+
+def test_summarize_portfolio_rows_carry_their_own_product_network_and_policy_start_date():
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", category="Category A", policy_start_date=date(2026, 1, 1), policy_end_date=date(2026, 12, 31)),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
+        ),
+    ]
+    by_category = {r["category"]: r for r in summarize_portfolio(results, "category")}
+    row = by_category["Category A"]
+    assert row["product"] == "Bronze"
+    assert row["network"] == "MSH Regular"
+    assert row["policy_start_date"] == "2026-01-01"
+
+
+def test_summarize_portfolio_grouping_by_product_does_not_clobber_the_group_key_with_the_representative_field():
+    # "product" is both the group-by key AND (for other dimensions) a
+    # representative extra field - grouping BY product must still show the
+    # real Bronze/Gold key, not have it silently overwritten.
+    results = [analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {})]
+    rows = summarize_portfolio(results, "product")
+    assert rows[0]["product"] == "Bronze"
+    assert "network" in rows[0]
 
 
 def test_age_bands_from_rate_cards_returns_distinct_sorted_bands():

@@ -171,6 +171,7 @@ def _member_dicts(db: Session) -> List[dict]:
             "master_contract": m.master_contract,
             "master_client_name": m.master_client_name,
             "product_name": m.product_name,
+            "category": m.category,
             "network_type_raw": m.network_type_raw,
             "age": m.age,
             "gender": m.gender,
@@ -193,7 +194,7 @@ def _member_dicts(db: Session) -> List[dict]:
 #: known after pricing/network resolution) that can be filtered on directly
 #: - e.g. product=Gold AND network=... to stack more than one filter at
 #: once, unlike group_by which only picks what's shown in rows.
-_FILTERABLE_RESULT_FIELDS = ("product", "network", "region", "nationality_zone", "gender", "relation", "master_client")
+_FILTERABLE_RESULT_FIELDS = ("product", "network", "region", "nationality_zone", "gender", "relation", "category", "master_client")
 
 
 def _run_analysis(
@@ -263,6 +264,7 @@ def _result_filters(
     nationality_zone: Optional[str] = Query(None, description="Restrict to one nationality zone"),
     gender: Optional[str] = Query(None, description="Restrict to one gender"),
     relation: Optional[str] = Query(None, description="Restrict to one relation (employee/spouse/child)"),
+    category: Optional[str] = Query(None, description="Restrict to one benefit category (e.g. 'Category A')"),
     master_client: Optional[str] = Query(
         None,
         description=(
@@ -278,6 +280,7 @@ def _result_filters(
         "nationality_zone": nationality_zone,
         "gender": gender,
         "relation": relation,
+        "category": category,
         "master_client": master_client,
     }
 
@@ -376,6 +379,11 @@ def portfolio_insights(
         "by_relation": _summary("relation"),
         "by_gender": _summary("gender"),
         "by_policy_year": _summary("policy_year"),
+        "by_category": _summary("category"),
+        # "client" groups by the member's own subgroup/contract - shown as
+        # "by subgroup" here since that's what it means once a single
+        # master_client has been picked (its own subgroups broken out).
+        "by_subgroup": _summary("client"),
         "by_age_gender": summarize_burning_cost_by_age_gender(results, rate_cards),
     }
 

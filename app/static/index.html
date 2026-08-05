@@ -109,20 +109,67 @@
   }
   .case-group-heading:first-child { margin-top: 2px; }
   .case-item {
-    text-align: left;
-    background: none;
+    display: flex;
+    align-items: center;
+    gap: 2px;
     border: 1px solid transparent;
     border-radius: 8px;
-    padding: 9px 10px;
-    cursor: pointer;
-    font-size: 13px;
-    color: var(--ink);
+    padding: 2px;
     transition: background 0.1s ease;
   }
   .case-item:hover { background: var(--surface-2); }
   .case-item.active { background: var(--surface-2); border-color: var(--border); }
-  .case-item .company { font-weight: 600; display: block; }
-  .case-item .meta { color: var(--ink-muted); font-size: 11.5px; }
+  .case-item-main {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 7px 8px;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ink);
+  }
+  .case-item-main .company { font-weight: 600; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .case-item-main .meta { color: var(--ink-muted); font-size: 11.5px; }
+  .case-item-delete {
+    flex-shrink: 0;
+    background: none;
+    border: none;
+    color: var(--ink-muted);
+    font-size: 15px;
+    line-height: 1;
+    padding: 4px 7px;
+    cursor: pointer;
+    border-radius: 6px;
+    opacity: 0;
+    transition: opacity 0.1s ease;
+  }
+  .case-item:hover .case-item-delete { opacity: 1; }
+  .case-item-delete:hover { color: var(--critical); background: var(--surface); }
+
+  .case-filters { display: flex; flex-direction: column; gap: 5px; }
+  .case-filters input, .case-filters select {
+    font-size: 12px;
+    padding: 5px 7px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--ink);
+    width: 100%;
+  }
+  .case-filters .case-filter-dates { display: flex; gap: 5px; }
+  .case-filters .case-filter-dates input { min-width: 0; }
+  .case-filters-clear {
+    align-self: flex-start;
+    font-size: 11px;
+    color: var(--accent);
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+  }
 
   button, .btn {
     font: inherit;
@@ -284,6 +331,27 @@
     <button onclick="showPortfolioAnalysis()">Portfolio Analysis</button>
     <button onclick="showPortfolioInsights()">Portfolio Insights</button>
     <h2>Cases</h2>
+    <div class="case-filters">
+      <input type="text" id="caseFilterSearch" placeholder="Search company or broker" oninput="renderCaseList()">
+      <select id="caseFilterStatus" onchange="renderCaseList()">
+        <option value="">All statuses</option>
+        <option value="submitted">Submitted</option>
+        <option value="scored">Scored</option>
+        <option value="bound">Bound</option>
+        <option value="declined">Declined</option>
+        <option value="lapsed">Lapsed</option>
+      </select>
+      <select id="caseFilterBusinessType" onchange="renderCaseList()">
+        <option value="">New + renewal</option>
+        <option value="new">New business</option>
+        <option value="existing">Renewal</option>
+      </select>
+      <div class="case-filter-dates">
+        <input type="date" id="caseFilterRenewalFrom" title="Renewal date from" onchange="renderCaseList()">
+        <input type="date" id="caseFilterRenewalTo" title="Renewal date to" onchange="renderCaseList()">
+      </div>
+      <button type="button" class="case-filters-clear" onclick="clearCaseFilters()">Clear filters</button>
+    </div>
     <div class="case-list" id="caseList"></div>
   </aside>
 
@@ -318,6 +386,7 @@ async function api(path, options) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || (`Request failed (${res.status})`));
   }
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -446,20 +515,74 @@ function svgScoreMeter(score, tier) {
 
 function _caseItemHtml(c) {
   return `
-    <button class="case-item ${currentCase && currentCase.id === c.id ? 'active' : ''}" onclick="selectCase(${c.id})">
-      <span class="company">${escapeHtml(c.company_name)}</span>
-      <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
-    </button>
+    <div class="case-item ${currentCase && currentCase.id === c.id ? 'active' : ''}">
+      <button type="button" class="case-item-main" onclick="selectCase(${c.id})">
+        <span class="company">${escapeHtml(c.company_name)}</span>
+        <span class="meta">${escapeHtml(c.broker_name)} &middot; ${c.status}</span>
+      </button>
+      <button type="button" class="case-item-delete" title="Delete case" data-id="${c.id}" data-company="${escapeHtml(c.company_name)}" onclick="event.stopPropagation(); deleteCase(Number(this.dataset.id), this.dataset.company)">&times;</button>
+    </div>
   `;
 }
 
+async function deleteCase(id, companyName) {
+  if (!confirm(`Delete case "${companyName}"? This removes all its census, benefits, claims, and scorecard data - this cannot be undone.`)) return;
+  try {
+    await api(`/cases/${id}`, { method: 'DELETE' });
+    if (currentCase && currentCase.id === id) {
+      currentCase = null;
+      document.getElementById('main').innerHTML = '';
+    }
+    await loadCases();
+    toast('Case deleted');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+let allCases = [];
+
 async function loadCases() {
-  const cases = await api('/cases');
+  allCases = await api('/cases');
+  renderCaseList();
+}
+
+function clearCaseFilters() {
+  document.getElementById('caseFilterSearch').value = '';
+  document.getElementById('caseFilterStatus').value = '';
+  document.getElementById('caseFilterBusinessType').value = '';
+  document.getElementById('caseFilterRenewalFrom').value = '';
+  document.getElementById('caseFilterRenewalTo').value = '';
+  renderCaseList();
+}
+
+function renderCaseList() {
   const list = document.getElementById('caseList');
-  if (cases.length === 0) {
+  if (allCases.length === 0) {
     list.innerHTML = '<div class="empty-state" style="padding:8px 0;">No cases yet</div>';
     return;
   }
+
+  const search = (document.getElementById('caseFilterSearch').value || '').trim().toLowerCase();
+  const status = document.getElementById('caseFilterStatus').value;
+  const businessType = document.getElementById('caseFilterBusinessType').value;
+  const renewalFrom = document.getElementById('caseFilterRenewalFrom').value;
+  const renewalTo = document.getElementById('caseFilterRenewalTo').value;
+
+  const cases = allCases.filter(c => {
+    if (search && !`${c.company_name} ${c.broker_name}`.toLowerCase().includes(search)) return false;
+    if (status && c.status !== status) return false;
+    if (businessType && (c.business_type || 'new') !== businessType) return false;
+    if (renewalFrom && (!c.renewal_date || c.renewal_date < renewalFrom)) return false;
+    if (renewalTo && (!c.renewal_date || c.renewal_date > renewalTo)) return false;
+    return true;
+  });
+
+  if (cases.length === 0) {
+    list.innerHTML = '<div class="empty-state" style="padding:8px 0;">No cases match these filters</div>';
+    return;
+  }
+
   const renewals = cases.filter(c => c.business_type === 'existing');
   const newBusiness = cases.filter(c => c.business_type !== 'existing');
   list.innerHTML = `
@@ -3021,8 +3144,9 @@ async function piLoadAndRender() {
     if (piSelectedMasterClient) params.set('master_client', piSelectedMasterClient);
     const insights = await api(`/portfolio-analysis/insights?${params.toString()}`);
     const { by_product: byProduct, by_network: byNetwork, by_nationality_zone: byNationality,
-      by_relation: byRelation, by_gender: byGender, by_policy_year: byPolicyYear, by_age_gender: ageGender } = insights;
-    content.innerHTML = piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, ageGender });
+      by_relation: byRelation, by_gender: byGender, by_policy_year: byPolicyYear,
+      by_category: byCategory, by_subgroup: bySubgroup, by_age_gender: ageGender } = insights;
+    content.innerHTML = piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, byCategory, bySubgroup, ageGender });
     content.querySelectorAll('.chart-svg').forEach(svg => bindChartTooltips(svg.parentElement));
   } catch (err) {
     content.innerHTML = `<div class="card"><div class="hint">${escapeHtml(err.message)}</div></div>`;
@@ -3034,11 +3158,20 @@ function piProportionItems(rows, groupByField) {
   return rows.map(r => ({ label: String(r[groupByField]), count: r.member_count, pct: r.member_count / total }));
 }
 
-function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, ageGender }) {
+function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGender, byPolicyYear, byCategory, bySubgroup, ageGender }) {
   const lossRatioItems = byProduct.rows.map(r => ({
     label: String(r.product), value: r.loss_ratio_vs_actual != null ? r.loss_ratio_vs_actual * 100 : 0,
   }));
   const burningCostItems = byNetwork.rows.map(r => ({ label: String(r.network), value: r.burning_cost || 0 }));
+  const categoryLossRatioItems = byCategory.rows.map(r => ({
+    label: String(r.category), value: r.loss_ratio_vs_actual != null ? r.loss_ratio_vs_actual * 100 : 0,
+  }));
+
+  const subgroupRows = [...bySubgroup.rows].sort((a, b) => String(a.client).localeCompare(String(b.client)));
+  const distinct = field => [...new Set(subgroupRows.map(r => r[field]).filter(Boolean))];
+  const distinctProducts = distinct('product');
+  const distinctNetworks = distinct('network');
+  const distinctStartDates = distinct('policy_start_date');
 
   const maleAgeItems = ageGender.filter(r => r.gender === 'M').map(r => ({ label: r.age_band, value: r.member_count }));
   const femaleAgeItems = ageGender.filter(r => r.gender === 'F').map(r => ({ label: r.age_band, value: r.member_count }));
@@ -3058,6 +3191,43 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
         <div class="kpi"><span class="label">Unrecognized network</span><span class="value">${byProduct.unmapped_network_member_count.toLocaleString()}</span></div>
       </div>
     </div>
+
+    ${piSelectedMasterClient ? `
+      <div class="card">
+        <h3>Policy summary</h3>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">Policy start date</span><span class="value">${distinctStartDates.length ? escapeHtml(distinctStartDates.join(', ')) : '-'}</span></div>
+          <div class="kpi"><span class="label">Product</span><span class="value">${distinctProducts.length ? escapeHtml(distinctProducts.join(', ')) : '-'}</span></div>
+          <div class="kpi"><span class="label">Network</span><span class="value">${distinctNetworks.length ? escapeHtml(distinctNetworks.join(', ')) : '-'}</span></div>
+          <div class="kpi"><span class="label">Subgroups</span><span class="value">${subgroupRows.length.toLocaleString()}</span></div>
+        </div>
+      </div>
+    ` : ''}
+
+    ${piSelectedMasterClient && subgroupRows.length > 1 ? `
+      <div class="card">
+        <h3>Loss ratio (actual) by subgroup</h3>
+        <div class="hint">This master policy combines ${subgroupRows.length} subgroups - broken out here so a subgroup running hot doesn't get hidden inside the combined master-level figure above.</div>
+        <table>
+          <tr><th>Subgroup</th><th>Product</th><th>Network</th><th>Policy start date</th><th>Members</th><th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Actual claims</th><th>Loss ratio (actual)</th><th>Burning cost</th></tr>
+          ${subgroupRows.map(r => `
+            <tr>
+              <td>${escapeHtml(String(r.client))}</td>
+              <td>${escapeHtml(r.product || '-')}</td>
+              <td>${escapeHtml(r.network || '-')}</td>
+              <td>${escapeHtml(r.policy_start_date || '-')}</td>
+              <td>${r.member_count.toLocaleString()}</td>
+              <td>${r.actual_premium.toLocaleString()}</td>
+              <td>${(r.actual_claims_paid || 0).toLocaleString()}</td>
+              <td>${(r.actual_claims_outstanding || 0).toLocaleString()}</td>
+              <td>${r.actual_claims.toLocaleString()}</td>
+              <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+              <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+            </tr>
+          `).join('')}
+        </table>
+      </div>
+    ` : ''}
 
     <div class="card">
       <h3>Production report by policy year</h3>
@@ -3082,6 +3252,12 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
     <div class="card">
       <h3>Loss ratio (actual) by Product</h3>
       ${lossRatioItems.length ? svgBarChart(lossRatioItems, { formatValue: v => v.toFixed(1) + '%' }) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Loss ratio (actual) by Category</h3>
+      <div class="hint">The member's own benefit category (e.g. Category A/B/C) - a separate dimension from Product/Network, useful when one scheme prices several tiers differently.</div>
+      ${categoryLossRatioItems.length ? svgBarChart(categoryLossRatioItems, { formatValue: v => v.toFixed(1) + '%', color: 'var(--series-4)' }) : '<div class="hint">No data.</div>'}
     </div>
 
     <div class="card">

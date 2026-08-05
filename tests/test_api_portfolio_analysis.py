@@ -509,11 +509,20 @@ def test_insights_endpoint_returns_every_breakdown_from_one_call(client, members
     assert resp.status_code == 200
     data = resp.json()
     assert set(data.keys()) == {
-        "by_product", "by_network", "by_nationality_zone", "by_relation", "by_gender", "by_policy_year", "by_age_gender",
+        "by_product", "by_network", "by_nationality_zone", "by_relation", "by_gender", "by_policy_year",
+        "by_category", "by_subgroup", "by_age_gender",
     }
     assert data["by_product"]["group_by"] == "product"
     assert data["by_product"]["total_members"] == data["by_network"]["total_members"]
     assert any(r["age_band"] == "18-40" and r["gender"] == "M" for r in data["by_age_gender"])
+
+    assert data["by_category"]["group_by"] == "category"
+    assert data["by_category"]["rows"][0]["category"] == "QIC/HC/BR/ACM/DXB/A"
+    assert data["by_category"]["rows"][0]["network"] == "MSH Platinum"
+
+    assert data["by_subgroup"]["group_by"] == "client"
+    assert data["by_subgroup"]["rows"][0]["client"] == "Acme Sub LLC"
+    assert data["by_subgroup"]["rows"][0]["policy_start_date"] == "2025-01-01"
 
 
 def test_insights_endpoint_respects_the_master_client_filter(client, members_two_policy_years_xlsx, rate_card_xlsx):

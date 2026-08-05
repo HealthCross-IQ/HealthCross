@@ -239,12 +239,17 @@ def analyze_portfolio_member(
         "gender": member.get("gender"),
         "relation": member.get("relation"),
         "age": member.get("age"),
+        # The member's own benefit category (e.g. Category A/B/C) - a
+        # separate dimension from Product/Network, letting loss ratio be
+        # seen by benefit tier within a scheme.
+        "category": member.get("category"),
         # The calendar year a member's own policy period started in - a
         # client that's already renewed will have some members on last
         # year's policy and some on this year's within the same upload;
         # this is what lets those cohorts be told apart (group_by or the
         # policy_year filter in _run_analysis).
         "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
+        "policy_start_date": member.get("policy_start_date"),
         "standard_premium": round(standard_premium, 2) if standard_premium is not None else None,
         "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
         "actual_claims": round(claims_breakdown["total"], 2),
@@ -271,13 +276,16 @@ def group_claims_by_beneficiary(claims: List[dict]) -> Dict[str, List[dict]]:
     return dict(grouped)
 
 
-_GROUP_BY_FIELDS = {"product", "network", "region", "nationality_zone", "client", "master_client", "gender", "relation", "policy_year"}
+_GROUP_BY_FIELDS = {
+    "product", "network", "region", "nationality_zone", "client", "master_client",
+    "gender", "relation", "policy_year", "category",
+}
 
 
 def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]:
     """Rolls up analyze_portfolio_member's per-member results by one
     dimension (product/network/region/nationality_zone/client/gender/
-    relation) - members outside the rate card's scope are excluded
+    relation/category) - members outside the rate card's scope are excluded
     entirely (see analyze_portfolio_member), and a member missing that
     dimension's own value (e.g. no Product mapping yet) rolls up under
     "Unmapped" rather than being dropped silently. "client" groups by the
@@ -285,6 +293,14 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
     contract. "gender"/"relation" (employee/spouse/child) let pricing see
     burning cost by demographic segment, not just Product/Network-wide -
     e.g. spouse burning cost typically running well above employee's.
+    "category" is the member's own benefit category (e.g. Category A/B/C),
+    a separate dimension from Product/Network.
+
+    Each row also carries the group's own Product, Network, and policy
+    start date (the first non-null value seen in that group) - a real
+    subgroup or category is normally homogeneous on these, so this lets a
+    "by subgroup" or "by category" table show what it's actually priced
+    on without a separate lookup, even when grouping by something else.
     """
     if group_by not in _GROUP_BY_FIELDS:
         raise ValueError(f"group_by must be one of {sorted(_GROUP_BY_FIELDS)}")
@@ -299,6 +315,9 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
             "earned_member_years": 0.0,
+            "product": None,
+            "network": None,
+            "policy_start_date": None,
         }
     )
     for r in member_results:
@@ -316,6 +335,12 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         if r.get("standard_premium") is not None:
             bucket["standard_premium"] += r["standard_premium"]
             bucket["priced_member_count"] += 1
+        if bucket["product"] is None and r.get("product"):
+            bucket["product"] = r["product"]
+        if bucket["network"] is None and r.get("network"):
+            bucket["network"] = r["network"]
+        if bucket["policy_start_date"] is None and r.get("policy_start_date"):
+            bucket["policy_start_date"] = r["policy_start_date"]
 
     rows = []
     for key, bucket in buckets.items():
@@ -349,8 +374,17 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 # use to set a required premium independent of what was
                 # actually charged, unlike the premium-relative loss ratios above.
                 "burning_cost": round(actual_claims / earned_member_years, 2) if earned_member_years else None,
+                "policy_start_date": bucket["policy_start_date"].isoformat() if bucket["policy_start_date"] else None,
             }
         )
+        # Only added when they're not the group-by dimension itself, since
+        # otherwise this representative value would silently overwrite the
+        # actual group key above (e.g. group_by="product" would have its
+        # real "Bronze"/"Gold" key clobbered by this representative field).
+        if group_by != "product":
+            rows[-1]["product"] = bucket["product"]
+        if group_by != "network":
+            rows[-1]["network"] = bucket["network"]
     rows.sort(key=lambda r: r[group_by])
     return rows
 

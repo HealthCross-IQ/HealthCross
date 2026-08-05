@@ -64,6 +64,17 @@ def update_case(case_id: int, payload: schemas.CaseUpdate, db: Session = Depends
     return case
 
 
+@router.delete("/{case_id}", status_code=204)
+def delete_case(case_id: int, db: Session = Depends(get_db)):
+    """Deletes a case and everything filed under it (census, benefit plans,
+    claims, scorecards, quotes) - Case's own relationships all cascade, so
+    this is a single delete, not a manual multi-table cleanup.
+    """
+    case = _get_case_or_404(db, case_id)
+    db.delete(case)
+    db.commit()
+
+
 @router.post("/{case_id}/census", response_model=List[schemas.CensusRecordOut])
 def upload_census(
     case_id: int,

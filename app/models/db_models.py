@@ -65,6 +65,7 @@ class Case(Base):
     claims_ledger_entries = relationship("ClaimsLedgerEntry", back_populates="case", cascade="all, delete-orphan")
     scorecards = relationship("Scorecard", back_populates="case", cascade="all, delete-orphan")
     outcome = relationship("Outcome", back_populates="case", uselist=False, cascade="all, delete-orphan")
+    new_business_quotes = relationship("NewBusinessQuote", back_populates="case", cascade="all, delete-orphan")
 
 
 class CensusRecord(Base):
@@ -440,7 +441,7 @@ class NewBusinessQuote(Base):
     opportunity_assessment = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    case = relationship("Case")
+    case = relationship("Case", back_populates="new_business_quotes")
 
 
 class InsurerTierPreference(Base):
