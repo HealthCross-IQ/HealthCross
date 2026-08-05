@@ -1066,7 +1066,6 @@ const TABS = [
   { id: 'census', label: 'Census' },
   { id: 'benefits', label: 'Benefits' },
   { id: 'claims', label: 'Claims' },
-  { id: 'comparison', label: 'Comparison' },
   { id: 'scorecard', label: 'Scorecard' },
   { id: 'new-business', label: 'New Business Quote' },
 ];
@@ -1206,10 +1205,6 @@ function renderCaseWorkspace() {
       <div id="renewal-rating-area"></div>
     </div>
 
-    <div class="tab-panel" data-tab="comparison">
-      ${comparisonPanelHtml()}
-    </div>
-
     <div class="tab-panel" data-tab="new-business">
       <div id="new-business-rating-area"></div>
     </div>
@@ -1258,8 +1253,6 @@ function renderCaseWorkspace() {
   loadDiagnosisExposure();
   loadClaimsLedgerAnalysis();
   loadRenewalRating();
-  loadReferencePlans();
-  renderComparisonColumnPickers();
   loadNewBusinessRating();
 }
 
