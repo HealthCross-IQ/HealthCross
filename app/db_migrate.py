@@ -28,6 +28,17 @@ def auto_migrate_missing_columns(engine: Engine, base: DeclarativeMeta) -> None:
     # with all ALTER TABLEs run to completion first, every one persists).
     # So every ALTER TABLE runs to completion first, and only once they're
     # all done does a second pass backfill existing rows.
+    #
+    # Queued for EVERY column with a scalar Python-side default (e.g.
+    # Column(Float, default=1.0)) - not just ones added in THIS run. A
+    # column added by an OLDER version of this function (before it did any
+    # backfilling at all) is already sitting in the schema as "existing",
+    # so it would otherwise never be revisited and its NULLs would never
+    # get fixed no matter how many times this runs afterward. The `WHERE
+    # column IS NULL` below makes this safe to run unconditionally on every
+    # startup, for every column, whether newly added or long-standing -
+    # a real recalibrated/manually-edited value is never NULL, so it's
+    # never touched; only a genuinely-unset row is.
     backfills: list = []  # (table_name, column_name, default_value)
 
     with engine.begin() as conn:
@@ -37,23 +48,10 @@ def auto_migrate_missing_columns(engine: Engine, base: DeclarativeMeta) -> None:
 
             existing_columns = {col["name"] for col in inspector.get_columns(table.name)}
             for column in table.columns:
-                if column.name in existing_columns:
-                    continue
-                col_type = column.type.compile(dialect=conn.dialect)
-                conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'))
+                if column.name not in existing_columns:
+                    col_type = column.type.compile(dialect=conn.dialect)
+                    conn.execute(text(f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}'))
 
-                # A new column with a scalar Python-side default (e.g.
-                # Column(Float, default=1.0)) only gets that default applied
-                # by SQLAlchemy on a fresh INSERT - ALTER TABLE ADD COLUMN
-                # leaves every EXISTING row's new column as a real SQL NULL,
-                # not the model's default. Left alone, that NULL silently
-                # flows into any code that reads it (e.g. a None nationality-
-                # zone multiplier reaching an arithmetic expression expecting
-                # a float), crashing far from here with no obvious
-                # connection to "this column is new". Backfilling existing
-                # rows to the same default a new row would get closes that
-                # gap for every column, not just ones we happen to remember
-                # to special-case.
                 default = column.default
                 if default is not None and default.is_scalar:
                     backfills.append((table.name, column.name, default.arg))

@@ -108,3 +108,56 @@ def test_area_of_cover_recognizes_free_text_territory_value():
     text = "Basic Territory for Elective & Emergency treatment Worldwide Exc (USA) Worldwide Exc (USA) Extended Territory for Emergency treatment only"
     summary = build_ocr_benefit_summary([text])
     assert summary["area_of_cover"] == "Worldwide Exc (USA)"
+
+
+# Real (trimmed) OCR output from a Dubai Insurance/iSON Secure "TRUCARE"
+# scanned table of benefits - a genuinely different insurer template from
+# the Bupa/MetLife-style wording the original patterns were tuned against,
+# with real Tesseract noise (misread words, column text bleeding into the
+# wrong paragraph) rather than hand-crafted text, so these regression tests
+# catch the same real-world garbling that caused this document's summary to
+# come back completely empty in production.
+_TRUCARE_PAGE_1 = (
+    "Corporate :TRUCARE Policy Start :03-09-25. Policy End :02-09-26 "
+    "Annual limit refers to the maximum amount of money we will pay for covered healthcare expenses within "
+    "Plan Annual limit USD 500,000 a policy year. Once the annual limit is reached, the insured individual is responsible for paying any "
+    "remaining costs out of pocket. "
+    "Network ENHANCED NAS General (GN) Network refers to the list of healthcare facilities that the insured member can access on direct billing"
+)
+
+_TRUCARE_PAGE_3 = (
+    "Basic Dental (If not opted for Enhanced Covered up to USD 137/ AED 500 with "
+    "Dental) 30% copay "
+    "This benefit includes coverage for dental consultations, extractions, fillings, root canal treatments, "
+    "scaling, X-rays, antibiotics, and prophylactic care."
+)
+
+_TRUCARE_PAGE_5 = (
+    "Maternity In-patient Services and Complications "
+    "(Requires prior approval from the insurance company or within 24 hours of "
+    "We cover Maternity IP Services, including Normal Vaginal Delivery, medically necessary C-sections, "
+    "treatment for complications, and medically necessary terminations. Elective Caesarean Delivery is not "
+    "covered. Medically necessary expenses for life-threatening conditions for the mother or newborn are "
+    "covered up to the annual limit "
+    "Covered up to USD 10,000"
+)
+
+
+def test_recognizes_trucare_style_annual_limit_wording():
+    summary = build_ocr_benefit_summary([_TRUCARE_PAGE_1])
+    assert summary["annual_limit"] == "500,000"
+
+
+def test_recognizes_trucare_style_dental_wording():
+    summary = build_ocr_benefit_summary([_TRUCARE_PAGE_3])
+    assert summary["dental"] == "AED 500"
+
+
+def test_recognizes_trucare_style_maternity_limit_wording_across_a_long_clarification():
+    # The real value sits ~250 characters after the label - past this
+    # module's default 200-char window - because of a long parenthetical
+    # pre-approval clarification wedged in between; maternity_limit's
+    # entry in _FIELD_LABEL_PATTERNS uses a wider window specifically for
+    # this template.
+    summary = build_ocr_benefit_summary([_TRUCARE_PAGE_5])
+    assert summary["maternity_limit"] == "10,000"

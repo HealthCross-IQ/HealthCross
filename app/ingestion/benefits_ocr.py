@@ -50,9 +50,12 @@ def _configure_tesseract_cmd() -> None:
 
 _configure_tesseract_cmd()
 
-# label -> regex to search for in the flattened OCR text of the whole document
+# label -> regex (or (regex, window) when the real value sits further away
+# than the default 200-char window - e.g. a long parenthetical clarification
+# wedged between a Dubai Insurance/iSON Secure-style label and its own
+# value) to search for in the flattened OCR text of the whole document.
 _FIELD_LABEL_PATTERNS = {
-    "annual_limit": r"Indemnity Limit",
+    "annual_limit": r"Indemnity Limit|Plan Annual [Ll]imit",
     "area_of_cover": r"Basic Territory for Elective\s*&\s*Emergency treatment",
     # Negative lookbehind excludes the maternity-specific "Outpatient
     # Ante/Post Natal Consultation Deductible / Coinsurance" row, which
@@ -60,11 +63,24 @@ _FIELD_LABEL_PATTERNS = {
     # valued) benefit elsewhere in the document.
     "deductible": r"(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
     "pre_existing_chronic_limit": r"Pre-existing conditions",
-    "maternity_limit": r"Normal Delivery",
-    "dental": r"Dental Benefit",
+    # Dubai Insurance/iSON Secure's own label ("Maternity In-patient
+    # Services and Complications") is followed by a long parenthetical
+    # pre-approval clarification before its own "Covered up to USD ..."
+    # value - much further away than this module's default 200-char
+    # window reaches, so this one needs the wider window explicitly.
+    "maternity_limit": (r"Normal Delivery|Maternity In-?patient Services", 600),
+    "dental": r"Dental Benefit|Basic Dental",
     "optical": r"Optical Benefit",
     "coinsurance": r"Outpatient Co-Insurance|(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
-    "alternative_or_complementary_treatment": r"Alternative Medicine Co-Insurance|Enhanced Alternative Medicine",
+    # Same label-cluster-then-value-cluster layout as maternity_limit above
+    # (Dubai Insurance/iSON Secure's own template lists several benefit
+    # labels together, then their values in the same order, sometimes with
+    # another whole label cluster wedged in between) - needs the same
+    # wider window to actually reach its own value rather than a fallback
+    # grab of the next unrelated label's own text.
+    "alternative_or_complementary_treatment": (
+        r"Alternative Medicine Co-Insurance|Enhanced Alternative Medicine|Alternative and Complementary", 600
+    ),
     "pharmacy_limit_and_coinsurance": r"Prescribed Pharmaceuticals",
     "health_screening_wellness": r"Health Check\s*/?\s*Wellness Package|Wellness Package|Health Screening",
 }
@@ -165,8 +181,9 @@ def build_ocr_benefit_summary(pages_text: List[str]) -> Dict[str, str]:
     """
     flat = " ".join(" ".join(page.split()) for page in pages_text)
     summary: Dict[str, str] = {}
-    for field, pattern in _FIELD_LABEL_PATTERNS.items():
-        values = _nearby_values(flat, pattern)
+    for field, spec in _FIELD_LABEL_PATTERNS.items():
+        pattern, window = spec if isinstance(spec, tuple) else (spec, 200)
+        values = _nearby_values(flat, pattern, window=window)
         if not values:
             continue
         if len(values) == 1:

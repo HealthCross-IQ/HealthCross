@@ -69,3 +69,53 @@ def test_auto_migrate_backfills_existing_rows_with_the_columns_default():
             text("SELECT zone_1_asia_network_multiplier, overage_age_threshold FROM scoring_weight_sets WHERE id = 1")
         ).one()
     assert row == (1.0, 50)
+
+
+def test_auto_migrate_backfills_a_column_that_already_existed_before_this_backfill_logic_did():
+    # Regression test for a gap in the first version of this backfill: it
+    # only ever queued a backfill for a column ADDED during that specific
+    # run. A column that was added by an OLDER copy of this same function
+    # (i.e. before it did any backfilling at all) is already sitting in
+    # the schema as "existing" on the next run, so it would never be
+    # revisited and its NULLs would never get fixed no matter how many
+    # times auto_migrate_missing_columns ran afterward - exactly what kept
+    # happening on a real, long-lived database. Every column with a scalar
+    # default must be backfilled whether it's newly added THIS run or one
+    # that's existed for a while.
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        # overage_age_threshold already exists here (unlike the test
+        # above, where scoring_weight_sets starts with only id/version) -
+        # simulating a schema an OLDER auto_migrate_missing_columns already
+        # added this column to, before it backfilled anything.
+        conn.execute(text(
+            "CREATE TABLE scoring_weight_sets (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, "
+            "overage_age_threshold INTEGER)"
+        ))
+        conn.execute(text("INSERT INTO scoring_weight_sets (id, version, overage_age_threshold) VALUES (1, 1, NULL)"))
+
+    Base.metadata.create_all(bind=engine)
+    auto_migrate_missing_columns(engine, Base)
+
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT overage_age_threshold FROM scoring_weight_sets WHERE id = 1")).one()
+    assert row == (50,)
+
+
+def test_auto_migrate_never_overwrites_a_real_non_null_value():
+    # A recalibrated/manually-edited value is a real number, never NULL -
+    # the backfill's WHERE column IS NULL must leave it alone.
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(text(
+            "CREATE TABLE scoring_weight_sets (id INTEGER PRIMARY KEY, version INTEGER NOT NULL, "
+            "overage_age_threshold INTEGER)"
+        ))
+        conn.execute(text("INSERT INTO scoring_weight_sets (id, version, overage_age_threshold) VALUES (1, 1, 65)"))
+
+    Base.metadata.create_all(bind=engine)
+    auto_migrate_missing_columns(engine, Base)
+
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT overage_age_threshold FROM scoring_weight_sets WHERE id = 1")).one()
+    assert row == (65,)
