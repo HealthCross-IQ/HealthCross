@@ -124,6 +124,15 @@
   .pill-bad { background: var(--critical-bg); color: var(--critical); }
   .pill-neutral { background: var(--surface-2); color: var(--ink-2); }
 
+  .client-row { cursor: pointer; }
+  .client-row:hover td { background: var(--surface-2); }
+  .client-row .chevron { display: inline-block; width: 12px; margin-right: 6px; color: var(--ink-muted); transition: transform 0.15s; }
+  .client-row.expanded .chevron { transform: rotate(90deg); }
+  .detail-row td { background: var(--bg); padding: 0; border-bottom: 1px solid var(--border); }
+  .detail-row .detail-wrap { padding: 10px 10px 14px 30px; }
+  .detail-row table { margin-top: 0; font-size: 12.5px; }
+  .detail-row table th, .detail-row table td { padding: 5px 8px; }
+
   .tab-bar { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
   .tab-btn {
     background: none; border: none; border-radius: 0;
@@ -264,8 +273,17 @@ async function loadTracker() {
     </div>
     <div class="card">
       <h3>Client-wise outstanding</h3>
-      <div class="hint">Per client: how much is still outstanding on the client-payment side (they haven't paid QIC yet), and how much HC fee is still outstanding (QIC hasn't paid HC yet) - sorted by HC outstanding fee, highest first.</div>
-      <button onclick="loadClientWiseOutstanding()">Refresh</button>
+      <div class="hint">Per client: how much is still outstanding on the client-payment side (they haven't paid QIC yet), and how much HC fee is still outstanding (QIC hasn't paid HC yet) - sorted by HC outstanding fee, highest first. Click a client row to see every outstanding invoice (invoice no., policy no., due date, aging, flags).</div>
+      <div class="row">
+        <div><label>Search client</label><input type="text" id="clientOutstandingSearch" placeholder="Type a client name&hellip;" oninput="renderClientWiseOutstanding()" /></div>
+        <div><label>Min. Client Outstanding Amount</label><input type="number" id="clientOutstandingMinClient" placeholder="0" oninput="renderClientWiseOutstanding()" /></div>
+        <div><label>Min. HC Outstanding Fee</label><input type="number" id="clientOutstandingMinHc" placeholder="0" oninput="renderClientWiseOutstanding()" /></div>
+        <div><button onclick="loadClientWiseOutstanding()">Refresh</button></div>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <div><button class="small" onclick="downloadClientOutstandingCsv('client')">&#8595; Download client outstanding (CSV)</button></div>
+        <div><button class="small" onclick="downloadClientOutstandingCsv('hc')">&#8595; Download HC fee outstanding (CSV)</button></div>
+      </div>
       <div class="table-wrap" id="clientOutstandingTable"><div class="empty-state">Loading&hellip;</div></div>
     </div>
     <div class="card">
@@ -287,64 +305,189 @@ async function loadTracker() {
   loadTrackerTable();
 }
 
+let clientOutstandingRows = [];
+let clientOutstandingExpanded = new Set();
+
 async function loadClientWiseOutstanding() {
   const el = document.getElementById('clientOutstandingTable');
   el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
   try {
-    const rows = await api('/finance/payment-tracker');
-    if (!rows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet.</div>`; return; }
+    clientOutstandingRows = await api('/finance/payment-tracker');
+    renderClientWiseOutstanding();
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
 
-    const byClient = {};
-    for (const r of rows) {
-      const name = r.main_policy_holder || '(unknown)';
-      if (!byClient[name]) byClient[name] = { clientCount: 0, clientAmount: 0, hcCount: 0, hcAmount: 0 };
-      const bucket = byClient[name];
-      if ((r.client_payment_status || '') !== 'Settled') {
-        bucket.clientCount += 1;
-        bucket.clientAmount += r.invoice_amount || 0;
-      }
-      if (!(r.hc_payment_status || '').toLowerCase().startsWith('received')) {
-        bucket.hcCount += 1;
-        bucket.hcAmount += r.total_value || 0;
-      }
-    }
+function daysBetween(a, b) { return Math.round((a - b) / 86400000); }
 
-    const clients = Object.entries(byClient)
-      .filter(([, b]) => b.clientCount > 0 || b.hcCount > 0)
-      .sort((a, b) => b[1].hcAmount - a[1].hcAmount);
+function agingBadge(dueDate) {
+  if (!dueDate) return `<span class="pill pill-neutral">No due date</span>`;
+  const daysOverdue = daysBetween(new Date(), new Date(dueDate));
+  if (daysOverdue > 60) return `<span class="pill pill-bad">Overdue ${daysOverdue}d</span>`;
+  if (daysOverdue > 0) return `<span class="pill pill-warn">Overdue ${daysOverdue}d</span>`;
+  if (daysOverdue > -14) return `<span class="pill pill-warn">Due in ${-daysOverdue}d</span>`;
+  return `<span class="pill pill-good">Due in ${-daysOverdue}d</span>`;
+}
 
-    if (!clients.length) { el.innerHTML = `<div class="empty-state">Nothing outstanding on either side.</div>`; return; }
+// Groups the raw tracker rows by client, tracking both the outstanding
+// counts/amounts and the underlying rows so the UI can drill into invoice
+// level detail and CSV export can reuse the exact same filtering.
+function buildClientOutstandingGroups() {
+  const byClient = {};
+  for (const r of clientOutstandingRows) {
+    const name = r.main_policy_holder || '(unknown)';
+    if (!byClient[name]) byClient[name] = { clientCount: 0, clientAmount: 0, hcCount: 0, hcAmount: 0, rows: [] };
+    const bucket = byClient[name];
+    const clientOutstanding = (r.client_payment_status || '') !== 'Settled';
+    const hcOutstanding = !(r.hc_payment_status || '').toLowerCase().startsWith('received');
+    if (clientOutstanding) { bucket.clientCount += 1; bucket.clientAmount += r.invoice_amount || 0; }
+    if (hcOutstanding) { bucket.hcCount += 1; bucket.hcAmount += r.total_value || 0; }
+    if (clientOutstanding || hcOutstanding) bucket.rows.push({ ...r, clientOutstanding, hcOutstanding });
+  }
+  return byClient;
+}
 
-    const totalClientAmount = clients.reduce((s, [, b]) => s + b.clientAmount, 0);
-    const totalHcAmount = clients.reduce((s, [, b]) => s + b.hcAmount, 0);
+function filteredClientOutstandingEntries() {
+  const search = (document.getElementById('clientOutstandingSearch').value || '').trim().toLowerCase();
+  const minClient = parseFloat(document.getElementById('clientOutstandingMinClient').value) || 0;
+  const minHc = parseFloat(document.getElementById('clientOutstandingMinHc').value) || 0;
+  const byClient = buildClientOutstandingGroups();
+  return Object.entries(byClient)
+    .filter(([, b]) => b.clientCount > 0 || b.hcCount > 0)
+    .filter(([name]) => !search || name.toLowerCase().includes(search))
+    .filter(([, b]) => b.clientAmount >= minClient && b.hcAmount >= minHc);
+}
 
-    el.innerHTML = `
-      <table>
-        <thead><tr>
-          <th>Client</th><th>Outstanding Invoices (Client)</th><th>Client Outstanding Amount</th>
-          <th>Outstanding Invoices (HC)</th><th>HC Outstanding Fee</th>
-        </tr></thead>
-        <tbody>
-          ${clients.map(([name, b]) => `
-            <tr>
-              <td>${esc(name)}</td>
+function toggleClientOutstandingDetail(name) {
+  if (clientOutstandingExpanded.has(name)) clientOutstandingExpanded.delete(name);
+  else clientOutstandingExpanded.add(name);
+  renderClientWiseOutstanding();
+}
+
+function clientOutstandingDetailRowHtml(r) {
+  const clientBadge = r.clientOutstanding
+    ? `<span class="pill pill-warn">${esc(r.client_payment_status || 'Outstanding')}</span>`
+    : `<span class="pill pill-good">${esc(r.client_payment_status || 'Settled')}</span>`;
+  const hcBadge = r.hcOutstanding
+    ? `<span class="pill pill-warn">${esc(r.hc_payment_status || 'Outstanding')}</span>`
+    : `<span class="pill pill-good">${esc(r.hc_payment_status || 'Received')}</span>`;
+  let flag = '';
+  if (!r.clientOutstanding && r.hcOutstanding) {
+    flag = `<span class="pill pill-bad">Client paid - HC fee not yet collected</span>`;
+  } else if (r.clientOutstanding && r.due_date && daysBetween(new Date(), new Date(r.due_date)) > 60) {
+    flag = `<span class="pill pill-bad">Long overdue</span>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.doc_no || r.doc_no_raw || '—')}</td>
+      <td>${esc(r.policy_no || '—')}</td>
+      <td>${esc(r.product || '—')}</td>
+      <td>${esc(r.due_date || '—')}</td>
+      <td>${agingBadge(r.due_date)}</td>
+      <td>${clientBadge}</td>
+      <td>${money(r.invoice_amount)}</td>
+      <td>${hcBadge}</td>
+      <td>${money(r.total_value)}</td>
+      <td>${flag}</td>
+    </tr>
+  `;
+}
+
+function renderClientWiseOutstanding() {
+  const el = document.getElementById('clientOutstandingTable');
+  if (!clientOutstandingRows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet.</div>`; return; }
+
+  const clients = filteredClientOutstandingEntries()
+    .sort((a, b) => b[1].hcAmount - a[1].hcAmount);
+
+  if (!clients.length) { el.innerHTML = `<div class="empty-state">No clients match the current search/filter.</div>`; return; }
+
+  const totalClientAmount = clients.reduce((s, [, b]) => s + b.clientAmount, 0);
+  const totalHcAmount = clients.reduce((s, [, b]) => s + b.hcAmount, 0);
+  const search = (document.getElementById('clientOutstandingSearch').value || '').trim();
+  const minClient = parseFloat(document.getElementById('clientOutstandingMinClient').value) || 0;
+  const minHc = parseFloat(document.getElementById('clientOutstandingMinHc').value) || 0;
+  const isFiltered = !!search || minClient > 0 || minHc > 0;
+
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Client</th><th>Outstanding Invoices (Client)</th><th>Client Outstanding Amount</th>
+        <th>Outstanding Invoices (HC)</th><th>HC Outstanding Fee</th>
+      </tr></thead>
+      <tbody>
+        ${clients.map(([name, b]) => {
+          const expanded = clientOutstandingExpanded.has(name);
+          const detailRows = b.rows.slice().sort((x, y) => {
+            const dx = x.due_date ? new Date(x.due_date).getTime() : Infinity;
+            const dy = y.due_date ? new Date(y.due_date).getTime() : Infinity;
+            return dx - dy;
+          });
+          return `
+            <tr class="client-row${expanded ? ' expanded' : ''}" data-name="${esc(name)}" onclick="toggleClientOutstandingDetail(this.dataset.name)">
+              <td><span class="chevron">&#9656;</span>${esc(name)}</td>
               <td>${b.clientCount}</td>
               <td>${money(b.clientAmount)}</td>
               <td>${b.hcCount}</td>
               <td>${money(b.hcAmount)}</td>
             </tr>
-          `).join('')}
-        </tbody>
-        <tfoot>
-          <tr style="font-weight:700;">
-            <td>TOTAL</td><td></td><td>${money(totalClientAmount)}</td><td></td><td>${money(totalHcAmount)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    `;
-  } catch (e) {
-    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+            <tr class="detail-row" style="display:${expanded ? 'table-row' : 'none'};">
+              <td colspan="5"><div class="detail-wrap"><table>
+                <thead><tr>
+                  <th>Doc No.</th><th>Policy No.</th><th>Product</th><th>Due Date</th><th>Aging</th>
+                  <th>Client Status</th><th>Client Amount</th><th>HC Status</th><th>HC Fee</th><th>Flag</th>
+                </tr></thead>
+                <tbody>${detailRows.map(clientOutstandingDetailRowHtml).join('')}</tbody>
+              </table></div></td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight:700;">
+          <td>TOTAL${isFiltered ? ' (filtered)' : ''}</td><td></td><td>${money(totalClientAmount)}</td><td></td><td>${money(totalHcAmount)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+}
+
+function csvCell(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function downloadClientOutstandingCsv(kind) {
+  if (!clientOutstandingRows.length) { toast('Nothing to export yet', true); return; }
+  const clients = filteredClientOutstandingEntries();
+  const headers = kind === 'client'
+    ? ['Client', 'Doc No.', 'Policy No.', 'Product', 'Due Date', 'Client Payment Status', 'Client Outstanding Amount']
+    : ['Client', 'Doc No.', 'Policy No.', 'Product', 'Due Date', 'HC Payment Status', 'HC Outstanding Fee'];
+
+  const lines = [headers.join(',')];
+  for (const [name, b] of clients) {
+    for (const r of b.rows) {
+      if (kind === 'client' && !r.clientOutstanding) continue;
+      if (kind === 'hc' && !r.hcOutstanding) continue;
+      const amount = kind === 'client' ? (r.invoice_amount || 0) : (r.total_value || 0);
+      const status = kind === 'client' ? (r.client_payment_status || '') : (r.hc_payment_status || '');
+      const cells = [name, r.doc_no || r.doc_no_raw || '', r.policy_no || '', r.product || '', r.due_date || '', status, amount];
+      lines.push(cells.map(csvCell).join(','));
+    }
   }
+  if (lines.length === 1) { toast('Nothing to export for the current search/filter', true); return; }
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const suffix = kind === 'client' ? 'client_outstanding' : 'hc_fee_outstanding';
+  a.href = url;
+  a.download = `${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 async function uploadTracker() {
