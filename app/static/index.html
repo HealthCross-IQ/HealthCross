@@ -3398,20 +3398,58 @@ function chatHandleKeydown(event) {
   }
 }
 
-// Renders the handful of markdown markers Claude's own answers actually use
-// (bold, bullet lines) - escapeHtml runs first, so **/- markers are still
-// literal at this point and safe to regex-replace into real tags afterward.
+// A markdown table row: "| a | b |" (an optional leading/trailing pipe,
+// at least one interior pipe). A separator row is the same shape but every
+// cell is just dashes (with optional leading/trailing colons for alignment,
+// e.g. "|---|:---:|---|") - never real content, so it's recognized
+// separately and consumed rather than rendered as a header/data row itself.
+const _CHAT_TABLE_ROW_RE = /^\s*\|?(.+\|.+)\|?\s*$/;
+const _CHAT_TABLE_SEPARATOR_RE = /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-+:?\s*\|?\s*$/;
+
+function _chatTableCells(line) {
+  let trimmed = line.trim();
+  if (trimmed.startsWith('|')) trimmed = trimmed.slice(1);
+  if (trimmed.endsWith('|')) trimmed = trimmed.slice(0, -1);
+  return trimmed.split('|').map(c => c.trim());
+}
+
+// Renders the markdown Claude's own answers actually use - bold, bullet
+// lines, and (most importantly for data-heavy answers) tables - as real
+// HTML rather than showing the raw "| a | b |" / "**bold**" syntax
+// verbatim. Each cell/line is escaped individually before being placed in
+// the output, so nothing from the model's own text is ever raw HTML.
 function chatFormatText(text) {
-  let html = escapeHtml(text);
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/^- (.+)$/gm, '&bull; $1');
-  return html;
+  const lines = text.split('\n');
+  const blocks = [];
+  let i = 0;
+  while (i < lines.length) {
+    if (_CHAT_TABLE_ROW_RE.test(lines[i]) && lines[i + 1] && _CHAT_TABLE_SEPARATOR_RE.test(lines[i + 1])) {
+      const header = _chatTableCells(lines[i]);
+      let j = i + 2;
+      const rows = [];
+      while (j < lines.length && _CHAT_TABLE_ROW_RE.test(lines[j]) && !_CHAT_TABLE_SEPARATOR_RE.test(lines[j])) {
+        rows.push(_chatTableCells(lines[j]));
+        j++;
+      }
+      const headerRow = `<tr>${header.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+      const dataRows = rows.map(r => `<tr>${r.map(c => `<td>${escapeHtml(c)}</td>`).join('')}</tr>`).join('');
+      blocks.push(`<div style="overflow-x:auto; margin:6px 0;"><table>${headerRow}${dataRows}</table></div>`);
+      i = j;
+    } else {
+      let line = escapeHtml(lines[i]);
+      line = line.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+      line = line.replace(/^- (.+)$/, '&bull; $1');
+      blocks.push(line);
+      i++;
+    }
+  }
+  return blocks.join('\n');
 }
 
 function chatMessageHtml(msg) {
   const isUser = msg.role === 'user';
   return `
-    <div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:80%;">
+    <div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:${isUser ? '80%' : '95%'};">
       <div class="hint" style="margin-bottom:2px; ${isUser ? 'text-align:right;' : ''}">${isUser ? 'You' : 'Assistant'}</div>
       <div style="padding:10px 14px; border-radius:10px; background:${isUser ? 'var(--accent)' : 'var(--surface-2)'}; color:${isUser ? 'var(--accent-ink)' : 'var(--ink)'}; white-space:pre-wrap; font-size:13.5px; line-height:1.5;">${chatFormatText(msg.text)}</div>
     </div>
