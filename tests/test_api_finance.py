@@ -111,6 +111,56 @@ def test_employees_recurring_expenses_and_generate(client):
     assert len(resp.json()) == 2
 
 
+def test_employee_edit_and_delete_keeps_expense_history(client):
+    resp = client.post("/finance/employees", json={"full_name": "Dianne", "role_title": "Account Executive", "monthly_salary": 4500, "currency": "AED"})
+    employee_id = resp.json()["id"]
+
+    resp = client.patch(f"/finance/employees/{employee_id}", json={"monthly_salary": 5000})
+    assert resp.status_code == 200
+    assert resp.json()["monthly_salary"] == 5000
+
+    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-01"})
+    expense_id = resp.json()[0]["id"]
+
+    resp = client.delete(f"/finance/employees/{employee_id}")
+    assert resp.status_code == 204
+
+    resp = client.get("/finance/employees")
+    assert all(e["id"] != employee_id for e in resp.json())
+
+    # The already-generated expense row survives, just unlinked from the deleted employee.
+    resp = client.get("/finance/expenses")
+    matching = [e for e in resp.json() if e["id"] == expense_id]
+    assert len(matching) == 1
+    assert matching[0]["employee_id"] is None
+
+
+def test_recurring_expense_edit_and_delete(client):
+    resp = client.post("/finance/recurring-expenses", json={"name": "Etisalat", "category": "telecom", "expense_type": "variable"})
+    recurring_id = resp.json()["id"]
+
+    resp = client.patch(f"/finance/recurring-expenses/{recurring_id}", json={"default_amount": 300})
+    assert resp.status_code == 200
+    assert resp.json()["default_amount"] == 300
+
+    resp = client.delete(f"/finance/recurring-expenses/{recurring_id}")
+    assert resp.status_code == 204
+
+    resp = client.get("/finance/recurring-expenses")
+    assert all(r["id"] != recurring_id for r in resp.json())
+
+
+def test_expense_entry_delete(client):
+    resp = client.post("/finance/expenses", json={"period": "2026-08-01", "category": "rent", "expense_type": "fixed", "amount": 1000})
+    expense_id = resp.json()["id"]
+
+    resp = client.delete(f"/finance/expenses/{expense_id}")
+    assert resp.status_code == 204
+
+    resp = client.get("/finance/expenses", params={"year": 2026})
+    assert all(e["id"] != expense_id for e in resp.json())
+
+
 def test_cash_flow_and_summary_endpoints(client):
     tracker_df = pd.DataFrame(
         [

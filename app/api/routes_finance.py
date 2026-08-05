@@ -330,6 +330,16 @@ def update_employee(employee_id: int, payload: schemas.EmployeeUpdate, db: Sessi
     return employee
 
 
+@router.delete("/employees/{employee_id}", status_code=204)
+def delete_employee(employee_id: int, db: Session = Depends(get_db)):
+    employee = _get_employee_or_404(db, employee_id)
+    # Keep past salary ExpenseEntry rows intact - just unlink them - rather
+    # than deleting payroll history along with the roster entry.
+    db.query(models.ExpenseEntry).filter_by(employee_id=employee_id).update({"employee_id": None})
+    db.delete(employee)
+    db.commit()
+
+
 # ---------------------------------------------------------------------------
 # Recurring expenses
 # ---------------------------------------------------------------------------
@@ -364,6 +374,15 @@ def update_recurring_expense(recurring_expense_id: int, payload: schemas.Recurri
     db.commit()
     db.refresh(recurring)
     return recurring
+
+
+@router.delete("/recurring-expenses/{recurring_expense_id}", status_code=204)
+def delete_recurring_expense(recurring_expense_id: int, db: Session = Depends(get_db)):
+    recurring = _get_recurring_expense_or_404(db, recurring_expense_id)
+    # Same rationale as employee deletion - keep past ExpenseEntry rows, just unlink them.
+    db.query(models.ExpenseEntry).filter_by(recurring_expense_id=recurring_expense_id).update({"recurring_expense_id": None})
+    db.delete(recurring)
+    db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -411,6 +430,13 @@ def update_expense_entry(expense_id: int, payload: schemas.ExpenseEntryUpdate, d
     db.commit()
     db.refresh(expense)
     return expense
+
+
+@router.delete("/expenses/{expense_id}", status_code=204)
+def delete_expense_entry(expense_id: int, db: Session = Depends(get_db)):
+    expense = _get_expense_entry_or_404(db, expense_id)
+    db.delete(expense)
+    db.commit()
 
 
 @router.post("/expenses/generate", response_model=List[schemas.ExpenseEntryOut])

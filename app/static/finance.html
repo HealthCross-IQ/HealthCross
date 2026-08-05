@@ -185,6 +185,7 @@ async function api(path, options) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.detail || (`Request failed (${res.status})`));
   }
+  if (res.status === 204) return null;
   return res.json();
 }
 
@@ -262,6 +263,12 @@ async function loadTracker() {
       <div id="trackerUploadStatus"></div>
     </div>
     <div class="card">
+      <h3>Client-wise outstanding</h3>
+      <div class="hint">Per client: how much is still outstanding on the client-payment side (they haven't paid QIC yet), and how much HC fee is still outstanding (QIC hasn't paid HC yet) - sorted by HC outstanding fee, highest first.</div>
+      <button onclick="loadClientWiseOutstanding()">Refresh</button>
+      <div class="table-wrap" id="clientOutstandingTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+    <div class="card">
       <h3>Tracker entries</h3>
       <div class="row">
         <div><label>Filter: HC Payment Status</label>
@@ -276,7 +283,68 @@ async function loadTracker() {
       <div class="table-wrap" id="trackerTable"><div class="empty-state">Loading&hellip;</div></div>
     </div>
   `;
+  loadClientWiseOutstanding();
   loadTrackerTable();
+}
+
+async function loadClientWiseOutstanding() {
+  const el = document.getElementById('clientOutstandingTable');
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const rows = await api('/finance/payment-tracker');
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet.</div>`; return; }
+
+    const byClient = {};
+    for (const r of rows) {
+      const name = r.main_policy_holder || '(unknown)';
+      if (!byClient[name]) byClient[name] = { clientCount: 0, clientAmount: 0, hcCount: 0, hcAmount: 0 };
+      const bucket = byClient[name];
+      if ((r.client_payment_status || '') !== 'Settled') {
+        bucket.clientCount += 1;
+        bucket.clientAmount += r.invoice_amount || 0;
+      }
+      if (!(r.hc_payment_status || '').toLowerCase().startsWith('received')) {
+        bucket.hcCount += 1;
+        bucket.hcAmount += r.total_value || 0;
+      }
+    }
+
+    const clients = Object.entries(byClient)
+      .filter(([, b]) => b.clientCount > 0 || b.hcCount > 0)
+      .sort((a, b) => b[1].hcAmount - a[1].hcAmount);
+
+    if (!clients.length) { el.innerHTML = `<div class="empty-state">Nothing outstanding on either side.</div>`; return; }
+
+    const totalClientAmount = clients.reduce((s, [, b]) => s + b.clientAmount, 0);
+    const totalHcAmount = clients.reduce((s, [, b]) => s + b.hcAmount, 0);
+
+    el.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Client</th><th>Outstanding Invoices (Client)</th><th>Client Outstanding Amount</th>
+          <th>Outstanding Invoices (HC)</th><th>HC Outstanding Fee</th>
+        </tr></thead>
+        <tbody>
+          ${clients.map(([name, b]) => `
+            <tr>
+              <td>${esc(name)}</td>
+              <td>${b.clientCount}</td>
+              <td>${money(b.clientAmount)}</td>
+              <td>${b.hcCount}</td>
+              <td>${money(b.hcAmount)}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+        <tfoot>
+          <tr style="font-weight:700;">
+            <td>TOTAL</td><td></td><td>${money(totalClientAmount)}</td><td></td><td>${money(totalHcAmount)}</td>
+          </tr>
+        </tfoot>
+      </table>
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
 }
 
 async function uploadTracker() {
@@ -295,6 +363,7 @@ async function uploadTracker() {
     statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows.</span>`;
     toast(`Uploaded ${rows.length} payment tracker rows`);
     loadTrackerTable();
+    loadClientWiseOutstanding();
   } catch (e) {
     statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
     toast(e.message, true);
@@ -359,6 +428,7 @@ async function markReceived(id) {
     });
     toast('Marked as received');
     loadTrackerTable();
+    loadClientWiseOutstanding();
   } catch (e) {
     toast(e.message, true);
   }
@@ -614,21 +684,84 @@ async function addEmployee() {
   } catch (e) { toast(e.message, true); }
 }
 
+let employeeRows = [];
+let editingEmployeeId = null;
+
 async function loadEmployeeTable() {
   const el = document.getElementById('employeeTable');
   try {
-    const rows = await api('/finance/employees');
-    if (!rows.length) { el.innerHTML = `<div class="empty-state">No employees added yet.</div>`; return; }
-    el.innerHTML = `
-      <table>
-        <thead><tr><th>Name</th><th>Role</th><th>Monthly Salary</th><th>Active</th></tr></thead>
-        <tbody>${rows.map(r => `
-          <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title)}</td><td>${money(r.monthly_salary, r.currency)}</td>
-          <td>${r.is_active ? `<span class="pill pill-good">Active</span>` : `<span class="pill pill-neutral">Inactive</span>`}</td></tr>
-        `).join('')}</tbody>
-      </table>
-    `;
+    employeeRows = await api('/finance/employees');
+    renderEmployeeTable();
   } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function renderEmployeeTable() {
+  const el = document.getElementById('employeeTable');
+  if (!employeeRows.length) { el.innerHTML = `<div class="empty-state">No employees added yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Role</th><th>Monthly Salary</th><th>Active</th><th></th></tr></thead>
+      <tbody>${employeeRows.map(employeeRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function employeeRowHtml(r) {
+  if (editingEmployeeId === r.id) {
+    return `
+      <tr>
+        <td><input type="text" id="editEmpName" value="${esc(r.full_name)}" /></td>
+        <td><input type="text" id="editEmpRole" value="${esc(r.role_title || '')}" /></td>
+        <td><input type="number" id="editEmpSalary" value="${r.monthly_salary}" /></td>
+        <td>
+          <select id="editEmpActive">
+            <option value="true" ${r.is_active ? 'selected' : ''}>Active</option>
+            <option value="false" ${!r.is_active ? 'selected' : ''}>Inactive</option>
+          </select>
+        </td>
+        <td>
+          <button class="small primary" onclick="saveEmployee(${r.id})">Save</button>
+          <button class="small" onclick="editingEmployeeId = null; renderEmployeeTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.full_name)}</td>
+      <td>${esc(r.role_title)}</td>
+      <td>${money(r.monthly_salary, r.currency)}</td>
+      <td>${r.is_active ? `<span class="pill pill-good">Active</span>` : `<span class="pill pill-neutral">Inactive</span>`}</td>
+      <td>
+        <button class="small" onclick="editingEmployeeId = ${r.id}; renderEmployeeTable();">Edit</button>
+        <button class="small" onclick="deleteEmployee(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+async function saveEmployee(id) {
+  const full_name = document.getElementById('editEmpName').value.trim();
+  const role_title = document.getElementById('editEmpRole').value.trim();
+  const monthly_salary = parseFloat(document.getElementById('editEmpSalary').value);
+  const is_active = document.getElementById('editEmpActive').value === 'true';
+  if (!full_name || isNaN(monthly_salary)) { toast('Name and monthly salary are required', true); return; }
+  try {
+    await api(`/finance/employees/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, role_title, monthly_salary, is_active }),
+    });
+    toast('Employee updated');
+    editingEmployeeId = null;
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteEmployee(id) {
+  if (!confirm('Delete this employee? Past generated expense rows are kept, just unlinked.')) return;
+  try {
+    await api(`/finance/employees/${id}`, { method: 'DELETE' });
+    toast('Employee deleted');
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function addRecurring() {
@@ -650,21 +783,80 @@ async function addRecurring() {
   } catch (e) { toast(e.message, true); }
 }
 
+let recurringRows = [];
+let editingRecurringId = null;
+
 async function loadRecurringTable() {
   const el = document.getElementById('recurringTable');
   try {
-    const rows = await api('/finance/recurring-expenses');
-    if (!rows.length) { el.innerHTML = `<div class="empty-state">No recurring expenses added yet.</div>`; return; }
-    el.innerHTML = `
-      <table>
-        <thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Default Amount</th></tr></thead>
-        <tbody>${rows.map(r => `
-          <tr><td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${esc(r.expense_type)}</td>
-          <td>${r.default_amount !== null ? money(r.default_amount, r.currency) : '— (variable, entered monthly)'}</td></tr>
-        `).join('')}</tbody>
-      </table>
-    `;
+    recurringRows = await api('/finance/recurring-expenses');
+    renderRecurringTable();
   } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function renderRecurringTable() {
+  const el = document.getElementById('recurringTable');
+  if (!recurringRows.length) { el.innerHTML = `<div class="empty-state">No recurring expenses added yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Default Amount</th><th></th></tr></thead>
+      <tbody>${recurringRows.map(recurringRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function recurringRowHtml(r) {
+  if (editingRecurringId === r.id) {
+    return `
+      <tr>
+        <td><input type="text" id="editRecName" value="${esc(r.name)}" /></td>
+        <td><input type="text" id="editRecCategory" value="${esc(r.category)}" /></td>
+        <td>
+          <select id="editRecType">
+            <option value="fixed" ${r.expense_type === 'fixed' ? 'selected' : ''}>Fixed</option>
+            <option value="variable" ${r.expense_type === 'variable' ? 'selected' : ''}>Variable</option>
+          </select>
+        </td>
+        <td><input type="number" id="editRecAmount" value="${r.default_amount !== null ? r.default_amount : ''}" /></td>
+        <td>
+          <button class="small primary" onclick="saveRecurring(${r.id})">Save</button>
+          <button class="small" onclick="editingRecurringId = null; renderRecurringTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${esc(r.expense_type)}</td>
+      <td>${r.default_amount !== null ? money(r.default_amount, r.currency) : '— (variable, entered monthly)'}</td>
+      <td>
+        <button class="small" onclick="editingRecurringId = ${r.id}; renderRecurringTable();">Edit</button>
+        <button class="small" onclick="deleteRecurring(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+async function saveRecurring(id) {
+  const name = document.getElementById('editRecName').value.trim();
+  const category = document.getElementById('editRecCategory').value.trim();
+  const expense_type = document.getElementById('editRecType').value;
+  const amountRaw = document.getElementById('editRecAmount').value;
+  if (!name || !category) { toast('Name and category are required', true); return; }
+  const payload = { name, category, expense_type, default_amount: amountRaw ? parseFloat(amountRaw) : null };
+  try {
+    await api(`/finance/recurring-expenses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    toast('Recurring expense updated');
+    editingRecurringId = null;
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteRecurring(id) {
+  if (!confirm('Delete this recurring expense template? Past generated expense rows are kept, just unlinked.')) return;
+  try {
+    await api(`/finance/recurring-expenses/${id}`, { method: 'DELETE' });
+    toast('Recurring expense deleted');
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
 }
 
 async function generateExpenses() {
@@ -692,14 +884,24 @@ async function loadExpenseTable() {
     if (!rows.length) { el.innerHTML = `<div class="empty-state">No expenses recorded yet.</div>`; return; }
     el.innerHTML = `
       <table>
-        <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th></tr></thead>
+        <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th><th></th></tr></thead>
         <tbody>${rows.map(r => `
           <tr><td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
-          <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td></tr>
+          <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td>
+          <td><button class="small" onclick="deleteExpenseEntry(${r.id})">Delete</button></td></tr>
         `).join('')}</tbody>
       </table>
     `;
   } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+async function deleteExpenseEntry(id) {
+  if (!confirm('Delete this expense entry?')) return;
+  try {
+    await api(`/finance/expenses/${id}`, { method: 'DELETE' });
+    toast('Expense entry deleted');
+    loadExpenseTable();
+  } catch (e) { toast(e.message, true); }
 }
 
 /* ---------------- Cash Flow & Forecast ---------------- */
