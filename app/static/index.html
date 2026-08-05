@@ -3398,12 +3398,22 @@ function chatHandleKeydown(event) {
   }
 }
 
+// Renders the handful of markdown markers Claude's own answers actually use
+// (bold, bullet lines) - escapeHtml runs first, so **/- markers are still
+// literal at this point and safe to regex-replace into real tags afterward.
+function chatFormatText(text) {
+  let html = escapeHtml(text);
+  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/^- (.+)$/gm, '&bull; $1');
+  return html;
+}
+
 function chatMessageHtml(msg) {
   const isUser = msg.role === 'user';
   return `
     <div style="align-self:${isUser ? 'flex-end' : 'flex-start'}; max-width:80%;">
       <div class="hint" style="margin-bottom:2px; ${isUser ? 'text-align:right;' : ''}">${isUser ? 'You' : 'Assistant'}</div>
-      <div style="padding:10px 14px; border-radius:10px; background:${isUser ? 'var(--accent)' : 'var(--surface-2)'}; color:${isUser ? 'var(--accent-ink)' : 'var(--ink)'}; white-space:pre-wrap; font-size:13.5px; line-height:1.5;">${escapeHtml(msg.text)}</div>
+      <div style="padding:10px 14px; border-radius:10px; background:${isUser ? 'var(--accent)' : 'var(--surface-2)'}; color:${isUser ? 'var(--accent-ink)' : 'var(--ink)'}; white-space:pre-wrap; font-size:13.5px; line-height:1.5;">${chatFormatText(msg.text)}</div>
     </div>
   `;
 }

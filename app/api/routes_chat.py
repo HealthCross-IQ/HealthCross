@@ -51,6 +51,10 @@ DATA SNAPSHOT:
 """
 
 
+def _pct(ratio: Optional[float]) -> str:
+    return f"{ratio * 100:.1f}%" if ratio is not None else "n/a"
+
+
 def _portfolio_context(db: Session) -> str:
     try:
         results = _run_analysis(db, as_of=_get_stored_as_of(db))
@@ -60,24 +64,29 @@ def _portfolio_context(db: Session) -> str:
     rate_cards = _rate_card_dicts(db)
     lines = ["PORTFOLIO BOOK (HealthCross's own already-booked business):"]
 
-    for group_by, heading in (
-        ("product", "By Product"),
-        ("network", "By Network"),
-        ("nationality_zone", "By Nationality Zone"),
-        ("category", "By Category"),
+    for group_by, heading, row_cap in (
+        ("product", "By Product", 20),
+        ("network", "By Network", 20),
+        ("nationality_zone", "By Nationality Zone", 20),
+        ("category", "By Category", 20),
+        ("master_client", "By Master Client", 150),
+        ("client", "By Client / Subgroup", 150),
     ):
         rows = summarize_portfolio(results, group_by)
         if not rows:
             continue
+        rows = sorted(rows, key=lambda r: -r["member_count"])
         lines.append(f"\n{heading}:")
-        for row in rows[:20]:
+        for row in rows[:row_cap]:
             key = row.get(group_by, "Unknown")
             lines.append(
                 f"  {key}: {row['member_count']} members, standard premium AED {row['standard_premium']:,.0f}, "
                 f"actual premium AED {row['actual_premium']:,.0f}, actual claims AED {row['actual_claims']:,.0f}, "
-                f"loss ratio vs actual {row.get('loss_ratio_vs_actual')}, "
+                f"loss ratio vs actual {_pct(row.get('loss_ratio_vs_actual'))}, "
                 f"burning cost AED {row.get('burning_cost')}/member/year"
             )
+        if len(rows) > row_cap:
+            lines.append(f"  ... and {len(rows) - row_cap} more, smaller by member count - not listed here.")
 
     overall = summarize_burning_cost_overall(results)
     if overall:
