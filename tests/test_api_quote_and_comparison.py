@@ -381,3 +381,71 @@ def test_manual_summary_edit_404_for_wrong_case(client):
         json={"fields": {"deductible": "Nil"}},
     )
     assert resp.status_code == 404
+
+
+def test_manual_summary_edit_renames_the_plan(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, plan_name="OCR extract (verify against source)")
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {}, "plan_name": "Category A"},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["plan_name"] == "Category A"
+
+
+def test_manual_summary_edit_blank_plan_name_leaves_it_unchanged(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, plan_name="Category A")
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {}, "plan_name": "   "},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["plan_name"] == "Category A"
+
+
+def test_add_manual_benefit_plan_creates_a_blank_existing_role_plan(client):
+    case_id = _create_case(client)
+
+    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Category B"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["plan_name"] == "Category B"
+    assert body["standard_summary"] == {}
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    plans = resp.json()
+    assert any(p["plan_name"] == "Category B" for p in plans)
+    new_plan_summary = next(p["summary"] for p in plans if p["plan_name"] == "Category B")
+    assert all(v == "Not specified in source document" for v in new_plan_summary.values())
+
+
+def test_delete_benefit_plan_removes_it(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id)
+
+    resp = client.delete(f"/cases/{case_id}/benefits/{existing.id}")
+    assert resp.status_code == 204
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    assert resp.status_code == 404
+
+
+def test_delete_benefit_plan_404_for_wrong_case(client):
+    case_id = _create_case(client)
+    other_case_id = _create_case(client)
+    existing = _insert_existing_plan(client, other_case_id)
+
+    resp = client.delete(f"/cases/{case_id}/benefits/{existing.id}")
+    assert resp.status_code == 404
+
+
+def test_delete_benefit_plan_rejects_quoted_role(client):
+    case_id = _create_case(client)
+    quoted = _insert_quoted_plan(client, case_id)
+
+    resp = client.delete(f"/cases/{case_id}/benefits/{quoted.id}")
+    assert resp.status_code == 404

@@ -23,6 +23,7 @@ from app.ingestion.quote_pdf import parse_benefit_tables_only, parse_quote_pdf
 from app.ingestion.upload_sniffer import sniff_upload_kind
 from app.models import db_models as models
 from app.models import schemas
+from app.api.routes_new_business_rating import maybe_auto_requote
 from app.reference.benefit_category_mapping import build_standard_summary_from_rows, to_case_benefit_plan_fields
 from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
@@ -122,6 +123,7 @@ def upload_census(
         db.commit()
         for record in existing:
             db.refresh(record)
+        maybe_auto_requote(case.id, db)
         return existing
 
     # A re-upload replaces the case's census entirely rather than piling on
@@ -134,6 +136,7 @@ def upload_census(
     db.commit()
     for record in records:
         db.refresh(record)
+    maybe_auto_requote(case.id, db)
     return records
 
 
@@ -412,6 +415,7 @@ def upload_benefits(
     db.commit()
     for plan in plans:
         db.refresh(plan)
+    maybe_auto_requote(case.id, db)
     return plans
 
 
@@ -534,9 +538,53 @@ def update_benefit_plan_summary(
         else:
             summary[field] = value.strip()
     plan.standard_summary = summary
+    if payload.plan_name is not None and payload.plan_name.strip():
+        plan.plan_name = payload.plan_name.strip()
     db.commit()
     db.refresh(plan)
+    maybe_auto_requote(case.id, db)
     return plan
+
+
+@router.post("/{case_id}/benefits/manual", response_model=schemas.BenefitPlanOut)
+def add_manual_benefit_plan(case_id: int, payload: schemas.ManualBenefitPlanCreate, db: Session = Depends(get_db)):
+    """Adds a brand-new, blank existing-role benefit plan with every
+    standard-summary field unresolved - for a scanned table of benefits
+    OCR couldn't usefully read at all (see app/ingestion/benefits_ocr.py),
+    where PUT .../summary's field-by-field corrections aren't enough to
+    start from because there's nothing worth correcting. The underwriter
+    fills it in entirely by hand via that same edit flow afterward.
+    """
+    case = _get_case_or_404(db, case_id)
+    plan = models.BenefitPlan(
+        case_id=case.id,
+        role="existing",
+        plan_name=payload.plan_name.strip() or "New plan",
+        source_format="manual",
+        standard_summary={},
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    maybe_auto_requote(case.id, db)
+    return plan
+
+
+@router.delete("/{case_id}/benefits/{plan_id}", status_code=204)
+def delete_benefit_plan(case_id: int, plan_id: int, db: Session = Depends(get_db)):
+    """Removes a single existing-role benefit plan/category - the
+    companion to POST .../benefits/manual, for undoing an accidentally
+    added or duplicate category. Quoted-role plans (from a HealthCross
+    quote upload) aren't deletable here - re-upload the quote instead, so
+    premium data always comes from a real quote file, never a stray
+    manual delete.
+    """
+    case = _get_case_or_404(db, case_id)
+    plan = db.query(models.BenefitPlan).filter_by(id=plan_id, case_id=case.id, role="existing").first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Existing-role benefit plan not found on this case")
+    db.delete(plan)
+    db.commit()
 
 
 @router.post("/{case_id}/claims", response_model=Union[List[schemas.ClaimsRecordOut], schemas.ClaimsReportOut])

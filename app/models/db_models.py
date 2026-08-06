@@ -58,6 +58,15 @@ class Case(Base):
     # distinct from target_premium (a broker's target for a NEW quote).
     current_annual_premium = Column(Float, nullable=True)
 
+    # Case-level Product/Network/TPA picks, used as the fallback for any
+    # census category that doesn't yet have its own selection (from a
+    # prior New Business Quote) - lets the very first quote on a case
+    # auto-compute (see routes_new_business_rating._maybe_auto_requote)
+    # instead of requiring a manual visit to the New Business Quote tab.
+    default_product = Column(String, nullable=True)
+    default_network = Column(String, nullable=True)
+    default_tpa = Column(String, nullable=True)
+
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")

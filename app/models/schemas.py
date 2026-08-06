@@ -35,6 +35,9 @@ class CaseOut(BaseModel):
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
+    default_product: Optional[str] = None
+    default_network: Optional[str] = None
+    default_tpa: Optional[str] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -119,6 +122,17 @@ class BenefitSummaryUpdate(BaseModel):
     # string clears a field back to unresolved rather than storing blank
     # text as if it were a real value from the document.
     fields: Dict[str, Optional[str]]
+    # Renames the plan/category itself (e.g. "OCR extract (verify against
+    # source)" -> "Cat B - Dubai") - omitted/blank leaves the name as-is.
+    plan_name: Optional[str] = None
+
+
+class ManualBenefitPlanCreate(BaseModel):
+    # Adds a brand-new, blank existing-role benefit plan for an
+    # underwriter to fill in entirely by hand - for a document OCR
+    # couldn't usefully read at all, where correcting individual fields on
+    # an OCR-extracted plan isn't enough to start from.
+    plan_name: str = "New plan"
 
 
 class ClaimsRecordOut(BaseModel):
@@ -161,6 +175,9 @@ class CaseUpdate(BaseModel):
     current_annual_premium: Optional[float] = None
     target_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
+    default_product: Optional[str] = None
+    default_network: Optional[str] = None
+    default_tpa: Optional[str] = None
 
 
 class ClaimsReportOut(BaseModel):

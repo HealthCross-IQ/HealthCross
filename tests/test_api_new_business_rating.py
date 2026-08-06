@@ -263,3 +263,127 @@ def test_quote_includes_a_tier_ladder_per_category(client, tmp_path):
     bronze = next(r for r in ladder if r["product"] == "Bronze")
     chosen_row = next(n for n in bronze["networks"] if n["is_chosen"])
     assert chosen_row["network"] == "MSH Regular"
+
+
+def test_case_level_defaults_let_the_first_quote_auto_compute_on_census_upload(client, rate_card_files, tmp_path):
+    # Before any manual "Compute quote" ever happens, a case with
+    # default_product/network/tpa already set should get its first quote
+    # automatically the moment a census is uploaded.
+    _upload_rate_cards(client, rate_card_files)
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    case = models.Case(
+        broker_name="Broker", company_name="Acme", industry="trading",
+        default_product="Bronze", default_network="Net A", default_tpa="TPA X",
+    )
+    db.add(case)
+    db.commit()
+    case_id = case.id
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote")
+    assert resp.status_code == 404  # nothing yet - no census
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Employee Ref", "Category", "Age", "Gender", "Marital Status", "Relation", "Emirate"])
+    ws.append(["E1", "A", 30, "M", "single", "employee", "Dubai"])
+    ws.append(["E2", "A", 28, "F", "married", "spouse", "Dubai"])
+    path = tmp_path / "census.xlsx"
+    wb.save(path)
+
+    with open(path, "rb") as f:
+        resp = client.post(f"/cases/{case_id}/census", files={"file": ("census.xlsx", f, "application/octet-stream")})
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote")
+    assert resp.status_code == 200
+    assert resp.json()["case_gross_annual_premium"] > 0
+    quoted_category = resp.json()["categories"][0]
+    assert quoted_category["product"] == "Bronze"
+    assert quoted_category["network"] == "Net A"
+    assert quoted_category["tpa"] == "TPA X"
+
+
+def test_without_case_level_defaults_or_a_prior_quote_nothing_auto_computes(client, rate_card_files, tmp_path):
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)  # no default_product/network/tpa set
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote")
+    assert resp.status_code == 404
+
+
+def test_auto_requote_reuses_a_prior_quotes_own_selections_not_the_case_defaults(client, rate_card_files):
+    # A broker's own picks on an earlier manual "Compute quote" should
+    # survive later automatic re-quotes, even if the case also has
+    # different case-level defaults set (those are only a fallback for a
+    # category with no prior pick at all).
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+
+    resp = client.post(
+        f"/cases/{case_id}/new-business-quote",
+        json={"categories": [{"category": "A", "product": "Platinum", "network": "Net A", "tpa": "TPA X", "variant_selections": {}}]},
+    )
+    assert resp.status_code == 200
+
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    case = db.get(models.Case, case_id)
+    case.default_product = "Bronze"  # deliberately different from the prior quote's own pick
+    db.commit()
+    db.close()
+
+    # Trigger via a real re-upload of the census.
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Employee Ref", "Category", "Age", "Gender", "Marital Status", "Relation", "Emirate"])
+    ws.append(["E1", "A", 30, "M", "single", "employee", "Dubai"])
+    ws.append(["E2", "A", 28, "F", "married", "spouse", "Dubai"])
+
+    import io
+
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = client.post(f"/cases/{case_id}/census", files={"file": ("census.xlsx", buf, "application/octet-stream")})
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/new-business-quotes")
+    quotes = resp.json()
+    assert len(quotes) == 2  # the manual quote, plus one auto-triggered by the census re-upload
+    latest = quotes[0]  # ordered newest first
+    assert latest["categories"][0]["product"] == "Platinum"  # reused the prior quote's own pick, not the new default
+
+
+def test_add_manual_benefit_plan_triggers_auto_requote_when_defaults_are_set(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    case = models.Case(
+        broker_name="Broker", company_name="Acme", industry="trading",
+        default_product="Bronze", default_network="Net A", default_tpa="TPA X",
+    )
+    db.add(case)
+    db.commit()
+    db.add(models.CensusRecord(case_id=case.id, category="A", age=30, gender="M", marital_status="single", relation="employee", emirates="Dubai"))
+    db.commit()
+    case_id = case.id
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote")
+    assert resp.status_code == 404
+
+    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Category A"})
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote")
+    assert resp.status_code == 200

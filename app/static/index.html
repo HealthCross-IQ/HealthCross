@@ -1192,6 +1192,7 @@ function renderCaseWorkspace() {
     <div class="tab-panel" data-tab="benefits">
       <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('benefits', 'Table of Benefits')">Print / Save as PDF</button></div>
       <div id="benefits-summary-area"></div>
+      <div style="margin:10px 0;"><button onclick="addManualBenefitPlan()">+ Add category manually</button></div>
       <div id="premium-by-category-area"></div>
       <div id="benefits-comparison-area"></div>
     </div>
@@ -1684,12 +1685,17 @@ function _benefitSummaryCardHtml(p, editing) {
     ? `
       <button class="primary" onclick="saveBenefitSummaryEdit(${p.id})">Save</button>
       <button onclick="cancelBenefitSummaryEdit(${p.id})">Cancel</button>
+      <button onclick="deleteBenefitPlan(${p.id})" style="float:right;">Delete category</button>
     `
     : `<button onclick="editBenefitSummary(${p.id})">Edit</button>`;
 
+  const title = editing
+    ? `<input type="text" id="plan-name-input-${p.id}" value="${escapeHtml(p.plan_name || '')}" placeholder="e.g. Category A" style="font-size:1.1em;font-weight:600;width:100%;box-sizing:border-box;margin-bottom:8px;" />`
+    : `<h3>${escapeHtml(p.plan_name || 'Plan')}</h3>`;
+
   return `
     <div class="card" data-plan-id="${p.id}">
-      <h3>${escapeHtml(p.plan_name || 'Plan')}</h3>
+      ${title}
       <table>${rows}</table>
       <div style="margin-top:10px;">${actions}</div>
     </div>
@@ -1729,13 +1735,42 @@ async function saveBenefitSummaryEdit(planId) {
   card.querySelectorAll('input[data-field]').forEach(input => {
     fields[input.dataset.field] = input.value;
   });
+  const nameInput = document.getElementById(`plan-name-input-${planId}`);
   try {
     await api(`/cases/${currentCase.id}/benefits/${planId}/summary`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({fields}),
+      body: JSON.stringify({fields, plan_name: nameInput ? nameInput.value : undefined}),
     });
     toast('Benefit summary updated');
+    await loadBenefitsSummary();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function addManualBenefitPlan() {
+  const existingCount = _benefitsSummaryPlans.length;
+  const nextLetter = String.fromCharCode(65 + existingCount); // A, B, C, D...
+  try {
+    const plan = await api(`/cases/${currentCase.id}/benefits/manual`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({plan_name: `Category ${nextLetter}`}),
+    });
+    toast('Category added - fill in its details below');
+    await loadBenefitsSummary();
+    editBenefitSummary(plan.id);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function deleteBenefitPlan(planId) {
+  if (!confirm('Remove this category? This cannot be undone.')) return;
+  try {
+    await api(`/cases/${currentCase.id}/benefits/${planId}`, {method: 'DELETE'});
+    toast('Category removed');
     await loadBenefitsSummary();
   } catch (err) {
     toast(err.message, true);
@@ -2532,8 +2567,10 @@ async function nbRenderArea() {
     </div>
   `;
 
+  const defaultsCard = nbRateCardOptions ? nbDefaultsCardHtml() : '';
+
   if (!nbRateCardOptions || !nbCategories.length) {
-    area.innerHTML = uploadCard + (nbCategories.length ? '' : `<div class="card"><div class="hint">${nbCensusUncategorized ? 'Census has no category values set on any member yet - upload a census with a Category column to quote by category.' : 'Upload a census for this case first.'}</div></div>`);
+    area.innerHTML = uploadCard + defaultsCard + (nbCategories.length ? '' : `<div class="card"><div class="hint">${nbCensusUncategorized ? 'Census has no category values set on any member yet - upload a census with a Category column to quote by category.' : 'Upload a census for this case first.'}</div></div>`);
     return;
   }
 
@@ -2541,6 +2578,7 @@ async function nbRenderArea() {
 
   area.innerHTML = `
     ${uploadCard}
+    ${defaultsCard}
     <div class="card">
       <h3>Quote by category</h3>
       <div class="hint">Most cases use one Product for the whole group - some split different categories onto different Products. Each category's benefit-variant choices apply to every member in it; HealthCross's own rate card resolves each member's own Region/age/gender automatically.</div>
@@ -2552,6 +2590,64 @@ async function nbRenderArea() {
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
   `;
+}
+
+function nbDefaultsCardHtml() {
+  const products = nbRateCardOptions.products;
+  const product = currentCase.default_product || '';
+  const networksForProduct = product ? (nbRateCardOptions.product_networks[product] || []) : [];
+  const networkValue = currentCase.default_network ? `${currentCase.default_network}|${currentCase.default_tpa || ''}` : '';
+  return `
+    <div class="card">
+      <h3>Case default Product / Network</h3>
+      <div class="hint">Used as the fallback Product/Network/TPA for any category that doesn't have its own pick yet - lets the New Business Quote auto-compute (on census/benefits/rate-card changes) without a manual "Compute quote" first.</div>
+      <div class="row" style="align-items:flex-end;">
+        <div>
+          <label>Default product</label>
+          <select onchange="nbSetDefaultProduct(this.value)">
+            <option value="">None</option>
+            ${products.map(p => `<option value="${escapeHtml(p)}" ${product === p ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label>Default network</label>
+          <select onchange="nbSetDefaultNetwork(this.value)" ${!product ? 'disabled' : ''}>
+            <option value="">None</option>
+            ${networksForProduct.map(n => `<option value="${escapeHtml(n.network)}|${escapeHtml(n.tpa)}" ${networkValue === `${n.network}|${n.tpa}` ? 'selected' : ''}>${escapeHtml(n.network)} (${escapeHtml(n.tpa)})</option>`).join('')}
+          </select>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function nbSetDefaultProduct(product) {
+  try {
+    currentCase = await api(`/cases/${currentCase.id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({default_product: product || null, default_network: null, default_tpa: null}),
+    });
+    toast('Default product saved');
+    await nbRenderArea();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function nbSetDefaultNetwork(value) {
+  const [network, tpa] = value ? value.split('|') : [null, null];
+  try {
+    currentCase = await api(`/cases/${currentCase.id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({default_network: network, default_tpa: tpa}),
+    });
+    toast('Default network saved');
+    await nbRenderArea();
+  } catch (err) {
+    toast(err.message, true);
+  }
 }
 
 function nbCategoryCardHtml(cat, idx) {

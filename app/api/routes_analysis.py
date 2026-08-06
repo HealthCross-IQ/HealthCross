@@ -457,13 +457,21 @@ def get_monthly_erp(case_id: int, db: Session = Depends(get_db)):
 
 
 def _benefit_summary(plan: models.BenefitPlan) -> dict:
-    source = plan.standard_summary or {
-        "annual_limit": f"USD {plan.annual_limit:,.0f}" if plan.annual_limit else None,
-        "maternity_limit": f"USD {plan.maternity_limit:,.0f}" if plan.maternity_limit else None,
-        "dental": "Covered" if plan.dental_covered else "Not covered",
-        "optical": "Covered" if plan.optical_covered else "Not covered",
-        "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
-    }
+    # None (a plan predating the standard_summary column) falls back to its
+    # older per-column fields; an empty dict {} is a deliberate, real state
+    # (e.g. a freshly added manual plan - see POST .../benefits/manual)
+    # meaning every field is genuinely unresolved, not a signal to fall
+    # back to those older columns.
+    if plan.standard_summary is not None:
+        source = plan.standard_summary
+    else:
+        source = {
+            "annual_limit": f"USD {plan.annual_limit:,.0f}" if plan.annual_limit else None,
+            "maternity_limit": f"USD {plan.maternity_limit:,.0f}" if plan.maternity_limit else None,
+            "dental": "Covered" if plan.dental_covered else "Not covered",
+            "optical": "Covered" if plan.optical_covered else "Not covered",
+            "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
+        }
     return build_standard_benefit_summary(source)
 
 

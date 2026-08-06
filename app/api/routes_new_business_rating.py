@@ -6,7 +6,7 @@ Product/Network/variant options are actually priced, then compute and
 store a quote for a specific case.
 """
 from collections import defaultdict
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
@@ -63,6 +63,9 @@ def upload_rate_card(file: UploadFile = File(...), db: Session = Depends(get_db)
     db.add_all([models.RateCard(**row) for row in rows])
     db.commit()
 
+    for case_id in [c.id for c in db.query(models.Case.id).all()]:
+        maybe_auto_requote(case_id, db)
+
     return schemas.RateCardUploadOut(
         rows_ingested=len(rows),
         products=sorted({r["product"] for r in rows}),
@@ -80,6 +83,9 @@ def upload_benefit_variant_rates(file: UploadFile = File(...), db: Session = Dep
     db.query(models.BenefitVariantRate).delete()
     db.add_all([models.BenefitVariantRate(**row) for row in rows])
     db.commit()
+
+    for case_id in [c.id for c in db.query(models.Case.id).all()]:
+        maybe_auto_requote(case_id, db)
 
     return schemas.BenefitVariantRateUploadOut(
         rows_ingested=len(rows),
@@ -190,6 +196,39 @@ def census_categories(case_id: int, db: Session = Depends(get_db)):
     }
 
 
+def _price_and_store_quote(
+    case: models.Case, categories: List[dict], census: List[dict], rate_cards: List[dict],
+    variant_rates: List[dict], db: Session,
+) -> models.NewBusinessQuote:
+    result = price_case(census, categories, rate_cards, variant_rates)
+    for cat_result, cat_input in zip(result["categories"], categories):
+        cat_result["tier_ladder"] = price_tier_ladder(census, cat_input, rate_cards, variant_rates)
+
+    latest_scorecard = (
+        db.query(models.Scorecard)
+        .filter_by(case_id=case.id)
+        .order_by(models.Scorecard.created_at.desc())
+        .first()
+    )
+    opportunity = assess_opportunity(
+        rated_premium=result["case_gross_annual_premium"],
+        target_premium=case.target_premium,
+        risk_tier=latest_scorecard.risk_tier if latest_scorecard else None,
+    )
+
+    quote = models.NewBusinessQuote(
+        case_id=case.id,
+        categories=categories,
+        case_gross_annual_premium=result["case_gross_annual_premium"],
+        result=result,
+        opportunity_assessment=opportunity,
+    )
+    db.add(quote)
+    db.commit()
+    db.refresh(quote)
+    return quote
+
+
 @router.post("/cases/{case_id}/new-business-quote", response_model=schemas.NewBusinessQuoteOut)
 def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRequest, db: Session = Depends(get_db)):
     case = db.get(models.Case, case_id)
@@ -206,33 +245,89 @@ def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRe
     variant_rates = _variant_rate_dicts(db)
 
     categories = [c.model_dump() for c in payload.categories]
-    result = price_case(census, categories, rate_cards, variant_rates)
-    for cat_result, cat_input in zip(result["categories"], categories):
-        cat_result["tier_ladder"] = price_tier_ladder(census, cat_input, rate_cards, variant_rates)
+    return _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
 
-    latest_scorecard = (
-        db.query(models.Scorecard)
-        .filter_by(case_id=case_id)
-        .order_by(models.Scorecard.created_at.desc())
+
+def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[List[dict]]:
+    """Fills in Product/Network/TPA for every census category this case
+    has, so a quote can be (re-)computed without the underwriter visiting
+    the New Business Quote tab again - preferring whatever a PRIOR quote
+    already had for that category (so a broker's own override survives a
+    later auto re-quote), then falling back to the case's own
+    default_product/default_network/default_tpa (see Case model), and, for
+    product only, the insurer's suggested tier. Returns None if any
+    category still can't be resolved - there just isn't enough
+    information yet for even the case-level defaults to cover.
+    """
+    counts: Dict[str, int] = defaultdict(int)
+    for c in case.census_records:
+        if c.category:
+            counts[c.category] += 1
+    if not counts:
+        return None
+
+    suggested_product = None
+    if case.existing_insurer:
+        pref = db.query(models.InsurerTierPreference).filter_by(insurer_name=case.existing_insurer).first()
+        suggested_product = pref.suggested_product if pref else None
+
+    latest_quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case.id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
         .first()
     )
-    opportunity = assess_opportunity(
-        rated_premium=result["case_gross_annual_premium"],
-        target_premium=case.target_premium,
-        risk_tier=latest_scorecard.risk_tier if latest_scorecard else None,
-    )
+    prior_by_category = {c["category"]: c for c in (latest_quote.categories or [])} if latest_quote else {}
 
-    quote = models.NewBusinessQuote(
-        case_id=case_id,
-        categories=categories,
-        case_gross_annual_premium=result["case_gross_annual_premium"],
-        result=result,
-        opportunity_assessment=opportunity,
-    )
-    db.add(quote)
-    db.commit()
-    db.refresh(quote)
-    return quote
+    categories = []
+    for category_name in sorted(counts):
+        prior = prior_by_category.get(category_name, {})
+        product = prior.get("product") or case.default_product or suggested_product
+        network = prior.get("network") or case.default_network
+        tpa = prior.get("tpa") or case.default_tpa
+        if not product or not network or not tpa:
+            return None
+        categories.append(
+            {
+                "category": category_name,
+                "product": product,
+                "network": network,
+                "tpa": tpa,
+                "commission_pct": prior.get("commission_pct"),
+                "variant_selections": prior.get("variant_selections") or {},
+            }
+        )
+    return categories
+
+
+def maybe_auto_requote(case_id: int, db: Session) -> None:
+    """Best-effort automatic re-pricing whenever an input the New Business
+    Quote depends on changes (census, table of benefits, rate card) -
+    reuses whatever Product/Network/TPA is already resolvable (see
+    _resolve_auto_quote_categories) rather than requiring a fresh manual
+    "Compute quote" click every time. Silently does nothing if there isn't
+    yet enough information to price every category, or if pricing itself
+    fails for any reason - this is an opportunistic side effect of the
+    caller's own request (a census/benefits/rate-card upload), and must
+    never turn a successful upload into a failed one.
+    """
+    case = db.get(models.Case, case_id)
+    if not case:
+        return
+    categories = _resolve_auto_quote_categories(case, db)
+    if not categories:
+        return
+    census = _case_census_dicts(case)
+    if not census:
+        return
+    rate_cards = _rate_card_dicts(db)
+    if not rate_cards:
+        return
+    variant_rates = _variant_rate_dicts(db)
+    try:
+        _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
+    except Exception:
+        db.rollback()
 
 
 @router.get("/cases/{case_id}/new-business-quotes", response_model=List[schemas.NewBusinessQuoteOut])
