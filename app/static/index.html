@@ -3079,6 +3079,7 @@ function nbResultHtml(quote) {
 
 let paLastSummary = null;
 let paLastAgeGender = null;
+let paLastDemographic = null;
 let paGroupBy = 'product';
 let paPolicyYear = '';
 let paSearchTerm = '';
@@ -3221,6 +3222,12 @@ function portfolioAnalysisPanelHtml() {
     </div>
     <div id="pa-result-area">${paLastSummary ? paSummaryHtml(paLastSummary) : ''}</div>
     <div class="card">
+      <h3>Demographic profile</h3>
+      <div class="hint">Full population breakdown of the booked book in whatever scope the filters above narrow it to - counts per Product/Network, age bands, gender, relation, marital status, and nationality zone mix with top nationalities - the same "what does this group look like" view a single case's own Census tab shows, applied to the whole book.</div>
+      <div class="row"><button onclick="paLoadDemographicSummary()">Load</button></div>
+      <div id="pa-demographic-area">${paLastDemographic ? paDemographicHtml(paLastDemographic) : ''}</div>
+    </div>
+    <div class="card">
       <h3>Burning cost by age band &amp; gender</h3>
       <div class="hint">Bucketed into the SAME age-band structure the standard pricing rate card itself uses, so each row lines up directly against a Male-Price/Female-Price row in the rate card for calibration.</div>
       <div class="row"><button onclick="paLoadAgeGenderBurningCost()">Load</button></div>
@@ -3234,6 +3241,7 @@ async function showPortfolioAnalysis() {
   await loadCases();
   await paLoadFilterOptions();
   document.getElementById('main').innerHTML = portfolioAnalysisPanelHtml();
+  if (paLastDemographic) bindChartTooltips(document.getElementById('pa-demographic-area'));
   paLoadDataAsOf();
 }
 
@@ -3333,6 +3341,19 @@ async function paLoadAgeGenderBurningCost() {
     const params = paBuildFilterParams();
     paLastAgeGender = await api(`/portfolio-analysis/burning-cost-by-age-gender?${params.toString()}`);
     document.getElementById('pa-age-gender-area').innerHTML = paAgeGenderHtml(paLastAgeGender);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function paLoadDemographicSummary() {
+  paReadFilterInputs();
+  try {
+    const params = paBuildFilterParams();
+    paLastDemographic = await api(`/portfolio-analysis/demographic-summary?${params.toString()}`);
+    const area = document.getElementById('pa-demographic-area');
+    area.innerHTML = paDemographicHtml(paLastDemographic);
+    bindChartTooltips(area);
   } catch (err) {
     toast(err.message, true);
   }
@@ -3469,6 +3490,82 @@ function paPolicyYearBreakdownHtml() {
         </table>
       </div>
     </div>
+  `;
+}
+
+function paDemographicHtml(s) {
+  if (!s.total_members) return '<div class="hint">No data yet - upload members/claims and a rate card, then click Load.</div>';
+  const ageBandItems = Object.keys(s.age_band_counts).map(band => ({ label: band, value: s.age_band_counts[band] }));
+  const zoneItems = Object.keys(s.nationality_zone_counts).map(zone => ({
+    label: ZONE_LABELS[zone] || zone, count: s.nationality_zone_counts[zone], pct: s.nationality_zone_pct[zone],
+  }));
+  const productItems = Object.entries(s.product_counts).map(([k, v]) => ({ label: k, value: v }));
+  const networkItems = Object.entries(s.network_counts).map(([k, v]) => ({ label: k, value: v }));
+
+  return `
+    <div class="kpi-grid">
+      <div class="kpi"><span class="label">Total members</span><span class="value">${s.total_members.toLocaleString()}</span></div>
+      <div class="kpi"><span class="label">Out of rate card scope</span><span class="value">${s.out_of_scope_member_count.toLocaleString()}</span></div>
+      <div class="kpi"><span class="label">Average age</span><span class="value">${s.avg_age ?? '-'}</span></div>
+      <div class="kpi"><span class="label">Married female</span><span class="value">${s.married_female_count} (${(s.married_female_pct*100).toFixed(1)}%)</span></div>
+      <div class="kpi"><span class="label">Maternity risk (married F, 18-40)</span><span class="value">${s.maternity_risk_count} (${(s.maternity_risk_pct*100).toFixed(1)}%)</span></div>
+      <div class="kpi"><span class="label">Male ratio (employees)</span><span class="value">${s.male_ratio_employees != null ? (s.male_ratio_employees*100).toFixed(1)+'%' : '-'}</span></div>
+      <div class="kpi"><span class="label">Infants (&le;1yr)</span><span class="value">${s.infant_count}</span></div>
+      <div class="kpi"><span class="label">Favorable children (&gt;1yr)</span><span class="value">${s.favorable_children_count}</span></div>
+      <div class="kpi"><span class="label">Female spouses</span><span class="value">${s.female_spouse_count}</span></div>
+    </div>
+
+    <h4>Members by Product</h4>
+    <div class="chart-wrap">${productItems.length ? svgBarChart(productItems, { labelWidth: 90, color: 'var(--series-2)' }) : '<div class="hint">No data.</div>'}</div>
+
+    <h4>Members by Network</h4>
+    <div class="chart-wrap">${networkItems.length ? svgBarChart(networkItems, { labelWidth: 150, color: 'var(--series-3)' }) : '<div class="hint">No data.</div>'}</div>
+
+    <h4>Age distribution</h4>
+    <div class="chart-wrap">${svgBarChart(ageBandItems, { labelWidth: 90 })}</div>
+
+    <h4>Nationality zone mix</h4>
+    <div class="chart-wrap">${svgProportionBar(zoneItems)}</div>
+
+    <div class="row" style="margin-top:16px;">
+      <table>
+        <tr><th>Age band</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+        ${Object.keys(s.age_band_counts).map(band => `
+          <tr>
+            <th>${escapeHtml(band)}</th>
+            <td>${s.age_band_gender_counts[band].M}</td>
+            <td>${s.age_band_gender_counts[band].F}</td>
+            <td>${s.age_band_counts[band]}</td>
+            <td>${(s.age_band_pct[band] * 100).toFixed(1)}%</td>
+          </tr>
+        `).join('')}
+      </table>
+      <table>
+        <tr><th>Gender</th><th>Count</th><th>%</th></tr>
+        ${_pctTable(s.gender_counts, s.gender_pct)}
+      </table>
+    </div>
+    <div class="row" style="margin-top:16px;">
+      <table>
+        <tr><th>Relationship</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+        ${_pctTableWithGender(s.relation_counts, s.relation_pct, s.relation_gender_counts)}
+      </table>
+      <table>
+        <tr><th>Marital status</th><th>Male</th><th>Female</th><th>Total</th><th>%</th></tr>
+        ${_pctTableWithGender(s.marital_status_counts, s.marital_status_pct, s.marital_status_gender_counts)}
+      </table>
+    </div>
+    <table style="margin-top:16px;">
+      <tr><th>Nationality zone</th><th>Count</th><th>%</th><th>Top nationalities</th></tr>
+      ${Object.keys(s.nationality_zone_counts).map(zone => `
+        <tr>
+          <th>${escapeHtml(ZONE_LABELS[zone] || zone)}</th>
+          <td>${s.nationality_zone_counts[zone]}</td>
+          <td>${(s.nationality_zone_pct[zone] * 100).toFixed(1)}%</td>
+          <td>${(s.nationality_zone_top5[zone] || []).map(n => `${escapeHtml(n.nationality)} (${n.count})`).join(', ') || '-'}</td>
+        </tr>
+      `).join('')}
+    </table>
   `;
 }
 

@@ -86,10 +86,43 @@ def test_analyze_portfolio_member_computes_standard_premium_via_the_rate_card():
     assert result["warnings"] == []
 
 
+def test_analyze_portfolio_member_carries_nationality_and_marital_status_through():
+    # Both are read from the member for pricing/zone purposes already but
+    # weren't being surfaced in the result dict - needed for a demographic
+    # rollup (see demographic_summary) to reuse census_demographic_summary,
+    # which reads these two fields directly.
+    result = analyze_portfolio_member(
+        _member(nationality="India", marital_status="married"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}
+    )
+    assert result["nationality"] == "India"
+    assert result["marital_status"] == "married"
+
+
 def test_analyze_portfolio_member_flags_msh_intl_network_as_out_of_scope():
     result = analyze_portfolio_member(_member(network_type_raw="MSH INTL Network"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {})
     assert result["in_scope"] is False
     assert "reason" in result
+
+
+def test_analyze_portfolio_member_still_carries_demographic_fields_when_out_of_scope():
+    # Regression test: an out-of-scope member's demographic facts (age,
+    # gender, relation, nationality, ...) were being dropped entirely by
+    # the early-return, which silently mis-bucketed their real gender/
+    # nationality as "Other"/unmapped in a book-wide demographic rollup
+    # (see demographic_summary) even though the source data was right
+    # there - no rate-card price applying to them doesn't make their
+    # actual age or gender any less real.
+    result = analyze_portfolio_member(
+        _member(network_type_raw="MSH INTL Network", gender="M", age=45, nationality="UK", relation="employee"),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
+    )
+    assert result["in_scope"] is False
+    assert result["gender"] == "M"
+    assert result["age"] == 45
+    assert result["nationality"] == "UK"
+    assert result["relation"] == "employee"
+    assert result.get("product") is None
+    assert result.get("network") is None
 
 
 def test_analyze_portfolio_member_warns_when_no_product_mapping_found():
@@ -760,7 +793,7 @@ def test_burning_cost_lookup_network_maps_nas_networks_to_their_msh_equivalent()
     from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
 
     assert _burning_cost_lookup_network("Comprehensive") == "MSH Platinum"
-    assert _burning_cost_lookup_network("GN") == "MSH Comprehensive Plus Mediclinic"
+    assert _burning_cost_lookup_network("GN") == "MSH Comprehensive"
     assert _burning_cost_lookup_network("GN excluding Mediclinic and American") == "MSH Comprehensive"
     assert _burning_cost_lookup_network("GN Excluding American & Mediclinic Group") == "MSH Comprehensive"
     assert _burning_cost_lookup_network("Restricted +++") == "MSH Premium"
@@ -788,6 +821,52 @@ def test_price_case_against_burning_cost_substitutes_the_msh_equivalent_for_a_na
     assert cat["priced_member_count"] == 1
     assert cat["net_annual_premium"] == 3000.0
     assert not cat["warnings"]
+
+
+def test_demographic_summary_reuses_census_demographic_summary_fields():
+    from app.scoring.rules.portfolio_analysis import demographic_summary
+
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", gender="M", age=25, nationality="India"),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F", age=35, nationality="Philippines"),
+            {"Acme Sub LLC": "Gold"}, RATE_CARDS, [], {},
+        ),
+    ]
+    summary = demographic_summary(results)
+    assert summary["total_members"] == 2
+    assert summary["gender_counts"] == {"M": 1, "F": 1, "Other": 0}
+    assert summary["nationality_zone_top5"]["zone_1_asia"] == [
+        {"nationality": "India", "count": 1}, {"nationality": "Philippines", "count": 1},
+    ]
+    assert summary["product_counts"] == {"Bronze": 1, "Gold": 1}
+    assert summary["network_counts"] == {"MSH Regular": 2}
+
+
+def test_demographic_summary_counts_out_of_scope_members_toward_the_headline_total():
+    # total_members must match the same headline count every other
+    # Portfolio Analysis view reports (see /insights' total_members=
+    # len(results)) - an out-of-scope member is still a real person in the
+    # population even though no rate-card price applies to them, so they
+    # aren't silently dropped from the total the way they are from
+    # Product/Network counts (which they genuinely have none of).
+    from app.scoring.rules.portfolio_analysis import demographic_summary
+
+    results = [
+        analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M2", network_type_raw="MSH INTL Network"), {}, RATE_CARDS, [], {}),
+    ]
+    summary = demographic_summary(results)
+    assert summary["total_members"] == 2
+    assert summary["out_of_scope_member_count"] == 1
+    assert summary["product_counts"] == {"Bronze": 1}
+    # The out-of-scope member's real gender (M, same as _member()'s
+    # default) must still be counted correctly, not lumped into "Other"
+    # just because they fall outside the rate card's pricing scope.
+    assert summary["gender_counts"] == {"M": 2, "F": 0, "Other": 0}
 
 
 def test_summarize_burning_cost_overall_aggregates_the_whole_book():

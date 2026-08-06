@@ -525,6 +525,33 @@ def test_insights_endpoint_returns_every_breakdown_from_one_call(client, members
     assert data["by_subgroup"]["rows"][0]["policy_start_date"] == "2025-01-01"
 
 
+def test_demographic_summary_endpoint_matches_insights_total_members(client, members_xlsx, mapping_xlsx, rate_card_xlsx):
+    # Regression coverage for a real question raised while reviewing a
+    # mockup: the Demographic view's headline total must match whatever
+    # every other Portfolio Analysis view (Insights, Summary/"Loss ratio by
+    # Product") already reports for the same book, not a smaller,
+    # inconsistent-looking number from silently excluding out-of-scope
+    # members.
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(mapping_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/insights")
+    insights_total = resp.json()["by_product"]["total_members"]
+
+    resp = client.get("/portfolio-analysis/demographic-summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_members"] == insights_total
+    assert body["gender_counts"]["M"] == 1
+    assert body["product_counts"] == {"Gold": 1}
+    assert body["network_counts"] == {"MSH Platinum": 1}
+    assert body["nationality_zone_top5"]["zone_1_asia"] == [{"nationality": "India", "count": 1}]
+
+
 def test_insights_endpoint_respects_the_master_client_filter(client, members_two_policy_years_xlsx, rate_card_xlsx):
     with open(members_two_policy_years_xlsx, "rb") as f:
         client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})

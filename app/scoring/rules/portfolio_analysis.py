@@ -21,6 +21,7 @@ from datetime import date as date_cls
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
+from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.new_business_rating import category_loading_pct, gross_up, price_member
 
 BOOK_TPA = "MSH MENA"
@@ -36,7 +37,11 @@ BOOK_TPA = "MSH MENA"
 # worded identically from one upload to the next.
 NAS_TO_MSH_NETWORK = {
     "comprehensive": "MSH Platinum",
-    "gn": "MSH Comprehensive Plus Mediclinic",
+    # Comprehensive Plus Mediclinic and plain Comprehensive run the same
+    # burning cost in practice (confirmed with underwriting), and the
+    # booked book has no real members on "Comprehensive Plus Mediclinic"
+    # specifically - so GN maps to the network that actually has data.
+    "gn": "MSH Comprehensive",
     "gn excluding mediclinic and american": "MSH Comprehensive",
     "gn excluding american & mediclinic group": "MSH Comprehensive",
     "restricted +++": "MSH Premium",
@@ -215,10 +220,28 @@ def analyze_portfolio_member(
     as_of = as_of or date_cls.today()
 
     if is_out_of_scope_network_type(member.get("network_type_raw")):
+        # Still a real person in the population even though no rate-card
+        # price applies to them - their age/gender/relation/nationality
+        # are real facts, not something scope exclusion should also erase.
+        # See demographic_summary, which counts every member (in and out
+        # of scope) toward the same headline total every other Portfolio
+        # Analysis view reports.
         return {
             "beneficiary_id": beneficiary_id,
             "in_scope": False,
             "reason": f"'{member.get('network_type_raw')}' is outside the UAE rate card's scope",
+            "region": member.get("region"),
+            "nationality": member.get("nationality"),
+            "nationality_zone": member.get("nationality_zone"),
+            "client": member.get("contract") or member.get("master_contract"),
+            "master_client": resolve_master_client(member, subgroup_master_by_name),
+            "gender": member.get("gender"),
+            "relation": member.get("relation"),
+            "marital_status": member.get("marital_status"),
+            "age": member.get("age"),
+            "category": member.get("category"),
+            "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
+            "policy_start_date": member.get("policy_start_date"),
         }
 
     warnings: List[str] = []
@@ -260,6 +283,7 @@ def analyze_portfolio_member(
         "product": product,
         "network": network,
         "region": member.get("region"),
+        "nationality": member.get("nationality"),
         "nationality_zone": member.get("nationality_zone"),
         "client": member.get("contract") or member.get("master_contract"),
         # Always the MASTER policy, regardless of whether this member also
@@ -271,6 +295,7 @@ def analyze_portfolio_member(
         "master_client": resolve_master_client(member, subgroup_master_by_name),
         "gender": member.get("gender"),
         "relation": member.get("relation"),
+        "marital_status": member.get("marital_status"),
         "age": member.get("age"),
         # The member's own benefit category (e.g. Category A/B/C) - a
         # separate dimension from Product/Network, letting loss ratio be
@@ -711,3 +736,40 @@ def summarize_population_mix(member_results: List[dict]) -> Optional[dict]:
         "nationality_zone_mix": {zone: round(count / total, 4) for zone, count in zone_counts.items()},
         "gender_mix": {gender: round(count / total, 4) for gender, count in gender_counts.items()},
     }
+
+
+def demographic_summary(member_results: List[dict]) -> dict:
+    """Full demographic profile of the booked book - the same "what does
+    this group look like" view a single case's own Census tab shows (age
+    bands, gender, marital status, relation, nationality zone mix with top
+    nationalities per zone - see census_demographic_summary), reused
+    directly here since analyze_portfolio_member's own per-member output
+    already carries the same age/gender/marital_status/relation/
+    nationality/nationality_zone fields a CensusRecord does. Adds Product
+    and Network member counts on top - dimensions a single case's census
+    never has (it's already scoped to one scheme), but the whole booked
+    book spans many of.
+
+    Deliberately run on EVERY member, not just in-scope ones, so
+    total_members matches the same headline count every other Portfolio
+    Analysis view reports (see /insights' own `total_members=len(results)`)
+    rather than a smaller, inconsistent-looking number - an out-of-scope
+    member's age/gender/nationality are still real facts about the
+    population even though no rate-card price applies to them. An
+    out-of-scope member's result dict carries no product/network at all,
+    so they're naturally excluded from the Product/Network counts below
+    without needing a separate filter.
+    """
+    summary = census_demographic_summary(member_results)
+
+    product_counts: Dict[str, int] = defaultdict(int)
+    network_counts: Dict[str, int] = defaultdict(int)
+    for r in member_results:
+        if r.get("product"):
+            product_counts[r["product"]] += 1
+        if r.get("network"):
+            network_counts[r["network"]] += 1
+    summary["product_counts"] = dict(sorted(product_counts.items()))
+    summary["network_counts"] = dict(sorted(network_counts.items()))
+    summary["out_of_scope_member_count"] = sum(1 for r in member_results if not r.get("in_scope", True))
+    return summary

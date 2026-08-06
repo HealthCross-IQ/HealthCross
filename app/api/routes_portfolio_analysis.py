@@ -22,6 +22,7 @@ from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
+    demographic_summary,
     group_claims_by_beneficiary,
     normalize_subgroup_key,
     resolve_group_product,
@@ -178,6 +179,7 @@ def _member_dicts(db: Session) -> List[dict]:
             "gender": m.gender,
             "marital_status": m.marital_status,
             "relation": m.relation,
+            "nationality": m.nationality,
             "nationality_zone": m.nationality_zone,
             "residence_emirate": m.residence_emirate,
             "region": m.region,
@@ -387,6 +389,27 @@ def portfolio_insights(
         "by_subgroup": _summary("client"),
         "by_age_gender": summarize_burning_cost_by_age_gender(results, rate_cards),
     }
+
+
+@router.get("/demographic-summary")
+def portfolio_demographic_summary(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """Full population profile of the booked book (in whatever scope the
+    filters/policy_year/client above narrow it to) - age bands, gender,
+    marital status, relation, nationality zone mix with top nationalities,
+    plus Product and Network member counts. The book-wide analogue of a
+    single case's own Census tab (see
+    app/scoring/rules/portfolio_analysis.py's demographic_summary, which
+    reuses census_demographic_summary directly). Raises the same 400s as
+    /summary when there's no book/rate card to analyze yet.
+    """
+    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    return demographic_summary(results)
 
 
 @router.get("/members", response_model=List[dict])
