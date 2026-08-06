@@ -2677,6 +2677,11 @@ async function loadNewBusinessRating() {
   } catch (err) {
     nbQuoteByTier = null;
   }
+  try {
+    nbBurningCostComparison = nbLastQuote ? await api(`/cases/${currentCase.id}/new-business-quote/burning-cost-comparison`) : null;
+  } catch (err) {
+    nbBurningCostComparison = null;
+  }
   nbSelectedTierProduct = null;
 
   const priorByCategory = {};
@@ -2925,6 +2930,11 @@ async function nbComputeQuote() {
     } catch (err) {
       nbQuoteByTier = null;
     }
+    try {
+      nbBurningCostComparison = await api(`/cases/${currentCase.id}/new-business-quote/burning-cost-comparison`);
+    } catch (err) {
+      nbBurningCostComparison = null;
+    }
     document.getElementById('nb-result-area').innerHTML = nbResultHtml(quote);
     toast('Quote computed');
   } catch (err) {
@@ -2934,6 +2944,7 @@ async function nbComputeQuote() {
 
 let nbQuoteByTier = null;
 let nbSelectedTierProduct = null;
+let nbBurningCostComparison = null;
 
 function _nbCategoryTableHtml(categories) {
   const warnings = [];
@@ -2997,6 +3008,48 @@ function _nbTierIconRowHtml(quote) {
   `;
 }
 
+function _nbBurningCostComparisonHtml(quote, comparison) {
+  if (!comparison || !comparison.categories || !comparison.categories.length) return '';
+  const warnings = [];
+  comparison.categories.forEach(c => (c.warnings || []).forEach(w => warnings.push(`Category ${c.category}: ${w}`)));
+  const rows = comparison.categories.map(c => {
+    const variance = c.rate_card_gross_annual_premium
+      ? (c.gross_annual_premium - c.rate_card_gross_annual_premium) / c.rate_card_gross_annual_premium * 100
+      : null;
+    return `
+      <tr>
+        <td>${escapeHtml(c.category)}</td>
+        <td>${escapeHtml(c.product)}</td>
+        <td>${escapeHtml(c.network)}</td>
+        <td>${c.priced_member_count} / ${c.member_count}</td>
+        <td>${c.rate_card_gross_annual_premium != null ? c.rate_card_gross_annual_premium.toLocaleString() : '-'}</td>
+        <td>${c.gross_annual_premium.toLocaleString()}</td>
+        <td>${variance != null ? (variance > 0 ? '+' : '') + variance.toFixed(1) + '%' : '-'}</td>
+      </tr>
+    `;
+  }).join('');
+  const caseVariance = quote.case_gross_annual_premium
+    ? (comparison.case_gross_annual_premium - quote.case_gross_annual_premium) / quote.case_gross_annual_premium * 100
+    : null;
+  return `
+    <div class="card">
+      <h3>Rate card vs. booked-book burning cost</h3>
+      <div class="hint">What HealthCross's own already-booked members on the same Product/Network/age band/gender actually cost in real claims, loaded with the same New Business loading - a reference for whether the rate card is running rich or thin against real experience, not something that overrides the quote itself. "Members priced" only counts members whose exact (Product, Network, age band, gender) slice has booked-book data - a low count means the book is thin for that slice.</div>
+      <table>
+        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members priced</th><th>Rate-card gross</th><th>Burning-cost gross</th><th>Variance</th></tr>
+        ${rows}
+        <tr style="font-weight:600; border-top:2px solid var(--border);">
+          <th>Case total</th><th></th><th></th><th></th>
+          <th>${quote.case_gross_annual_premium.toLocaleString()}</th>
+          <th>${comparison.case_gross_annual_premium.toLocaleString()}</th>
+          <th>${caseVariance != null ? (caseVariance > 0 ? '+' : '') + caseVariance.toFixed(1) + '%' : '-'}</th>
+        </tr>
+      </table>
+      ${warnings.length ? `<div class="hint" style="margin-top:10px;">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
+    </div>
+  `;
+}
+
 function nbResultHtml(quote) {
   const opp = quote.opportunity_assessment;
   const oppClass = opp ? (NB_OPPORTUNITY_CLASS[opp.verdict] || 'tier-Standard') : 'tier-Standard';
@@ -3018,6 +3071,7 @@ function nbResultHtml(quote) {
       ${_nbTierIconRowHtml(quote)}
       ${_nbCategoryTableHtml(shownCategories)}
     </div>
+    ${_nbBurningCostComparisonHtml(quote, nbBurningCostComparison)}
   `;
 }
 

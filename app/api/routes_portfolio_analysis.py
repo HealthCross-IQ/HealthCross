@@ -28,6 +28,7 @@ from app.scoring.rules.portfolio_analysis import (
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_by_product_network,
+    summarize_burning_cost_by_product_network_age_gender,
     summarize_portfolio,
 )
 
@@ -441,6 +442,27 @@ def burning_cost_by_product_network(
     except HTTPException:
         return []
     return summarize_burning_cost_by_product_network(results)
+
+
+@router.get("/burning-cost-by-product-network-age-gender", response_model=List[dict])
+def burning_cost_by_product_network_age_gender(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of"),
+    db: Session = Depends(get_db),
+):
+    """Actual burning cost from the already-booked book for every (Product,
+    Network, age band, gender) combination actually present - finer than
+    /burning-cost-by-product-network, so a New Business case's own age/
+    gender mix can be re-priced against the book's real experience for
+    that exact slice rather than one flat average (see
+    price_case_against_burning_cost). Returns an empty list (not an error)
+    when Members/Claims/a rate card haven't been uploaded yet.
+    """
+    try:
+        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db))
+    except HTTPException:
+        return []
+    rate_cards = _rate_card_dicts(db)
+    return summarize_burning_cost_by_product_network_age_gender(results, rate_cards)
 
 
 @router.get("/clients", response_model=List[str])

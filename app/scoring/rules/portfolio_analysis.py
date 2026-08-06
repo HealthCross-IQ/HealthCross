@@ -21,7 +21,7 @@ from datetime import date as date_cls
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
-from app.scoring.rules.new_business_rating import price_member
+from app.scoring.rules.new_business_rating import category_loading_pct, gross_up, price_member
 
 BOOK_TPA = "MSH MENA"
 
@@ -485,6 +485,141 @@ def summarize_burning_cost_by_product_network(member_results: List[dict]) -> Lis
         )
     rows.sort(key=lambda r: (r["product"], r["network"]))
     return rows
+
+
+def summarize_burning_cost_by_product_network_age_gender(member_results: List[dict], rate_cards: List[dict]) -> List[dict]:
+    """Burning cost bucketed by (Product, Network, age band, gender)
+    together - the same four dimensions price_member itself resolves a
+    rate-card row by - rather than just (Product, Network) alone. Finer
+    than summarize_burning_cost_by_product_network, so a New Business
+    case's own age/gender mix can be re-priced against the booked book's
+    own real experience for that exact slice (see
+    price_case_against_burning_cost) instead of one flat average across
+    every age and gender on that Product/Network.
+    """
+    bands = age_bands_from_rate_cards(rate_cards)
+    buckets: Dict[tuple, dict] = defaultdict(lambda: {"member_count": 0, "actual_claims": 0.0, "earned_member_years": 0.0})
+
+    for r in member_results:
+        if not r.get("in_scope", True):
+            continue
+        product = r.get("product")
+        network = r.get("network")
+        if not product or not network:
+            continue
+        band = _matching_age_band(r.get("age"), bands)
+        band_label = f"{band[0]}-{band[1]}" if band else "Unmapped age"
+        gender = r.get("gender") or "Unmapped"
+        key = (product, network, band_label, gender)
+        bucket = buckets[key]
+        bucket["member_count"] += 1
+        bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
+
+    rows = []
+    for (product, network, band_label, gender), bucket in buckets.items():
+        earned_member_years = bucket["earned_member_years"]
+        rows.append(
+            {
+                "product": product,
+                "network": network,
+                "age_band": band_label,
+                "gender": gender,
+                "member_count": bucket["member_count"],
+                "actual_claims": round(bucket["actual_claims"], 2),
+                "earned_member_years": round(earned_member_years, 4),
+                "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+            }
+        )
+    rows.sort(key=lambda r: (r["product"], r["network"], r["age_band"], r["gender"]))
+    return rows
+
+
+def price_case_against_burning_cost(
+    census: List[dict],
+    categories: List[dict],
+    rate_cards: List[dict],
+    burning_cost_rows: List[dict],
+) -> dict:
+    """Re-prices a New Business case's own census against the booked book's
+    own real burning cost (see
+    summarize_burning_cost_by_product_network_age_gender) instead of the
+    rate card, applying the SAME category_loading_pct/gross_up loading New
+    Business quoting itself uses on top - so the result lands in the same
+    "gross annual premium" units as price_case's own output and the two
+    can be compared category by category, not just eyeballed as
+    differently-scaled numbers.
+
+    A member whose own (Product, Network, age band, gender) combination has
+    no matching burning-cost bucket in the booked book (sparse or no
+    portfolio data for that exact slice) is excluded from that category's
+    net total and flagged via a warning, rather than silently priced at
+    zero - this is a reference figure to weigh against the rate card, not
+    something that should look artificially cheap just because the book
+    has a data gap.
+    """
+    bands = age_bands_from_rate_cards(rate_cards)
+    burning_cost_by_key = {
+        (r["product"], r["network"], r["age_band"], r["gender"]): r["burning_cost"]
+        for r in burning_cost_rows
+        if r.get("burning_cost") is not None
+    }
+
+    categories_by_name = {c["category"]: c for c in categories}
+    per_category_net: Dict[str, float] = defaultdict(float)
+    per_category_priced_count: Dict[str, int] = defaultdict(int)
+    per_category_total_count: Dict[str, int] = defaultdict(int)
+    per_category_warnings: Dict[str, List[str]] = defaultdict(list)
+    uncategorized_count = 0
+
+    for member in census:
+        category = categories_by_name.get(member.get("category"))
+        if category is None:
+            uncategorized_count += 1
+            continue
+        cat_name = category["category"]
+        per_category_total_count[cat_name] += 1
+
+        band = _matching_age_band(member.get("age"), bands)
+        band_label = f"{band[0]}-{band[1]}" if band else "Unmapped age"
+        gender = member.get("gender") or "Unmapped"
+        key = (category["product"], category["network"], band_label, gender)
+        burning_cost = burning_cost_by_key.get(key)
+        if burning_cost is None:
+            per_category_warnings[cat_name].append(
+                f"No booked-book burning cost for {category['product']}/{category['network']}, "
+                f"age band {band_label}, {gender}"
+            )
+            continue
+        per_category_net[cat_name] += burning_cost
+        per_category_priced_count[cat_name] += 1
+
+    category_breakdown = []
+    case_gross_total = 0.0
+    for cat_name, category in categories_by_name.items():
+        loading_pct = category_loading_pct(category["product"], category.get("commission_pct"))
+        net_total = per_category_net.get(cat_name, 0.0)
+        gross_total = gross_up(net_total, loading_pct)
+        case_gross_total += gross_total
+        category_breakdown.append(
+            {
+                "category": cat_name,
+                "product": category["product"],
+                "network": category["network"],
+                "member_count": per_category_total_count.get(cat_name, 0),
+                "priced_member_count": per_category_priced_count.get(cat_name, 0),
+                "net_annual_premium": round(net_total, 2),
+                "loading_pct": round(loading_pct, 4),
+                "gross_annual_premium": round(gross_total, 2),
+                "warnings": sorted(set(per_category_warnings.get(cat_name, []))),
+            }
+        )
+
+    return {
+        "categories": category_breakdown,
+        "case_gross_annual_premium": round(case_gross_total, 2),
+        "uncategorized_member_count": uncategorized_count,
+    }
 
 
 def summarize_burning_cost_overall(member_results: List[dict]) -> Optional[dict]:

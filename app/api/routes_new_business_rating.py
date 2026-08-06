@@ -11,11 +11,16 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
+from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
 from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
 from app.models import schemas
 from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_case_by_tier, price_tier_ladder
+from app.scoring.rules.portfolio_analysis import (
+    price_case_against_burning_cost,
+    summarize_burning_cost_by_product_network_age_gender,
+)
 
 router = APIRouter(tags=["new-business-rating"])
 
@@ -397,3 +402,48 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     rate_cards = _rate_card_dicts(db)
     variant_rates = _variant_rate_dicts(db)
     return price_case_by_tier(census, quote.categories, rate_cards, variant_rates)
+
+
+@router.get("/cases/{case_id}/new-business-quote/burning-cost-comparison")
+def get_new_business_quote_burning_cost_comparison(case_id: int, db: Session = Depends(get_db)):
+    """Compares the latest quote's rate-card price against what
+    HealthCross's own already-booked book would charge for this same
+    census, re-priced at real burning cost by (Product, Network, age band,
+    gender) - see price_case_against_burning_cost. A reference for whether
+    the rate card is running rich or thin against actual experience, not
+    something that overrides the quote. Returns null (not an error) when
+    Portfolio Analysis hasn't been uploaded yet, since that's optional
+    supporting data this comparison doesn't require to exist; still 404s
+    if there's no prior New Business quote to compare against at all (same
+    as /by-tier).
+    """
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No new business quote found for this case")
+
+    try:
+        portfolio_results = _run_analysis(db, as_of=_get_stored_as_of(db))
+    except HTTPException:
+        return None
+
+    census = _case_census_dicts(case)
+    rate_cards = _rate_card_dicts(db)
+    burning_cost_rows = summarize_burning_cost_by_product_network_age_gender(portfolio_results, rate_cards)
+    comparison = price_case_against_burning_cost(census, quote.categories, rate_cards, burning_cost_rows)
+
+    # Line up each category against the rate-card quote's own gross premium
+    # so the frontend doesn't have to re-match by category name itself.
+    quote_gross_by_category = {c["category"]: c["gross_annual_premium"] for c in quote.result["categories"]}
+    for cat in comparison["categories"]:
+        cat["rate_card_gross_annual_premium"] = quote_gross_by_category.get(cat["category"])
+
+    return comparison

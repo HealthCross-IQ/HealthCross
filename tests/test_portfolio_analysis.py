@@ -693,6 +693,69 @@ def test_summarize_burning_cost_by_product_network_skips_members_missing_either_
     assert rows == []
 
 
+def test_summarize_burning_cost_by_product_network_age_gender_groups_by_all_four():
+    from app.scoring.rules.portfolio_analysis import summarize_burning_cost_by_product_network_age_gender
+
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", gender="M", age=25), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [{"date_of_treatment": None, "final_amount": 2000.0}]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F", age=35), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": None, "final_amount": 8000.0}]},
+        ),
+        analyze_portfolio_member(
+            # Same Product/Network as M1, but Gold's own age band/gender slice
+            # must not blend into Bronze's - different product entirely.
+            _member(beneficiary_id="M3", gender="M", age=25), {"Acme Sub LLC": "Gold"}, RATE_CARDS, [],
+            {"M3": [{"date_of_treatment": None, "final_amount": 4000.0}]},
+        ),
+    ]
+    rows = summarize_burning_cost_by_product_network_age_gender(results, RATE_CARDS)
+    by_key = {(r["product"], r["network"], r["age_band"], r["gender"]): r for r in rows}
+    assert by_key[("Bronze", "MSH Regular", "18-40", "M")]["actual_claims"] == 2000.0
+    assert by_key[("Bronze", "MSH Regular", "18-40", "F")]["actual_claims"] == 8000.0
+    assert by_key[("Gold", "MSH Regular", "18-40", "M")]["actual_claims"] == 4000.0
+    assert len(rows) == 3
+
+
+def test_price_case_against_burning_cost_applies_the_same_loading_as_the_rate_card_quote():
+    from app.scoring.rules.new_business_rating import category_loading_pct, gross_up
+    from app.scoring.rules.portfolio_analysis import price_case_against_burning_cost
+
+    census = [
+        {"category": "A", "age": 25, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"},
+        {"category": "A", "age": 35, "gender": "F", "marital_status": "married", "relation": "spouse", "emirates": "Dubai"},
+    ]
+    categories = [{"category": "A", "product": "Bronze", "network": "MSH Regular", "tpa": "MSH MENA", "variant_selections": {}}]
+    burning_cost_rows = [
+        {"product": "Bronze", "network": "MSH Regular", "age_band": "18-40", "gender": "M", "burning_cost": 2500.0},
+        {"product": "Bronze", "network": "MSH Regular", "age_band": "18-40", "gender": "F", "burning_cost": 3500.0},
+    ]
+    result = price_case_against_burning_cost(census, categories, RATE_CARDS, burning_cost_rows)
+    cat = result["categories"][0]
+    assert cat["net_annual_premium"] == 6000.0  # 2500 + 3500, both members matched
+    assert cat["priced_member_count"] == 2
+    expected_loading = category_loading_pct("Bronze", None)
+    assert cat["loading_pct"] == round(expected_loading, 4)
+    assert cat["gross_annual_premium"] == round(gross_up(6000.0, expected_loading), 2)
+    assert result["case_gross_annual_premium"] == cat["gross_annual_premium"]
+
+
+def test_price_case_against_burning_cost_flags_members_with_no_matching_bucket():
+    from app.scoring.rules.portfolio_analysis import price_case_against_burning_cost
+
+    census = [{"category": "A", "age": 70, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"}]
+    categories = [{"category": "A", "product": "Bronze", "network": "MSH Regular", "tpa": "MSH MENA", "variant_selections": {}}]
+    result = price_case_against_burning_cost(census, categories, RATE_CARDS, burning_cost_rows=[])
+    cat = result["categories"][0]
+    assert cat["priced_member_count"] == 0
+    assert cat["member_count"] == 1
+    assert cat["net_annual_premium"] == 0.0
+    assert any("No booked-book burning cost" in w for w in cat["warnings"])
+
+
 def test_summarize_burning_cost_overall_aggregates_the_whole_book():
     results = [
         analyze_portfolio_member(
