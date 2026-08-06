@@ -9,7 +9,7 @@ from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
 from app.scoring.rules.benefits_comparison import compare_benefit_summaries, compare_benefit_value
-from app.scoring.rules.benefits_summary import build_standard_benefit_summary
+from app.scoring.rules.benefits_summary import NOT_SPECIFIED, build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.claims_ledger_analysis import (
     category_burning_cost,
@@ -472,7 +472,12 @@ def _benefit_summary(plan: models.BenefitPlan) -> dict:
             "optical": "Covered" if plan.optical_covered else "Not covered",
             "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
         }
-    return build_standard_benefit_summary(source)
+    # OCR (a lower-confidence, best-effort extraction - see
+    # app/ingestion/benefits_ocr.py) treats a field it never found a value
+    # for as "Not Covered" rather than the more neutral "Not specified in
+    # source document" every other, higher-confidence parser uses.
+    not_specified_text = "Not Covered" if plan.source_format == "pdf-ocr" else NOT_SPECIFIED
+    return build_standard_benefit_summary(source, not_specified_text=not_specified_text)
 
 
 @router.get("/{case_id}/benefits-summary")
@@ -496,6 +501,7 @@ def get_benefits_summary(case_id: int, db: Session = Depends(get_db)):
             "nb_product": plan.nb_product,
             "nb_network": plan.nb_network,
             "nb_tpa": plan.nb_tpa,
+            "source_format": plan.source_format,
         }
         for plan in existing_plans
     ]

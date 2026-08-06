@@ -238,3 +238,62 @@ def test_benefits_append_mode_renames_a_generic_fallback_plan_to_its_own_categor
     body = resp.json()
     assert body[0]["category"] == "B"
     assert body[0]["plan_name"] == "Category B"
+
+
+def test_benefits_upload_with_explicit_category_replaces_a_manually_added_plan_for_it(client, monkeypatch):
+    """Regression test for the real duplicate-category bug: a category
+    added by hand via POST .../benefits/manual (e.g. before OCR/parsing
+    could read a scanned document) must be replaced, not duplicated, once
+    the underwriter later uploads the real file for that same category and
+    tells the system explicitly which category it's for.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
+    monkeypatch.setattr(
+        routes_cases,
+        "extract_generic_benefit_rows",
+        lambda file, filename: [{"label": "Annual Maximum", "value": "USD 1,000,000", "description": ""}],
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Category A", "category": "A"})
+    assert resp.status_code == 200
+
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append&category=A",
+        files={"file": ("some_random_filename.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    plans = resp.json()
+    assert len(plans) == 1  # replaced, not duplicated
+    assert plans[0]["category"] == "A"
+    assert plans[0]["summary"]["annual_limit"] == "USD 1,000,000"
+
+
+def test_benefits_upload_explicit_category_overrides_filename_inference(client, monkeypatch):
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
+    monkeypatch.setattr(routes_cases, "extract_generic_benefit_rows", lambda file, filename: [])
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefits_pdf_text_fallback",
+        lambda file, filename: {"summary": {}, "raw_text": "no table structure recognized"},
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append&category=D",
+        files={"file": ("Category_B.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    assert resp.json()[0]["category"] == "D"

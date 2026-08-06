@@ -1148,10 +1148,11 @@ function renderCaseWorkspace() {
           <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
             <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
           </label>
+          <input type="text" id="file-benefits-category" placeholder="Category (e.g. A)" style="width:140px;">
           <button onclick="uploadFile('benefits')">Upload</button>
           <span id="status-benefits" class="status-pending"></span>
         </div>
-        <div class="hint" style="margin-top:-4px;">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last.</div>
+        <div class="hint" style="margin-top:-4px;">Some insurers ship each category's table of benefits as its own separate file - tick "one category per file" and upload each one in turn to add them side by side instead of each upload replacing the last. Type the category letter it's for (e.g. A) so it lines up with the HealthCross quote's own categories and a later re-upload for the same category replaces it instead of duplicating it - the document's own content/filename is only used as a fallback when this is left blank.</div>
         <div class="dropzone" id="dropzone-claims">
           <span class="kind-label">Claims</span>
           <span class="tier-pill dir-same upload-req-pill">Optional</span>
@@ -1325,12 +1326,15 @@ async function uploadFile(kind) {
   try {
     const appendCheckbox = document.getElementById(`file-${kind}-append`);
     const mergeDatesCheckbox = document.getElementById(`file-${kind}-merge-dates`);
-    let query = '';
-    if (kind === 'benefits' && appendCheckbox && appendCheckbox.checked) query = '?mode=append';
-    if (kind === 'census' && mergeDatesCheckbox && mergeDatesCheckbox.checked) query = '?mode=merge-dates';
+    const categoryInput = document.getElementById(`file-${kind}-category`);
+    const params = new URLSearchParams();
+    if (kind === 'benefits' && appendCheckbox && appendCheckbox.checked) params.set('mode', 'append');
+    if (kind === 'census' && mergeDatesCheckbox && mergeDatesCheckbox.checked) params.set('mode', 'merge-dates');
+    if (kind === 'benefits' && categoryInput && categoryInput.value.trim()) params.set('category', categoryInput.value.trim());
+    const query = params.toString() ? `?${params.toString()}` : '';
     const result = await api(`/cases/${currentCase.id}/${kind}${query}`, { method: 'POST', body: form });
     if (Array.isArray(result)) {
-      if (query === '?mode=merge-dates') {
+      if (params.get('mode') === 'merge-dates') {
         const withDates = result.filter(r => r.member_end_date).length;
         statusEl.textContent = `${withDates} of ${result.length} census rows now have member dates`;
         toast(`Dates merged into census (${withDates} of ${result.length} rows matched)`);
@@ -1344,6 +1348,10 @@ async function uploadFile(kind) {
       toast(`${kind} report parsed`);
     }
     statusEl.className = 'status-ok';
+    // Cleared rather than left as-is - the next file in a "one category per
+    // file" batch is almost always a different category, and leaving the
+    // last one filled in risks silently overwriting it if forgotten.
+    if (kind === 'benefits' && categoryInput) categoryInput.value = '';
     if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
@@ -1726,11 +1734,15 @@ function _onBenefitNbProductChange(planId, product) {
 }
 
 function _benefitSummaryCardHtml(p, editing) {
+  // OCR (lower-confidence, best-effort) marks an unfound field "Not
+  // Covered" rather than every other parser's "Not specified in source
+  // document" - see app/api/routes_analysis.py's _benefit_summary.
+  const unresolvedText = p.source_format === 'pdf-ocr' ? 'Not Covered' : NOT_SPECIFIED_TEXT;
   const rows = Object.entries(p.summary).map(([field, value]) => {
     if (!editing) {
       return `<tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>`;
     }
-    const current = value === NOT_SPECIFIED_TEXT ? '' : value;
+    const current = value === unresolvedText ? '' : value;
     return `
       <tr>
         <th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th>
@@ -1840,7 +1852,7 @@ async function addManualBenefitPlan() {
     const plan = await api(`/cases/${currentCase.id}/benefits/manual`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({plan_name: `Category ${nextLetter}`}),
+      body: JSON.stringify({plan_name: `Category ${nextLetter}`, category: nextLetter}),
     });
     toast('Category added - fill in its details below');
     await loadBenefitsSummary();

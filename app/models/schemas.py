@@ -142,6 +142,12 @@ class ManualBenefitPlanCreate(BaseModel):
     # couldn't usefully read at all, where correcting individual fields on
     # an OCR-extracted plan isn't enough to start from.
     plan_name: str = "New plan"
+    # Sets the category letter (e.g. "A") right away, not just the display
+    # name - without this, a later append-mode upload for that same
+    # category can't match this plan by category (they're both named
+    # "Category A" but only one has category="A" set), so it gets added
+    # alongside it instead of replacing it.
+    category: Optional[str] = None
 
 
 class ClaimsRecordOut(BaseModel):

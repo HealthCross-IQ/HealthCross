@@ -41,16 +41,19 @@ FIELD_LABELS = {
 NOT_SPECIFIED = "Not specified in source document"
 
 
-def build_standard_benefit_summary(plan_details: Dict[str, Any]) -> Dict[str, str]:
+def build_standard_benefit_summary(plan_details: Dict[str, Any], not_specified_text: str = NOT_SPECIFIED) -> Dict[str, str]:
     """Return the fixed 10-field summary, defaulting any missing field.
 
     plan_details may come from any insurer's table of benefits, in whatever
     shape that insurer's parser produces - callers pass in whatever they've
     extracted under these exact keys. Anything absent is marked explicitly
     rather than silently omitted, so a gap in the source document stays
-    visible instead of just disappearing from the summary.
+    visible instead of just disappearing from the summary. not_specified_text
+    lets a caller use a different default for a field OCR (a lower-confidence
+    extraction than real document text) simply never found a value for - see
+    app/api/routes_analysis.py's _benefit_summary.
     """
-    return {field: plan_details.get(field) or NOT_SPECIFIED for field in STANDARD_FIELDS}
+    return {field: plan_details.get(field) or not_specified_text for field in STANDARD_FIELDS}
 
 
 def format_benefit_summary_markdown(plan_name: str, plan_details: Dict[str, Any]) -> str:

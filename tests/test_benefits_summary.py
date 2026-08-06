@@ -25,6 +25,15 @@ def test_missing_fields_default_to_not_specified_rather_than_disappearing():
     assert summary["pharmacy_limit_and_coinsurance"] == NOT_SPECIFIED
 
 
+def test_missing_fields_use_a_caller_supplied_default_when_given():
+    # OCR (see app/api/routes_analysis.py's _benefit_summary) uses "Not
+    # Covered" instead of the default NOT_SPECIFIED for its own plans.
+    summary = build_standard_benefit_summary({"annual_limit": "USD 1,000,000"}, not_specified_text="Not Covered")
+    assert summary["annual_limit"] == "USD 1,000,000"
+    assert summary["deductible"] == "Not Covered"
+    assert summary["dental"] == "Not Covered"
+
+
 def test_format_benefit_summary_markdown_includes_plan_name_and_all_rows():
     markdown = format_benefit_summary_markdown("Premier", {"annual_limit": "USD 4,700,000"})
     assert "### Premier" in markdown

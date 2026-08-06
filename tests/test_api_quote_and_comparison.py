@@ -78,6 +78,23 @@ def test_benefits_summary_only_returns_existing_role(client):
     assert body[0]["plan_name"] == "Category 1"
 
 
+def test_benefits_summary_defaults_unresolved_ocr_fields_to_not_covered(client):
+    # OCR (a lower-confidence, best-effort extraction) marks a field it
+    # never found a value for "Not Covered" - every other, higher-confidence
+    # parser still uses the more neutral "Not specified in source document".
+    case_id = _create_case(client)
+    _insert_existing_plan(
+        client, case_id, source_format="pdf-ocr", standard_summary={"annual_limit": "USD 4,000,000"}
+    )
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    assert resp.status_code == 200
+    summary = resp.json()[0]["summary"]
+    assert summary["annual_limit"] == "USD 4,000,000"
+    assert summary["deductible"] == "Not Covered"
+    assert summary["dental"] == "Not Covered"
+
+
 def test_premium_by_category_returns_quoted_plans_with_per_member_figure(client):
     case_id = _create_case(client)
     _insert_quoted_plan(client, case_id, category="A", member_count=54, gross_premium=918950.0, plan_name="Gold - CAT A")
@@ -421,6 +438,19 @@ def test_add_manual_benefit_plan_creates_a_blank_existing_role_plan(client):
     assert any(p["plan_name"] == "Category B" for p in plans)
     new_plan_summary = next(p["summary"] for p in plans if p["plan_name"] == "Category B")
     assert all(v == "Not specified in source document" for v in new_plan_summary.values())
+
+
+def test_add_manual_benefit_plan_sets_the_category_field_not_just_the_name(client):
+    # Regression test: the plan's own `category` field (not just its display
+    # name) must be set right away - otherwise a later append-mode upload
+    # for that same category can't match this plan (one says category="A",
+    # the other category=None), so it gets added alongside it as a
+    # duplicate instead of replacing it.
+    case_id = _create_case(client)
+
+    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Category A", "category": "A"})
+    assert resp.status_code == 200
+    assert resp.json()["category"] == "A"
 
 
 def test_delete_benefit_plan_removes_it(client):

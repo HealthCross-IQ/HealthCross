@@ -250,6 +250,15 @@ def upload_benefits(
             "categories' plans, only replacing a plan that shares this file's category letter."
         ),
     ),
+    category: Optional[str] = Query(
+        None,
+        description=(
+            "This file's own category letter (e.g. 'A'), when the underwriter picks it explicitly "
+            "at upload time rather than relying on the document's content or filename to carry it - "
+            "authoritative when given, overriding whatever the parser itself would have detected. "
+            "Only applied when this file produced exactly one plan."
+        ),
+    ),
     db: Session = Depends(get_db),
 ):
     case = _get_case_or_404(db, case_id)
@@ -412,6 +421,13 @@ def upload_benefits(
         raise HTTPException(status_code=400, detail=f"Could not parse table of benefits: {exc}")
     if not plans:
         raise HTTPException(status_code=400, detail="No benefit plans found in file")
+
+    if len(plans) == 1 and category and category.strip():
+        # The underwriter's own explicit choice at upload time always wins -
+        # more reliable than guessing from the document's content or
+        # filename, and the only way to be sure the category this file
+        # replaces (in append mode) is exactly right.
+        plans[0].category = category.strip().upper()
 
     if mode == "append":
         # One file per category (some insurers ship each category's table of
@@ -604,6 +620,7 @@ def add_manual_benefit_plan(case_id: int, payload: schemas.ManualBenefitPlanCrea
         case_id=case.id,
         role="existing",
         plan_name=payload.plan_name.strip() or "New plan",
+        category=(payload.category or "").strip() or None,
         source_format="manual",
         standard_summary={},
     )
