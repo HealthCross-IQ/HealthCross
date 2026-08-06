@@ -365,6 +365,7 @@
 <script>
 const API = '';
 let currentCase = null;
+let _benefitsSummaryPlans = [];
 const ZONE_LABELS = {
   zone_1_asia: 'Asia',
   zone_2_middle_east: 'Middle East',
@@ -1663,23 +1664,81 @@ async function loadCensusSummary() {
 
 /* ---------------- benefits ---------------- */
 
+const NOT_SPECIFIED_TEXT = 'Not specified in source document';
+
+function _benefitSummaryCardHtml(p, editing) {
+  const rows = Object.entries(p.summary).map(([field, value]) => {
+    if (!editing) {
+      return `<tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>`;
+    }
+    const current = value === NOT_SPECIFIED_TEXT ? '' : value;
+    return `
+      <tr>
+        <th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th>
+        <td><input type="text" data-field="${field}" value="${escapeHtml(current)}" style="width:100%;box-sizing:border-box;" /></td>
+      </tr>
+    `;
+  }).join('');
+
+  const actions = editing
+    ? `
+      <button class="primary" onclick="saveBenefitSummaryEdit(${p.id})">Save</button>
+      <button onclick="cancelBenefitSummaryEdit(${p.id})">Cancel</button>
+    `
+    : `<button onclick="editBenefitSummary(${p.id})">Edit</button>`;
+
+  return `
+    <div class="card" data-plan-id="${p.id}">
+      <h3>${escapeHtml(p.plan_name || 'Plan')}</h3>
+      <table>${rows}</table>
+      <div style="margin-top:10px;">${actions}</div>
+    </div>
+  `;
+}
+
 async function loadBenefitsSummary() {
   const area = document.getElementById('benefits-summary-area');
   try {
     const plans = await api(`/cases/${currentCase.id}/benefits-summary`);
+    _benefitsSummaryPlans = plans;
     _setUploadStatus('benefits', `${plans.length} plan${plans.length === 1 ? '' : 's'} uploaded`);
-    area.innerHTML = plans.map(p => `
-      <div class="card">
-        <h3>${escapeHtml(p.plan_name || 'Plan')}</h3>
-        <table>
-          ${Object.entries(p.summary).map(([field, value]) => `
-            <tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>
-          `).join('')}
-        </table>
-      </div>
-    `).join('');
+    area.innerHTML = plans.map(p => _benefitSummaryCardHtml(p, false)).join('');
   } catch (err) {
     area.innerHTML = '';
+  }
+}
+
+function editBenefitSummary(planId) {
+  const plan = _benefitsSummaryPlans.find(p => p.id === planId);
+  if (!plan) return;
+  const card = document.querySelector(`#benefits-summary-area .card[data-plan-id="${planId}"]`);
+  if (card) card.outerHTML = _benefitSummaryCardHtml(plan, true);
+}
+
+function cancelBenefitSummaryEdit(planId) {
+  const plan = _benefitsSummaryPlans.find(p => p.id === planId);
+  if (!plan) return;
+  const card = document.querySelector(`#benefits-summary-area .card[data-plan-id="${planId}"]`);
+  if (card) card.outerHTML = _benefitSummaryCardHtml(plan, false);
+}
+
+async function saveBenefitSummaryEdit(planId) {
+  const card = document.querySelector(`#benefits-summary-area .card[data-plan-id="${planId}"]`);
+  if (!card) return;
+  const fields = {};
+  card.querySelectorAll('input[data-field]').forEach(input => {
+    fields[input.dataset.field] = input.value;
+  });
+  try {
+    await api(`/cases/${currentCase.id}/benefits/${planId}/summary`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fields}),
+    });
+    toast('Benefit summary updated');
+    await loadBenefitsSummary();
+  } catch (err) {
+    toast(err.message, true);
   }
 }
 

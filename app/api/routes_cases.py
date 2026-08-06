@@ -24,6 +24,7 @@ from app.ingestion.upload_sniffer import sniff_upload_kind
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.benefit_category_mapping import build_standard_summary_from_rows, to_case_benefit_plan_fields
+from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -502,6 +503,37 @@ def set_benefit_plan_match(
             raise HTTPException(status_code=404, detail="Quoted benefit plan not found on this case")
 
     plan.matched_quote_plan_id = payload.quoted_plan_id
+    db.commit()
+    db.refresh(plan)
+    return plan
+
+
+@router.put("/{case_id}/benefits/{plan_id}/summary", response_model=schemas.BenefitPlanOut)
+def update_benefit_plan_summary(
+    case_id: int, plan_id: int, payload: schemas.BenefitSummaryUpdate, db: Session = Depends(get_db)
+):
+    """Manual corrections to a benefit plan's standard 12-field summary -
+    mainly for OCR-extracted plans (scanned table-of-benefits PDFs, see
+    app/ingestion/benefits_ocr.py), where automatic extraction is
+    best-effort and rarely used often enough to be worth chasing every
+    insurer's own label wording. Only known STANDARD_FIELDS keys are
+    accepted; an empty/blank value clears that field back to unresolved
+    rather than storing blank text as if it came from the source document.
+    """
+    case = _get_case_or_404(db, case_id)
+    plan = db.query(models.BenefitPlan).filter_by(id=plan_id, case_id=case.id).first()
+    if not plan:
+        raise HTTPException(status_code=404, detail="Benefit plan not found on this case")
+
+    summary = dict(plan.standard_summary or {})
+    for field, value in payload.fields.items():
+        if field not in STANDARD_FIELDS:
+            continue
+        if value is None or not value.strip():
+            summary.pop(field, None)
+        else:
+            summary[field] = value.strip()
+    plan.standard_summary = summary
     db.commit()
     db.refresh(plan)
     return plan

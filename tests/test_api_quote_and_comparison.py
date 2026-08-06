@@ -311,3 +311,73 @@ def test_reuploading_the_quote_clears_stale_manual_matches(client, monkeypatch):
     resp = client.get(f"/cases/{case_id}/benefits-comparison")
     assert resp.status_code == 200
     assert resp.json()[0]["quoted_plan_name"] == "Reissued Gold - CAT A - CAT A"
+
+
+def test_benefits_summary_includes_plan_id_for_editing(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id)
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    assert resp.status_code == 200
+    assert resp.json()[0]["id"] == existing.id
+
+
+def test_manual_summary_edit_overrides_a_field(client):
+    # Mainly for OCR-extracted plans (scanned table-of-benefits PDFs),
+    # where a field often comes back "Not specified in source document" -
+    # an underwriter should be able to correct it by hand rather than
+    # re-running OCR.
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, standard_summary={"deductible": "Not specified in source document"})
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {"deductible": "Nil", "area_of_cover": "Worldwide Excluding USA"}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["standard_summary"]["deductible"] == "Nil"
+    assert body["standard_summary"]["area_of_cover"] == "Worldwide Excluding USA"
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    summary = resp.json()[0]["summary"]
+    assert summary["deductible"] == "Nil"
+
+
+def test_manual_summary_edit_blank_value_clears_field_back_to_unresolved(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, standard_summary={"deductible": "Nil"})
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {"deductible": "   "}},
+    )
+    assert resp.status_code == 200
+    assert "deductible" not in resp.json()["standard_summary"]
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    assert resp.json()[0]["summary"]["deductible"] == "Not specified in source document"
+
+
+def test_manual_summary_edit_ignores_unknown_fields(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id, standard_summary={})
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {"not_a_real_field": "junk"}},
+    )
+    assert resp.status_code == 200
+    assert "not_a_real_field" not in resp.json()["standard_summary"]
+
+
+def test_manual_summary_edit_404_for_wrong_case(client):
+    case_id = _create_case(client)
+    other_case_id = _create_case(client)
+    existing = _insert_existing_plan(client, other_case_id)
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {"deductible": "Nil"}},
+    )
+    assert resp.status_code == 404

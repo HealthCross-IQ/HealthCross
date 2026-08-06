@@ -110,6 +110,17 @@ class BenefitPlanMatchUpdate(BaseModel):
     quoted_plan_id: Optional[int] = None
 
 
+class BenefitSummaryUpdate(BaseModel):
+    # Manual corrections to the standard 12-field summary (see
+    # app/scoring/rules/benefits_summary.py's STANDARD_FIELDS) - keyed by
+    # field name, e.g. {"annual_limit": "USD 4,000,000"}. Mainly for
+    # OCR-extracted plans (scanned PDFs), where automatic extraction is
+    # best-effort and some fields often come back unresolved - an empty
+    # string clears a field back to unresolved rather than storing blank
+    # text as if it were a real value from the document.
+    fields: Dict[str, Optional[str]]
+
+
 class ClaimsRecordOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

@@ -479,7 +479,9 @@ def get_benefits_summary(case_id: int, db: Session = Depends(get_db)):
     if not existing_plans:
         raise HTTPException(status_code=404, detail="No table of benefits uploaded for this case")
 
-    return [{"plan_name": plan.plan_name, "summary": _benefit_summary(plan)} for plan in existing_plans]
+    return [
+        {"id": plan.id, "plan_name": plan.plan_name, "summary": _benefit_summary(plan)} for plan in existing_plans
+    ]
 
 
 @router.get("/{case_id}/premium-by-category")
