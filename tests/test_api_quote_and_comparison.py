@@ -481,6 +481,57 @@ def test_delete_benefit_plan_rejects_quoted_role(client):
     assert resp.status_code == 404
 
 
+def test_duplicate_benefit_plan_copies_summary_and_new_business_picks(client):
+    case_id = _create_case(client)
+    source = _insert_existing_plan(
+        client, case_id, plan_name="Category A", category="A", nb_product="Gold", nb_network="MSH Platinum", nb_tpa="NAS"
+    )
+
+    resp = client.post(f"/cases/{case_id}/benefits/{source.id}/duplicate")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["id"] != source.id
+    assert body["plan_name"] == "Category B"
+    assert body["category"] == "B"
+    assert body["nb_product"] == "Gold"
+    assert body["nb_network"] == "MSH Platinum"
+    assert body["nb_tpa"] == "NAS"
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    plans = resp.json()
+    assert len(plans) == 2
+    original_summary = next(p["summary"] for p in plans if p["category"] == "A")
+    duplicate_summary = next(p["summary"] for p in plans if p["category"] == "B")
+    assert original_summary == duplicate_summary
+
+
+def test_duplicate_benefit_plan_skips_letters_already_in_use(client):
+    case_id = _create_case(client)
+    source = _insert_existing_plan(client, case_id, plan_name="Category A", category="A")
+    _insert_existing_plan(client, case_id, plan_name="Category B", category="B")
+
+    resp = client.post(f"/cases/{case_id}/benefits/{source.id}/duplicate")
+    assert resp.status_code == 200
+    assert resp.json()["category"] == "C"
+
+
+def test_duplicate_benefit_plan_404_for_wrong_case(client):
+    case_id = _create_case(client)
+    other_case_id = _create_case(client)
+    source = _insert_existing_plan(client, other_case_id)
+
+    resp = client.post(f"/cases/{case_id}/benefits/{source.id}/duplicate")
+    assert resp.status_code == 404
+
+
+def test_duplicate_benefit_plan_rejects_quoted_role(client):
+    case_id = _create_case(client)
+    quoted = _insert_quoted_plan(client, case_id)
+
+    resp = client.post(f"/cases/{case_id}/benefits/{quoted.id}/duplicate")
+    assert resp.status_code == 404
+
+
 def test_manual_summary_edit_sets_category_and_new_business_pick(client):
     case_id = _create_case(client)
     existing = _insert_existing_plan(client, case_id)

@@ -1,4 +1,5 @@
 import re
+import string
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -636,6 +637,43 @@ def add_manual_benefit_plan(case_id: int, payload: schemas.ManualBenefitPlanCrea
         category=(payload.category or "").strip() or None,
         source_format="manual",
         standard_summary={},
+    )
+    db.add(plan)
+    db.commit()
+    db.refresh(plan)
+    maybe_auto_requote(case.id, db)
+    return plan
+
+
+@router.post("/{case_id}/benefits/{plan_id}/duplicate", response_model=schemas.BenefitPlanOut)
+def duplicate_benefit_plan(case_id: int, plan_id: int, db: Session = Depends(get_db)):
+    """Copies an existing-role benefit plan's summary fields and New
+    Business picks into a brand-new category - for when most categories on
+    a case share the same benefits and only a few fields differ, so the
+    underwriter can duplicate a filled-in category and correct just the
+    differences instead of re-entering everything from scratch.
+    """
+    case = _get_case_or_404(db, case_id)
+    source = db.query(models.BenefitPlan).filter_by(id=plan_id, case_id=case.id, role="existing").first()
+    if not source:
+        raise HTTPException(status_code=404, detail="Existing-role benefit plan not found on this case")
+
+    used_letters = {
+        (p.category or "").strip().upper()
+        for p in db.query(models.BenefitPlan).filter_by(case_id=case.id, role="existing").all()
+    }
+    next_letter = next((c for c in string.ascii_uppercase if c not in used_letters), None)
+
+    plan = models.BenefitPlan(
+        case_id=case.id,
+        role="existing",
+        plan_name=f"Category {next_letter}" if next_letter else f"Copy of {source.plan_name}",
+        category=next_letter,
+        source_format=source.source_format,
+        standard_summary=dict(source.standard_summary or {}),
+        nb_product=source.nb_product,
+        nb_network=source.nb_network,
+        nb_tpa=source.nb_tpa,
     )
     db.add(plan)
     db.commit()

@@ -9,6 +9,7 @@ from app.scoring.rules.new_business_rating import (
     category_loading_pct,
     gross_up,
     price_case,
+    price_case_by_tier,
     price_member,
     price_tier_ladder,
 )
@@ -308,3 +309,46 @@ def test_price_tier_ladder_only_prices_members_in_that_category():
     gold = next(r for r in ladder if r["product"] == "Gold")
     platinum_network = next(n for n in gold["networks"] if n["network"] == "MSH Platinum")
     assert platinum_network["net_annual_premium"] == 4000.0  # only the one Category A member, not both
+
+
+def test_price_case_by_tier_covers_every_product_in_the_fixed_tier_order():
+    categories = [{"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}]
+    by_tier = price_case_by_tier(TIER_LADDER_CENSUS, categories, TIER_LADDER_RATE_CARDS, [])
+    assert [r["product"] for r in by_tier] == ["Platinum", "Gold", "Silver", "Bronze"]
+
+
+def test_price_case_by_tier_sums_every_category_together():
+    census = [
+        {"category": "A", "age": 30, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"},
+        {"category": "B", "age": 32, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"},
+    ]
+    categories = [
+        {"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}},
+        {"category": "B", "product": "Silver", "network": "MSH Premium", "tpa": "MSH MENA", "variant_selections": {}},
+    ]
+    by_tier = price_case_by_tier(census, categories, TIER_LADDER_RATE_CARDS, [])
+    platinum = next(r for r in by_tier if r["product"] == "Platinum")
+    # Both categories re-priced on Platinum together, not just whichever was already on it.
+    assert len(platinum["categories"]) == 2
+    assert platinum["case_gross_annual_premium"] > 0
+
+
+def test_price_case_by_tier_substitutes_the_richest_network_when_the_chosen_one_is_absent():
+    # MSH Platinum (Category A's own chosen network) isn't offered at all
+    # under Silver in this fixture - falls back to the richest Silver
+    # network instead of just dropping the category from that tier's total.
+    categories = [{"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}]
+    by_tier = price_case_by_tier(TIER_LADDER_CENSUS, categories, TIER_LADDER_RATE_CARDS, [])
+    silver = next(r for r in by_tier if r["product"] == "Silver")
+    assert silver["categories"][0]["network"] == "MSH Premium"  # richest Silver network in the fixture
+    assert any("substituted" in w for w in silver["warnings"])
+
+
+def test_price_case_by_tier_flags_a_tier_with_no_networks_at_all_for_a_category():
+    categories = [{"category": "A", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "variant_selections": {}}]
+    rate_cards_without_bronze = [r for r in TIER_LADDER_RATE_CARDS]  # fixture already has no Bronze row
+    by_tier = price_case_by_tier(TIER_LADDER_CENSUS, categories, rate_cards_without_bronze, [])
+    bronze = next(r for r in by_tier if r["product"] == "Bronze")
+    assert bronze["categories"] == []
+    assert bronze["case_gross_annual_premium"] is None
+    assert bronze["warnings"]

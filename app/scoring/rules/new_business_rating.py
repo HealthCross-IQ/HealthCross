@@ -37,7 +37,7 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set
 
 from app.reference.emirate_regions import REGION_ABU_DHABI, region_for_emirate
-from app.reference.product_tiers import NETWORK_RICHNESS_ORDER, tier_ladder
+from app.reference.product_tiers import NETWORK_RICHNESS_ORDER, PRODUCT_TIER_ORDER, tier_ladder
 
 MATERNITY_AGE_MIN, MATERNITY_AGE_MAX = 18, 50
 
@@ -326,6 +326,58 @@ def price_tier_ladder(
             )
         ladder_results.append({"product": product, "networks": network_rows, "warnings": []})
     return ladder_results
+
+
+def price_case_by_tier(
+    census: List[dict],
+    categories: List[dict],
+    rate_cards: List[dict],
+    variant_rates: List[dict],
+) -> List[dict]:
+    """Case-wide total premium under each full product tier (Bronze/
+    Silver/Gold/Platinum), rather than one category's own tier-and-network
+    grid (see price_tier_ladder) - a quick "what would the whole case cost
+    on tier X" comparison across every category at once.
+
+    Every category is re-priced on the SAME tier together, keeping its own
+    network name if that tier's TPA still offers it there, else
+    substituting the richest network that TPA does offer under that tier
+    (flagged with a warning) - summing figures from several different
+    chosen networks wouldn't be a coherent single "whole case on tier X"
+    total.
+    """
+    results = []
+    for product in PRODUCT_TIER_ORDER:
+        tier_categories = []
+        warnings = []
+        for category in categories:
+            tpa = category["tpa"]
+            networks = sorted(_networks_offered(rate_cards, product, tpa), key=lambda n: _network_sort_key(tpa, n))
+            if not networks:
+                warnings.append(f"Category {category['category']}: no {tpa} networks offered for {product}")
+                continue
+            network = category["network"] if category["network"] in networks else networks[0]
+            if network != category["network"]:
+                warnings.append(
+                    f"Category {category['category']}: {category['network']} not offered under {product} - "
+                    f"substituted {network}"
+                )
+            tier_categories.append({**category, "product": product, "network": network})
+
+        if not tier_categories:
+            results.append({"product": product, "case_gross_annual_premium": None, "categories": [], "warnings": warnings})
+            continue
+
+        case_result = price_case(census, tier_categories, rate_cards, variant_rates)
+        results.append(
+            {
+                "product": product,
+                "case_gross_annual_premium": case_result["case_gross_annual_premium"],
+                "categories": case_result["categories"],
+                "warnings": warnings,
+            }
+        )
+    return results
 
 
 # Thresholds for how far a broker's target premium can sit above/below the

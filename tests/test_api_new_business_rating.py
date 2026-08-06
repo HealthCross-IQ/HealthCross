@@ -394,3 +394,31 @@ def test_saving_a_categorys_nb_pick_on_the_benefits_tab_auto_computes_the_quote_
     resp = client.get(f"/cases/{case_id}/new-business-quote")
     assert resp.status_code == 200
     assert resp.json()["categories"][0]["product"] == "Bronze"
+
+
+def test_new_business_quote_by_tier_covers_every_product_and_case_totals(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+
+    resp = client.post(
+        f"/cases/{case_id}/new-business-quote",
+        json={"categories": [{"category": "A", "product": "Bronze", "network": "Net A", "tpa": "TPA X", "variant_selections": {}}]},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote/by-tier")
+    assert resp.status_code == 200
+    by_tier = resp.json()
+    assert [r["product"] for r in by_tier] == ["Platinum", "Gold", "Silver", "Bronze"]
+    bronze = next(r for r in by_tier if r["product"] == "Bronze")
+    platinum = next(r for r in by_tier if r["product"] == "Platinum")
+    assert bronze["case_gross_annual_premium"] == pytest.approx(4200.0 / (1 - 0.265), rel=1e-6)
+    assert platinum["case_gross_annual_premium"] > bronze["case_gross_annual_premium"]
+
+
+def test_new_business_quote_by_tier_404s_without_a_prior_quote(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote/by-tier")
+    assert resp.status_code == 404

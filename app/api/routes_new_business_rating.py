@@ -15,7 +15,7 @@ from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
 from app.models import schemas
-from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_tier_ladder
+from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_case_by_tier, price_tier_ladder
 
 router = APIRouter(tags=["new-business-rating"])
 
@@ -354,3 +354,30 @@ def get_latest_new_business_quote(case_id: int, db: Session = Depends(get_db)):
     if not quote:
         raise HTTPException(status_code=404, detail="No new business quote found for this case")
     return quote
+
+
+@router.get("/cases/{case_id}/new-business-quote/by-tier")
+def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
+    """The latest quote's own category picks, re-priced under every full
+    product tier (Bronze/Silver/Gold/Platinum) rather than just the one
+    already chosen - a quick case-wide "what would this cost on tier X"
+    comparison, computed live rather than stored (it's a what-if view of
+    the latest quote, not a quote itself). See price_case_by_tier.
+    """
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No new business quote found for this case")
+
+    census = _case_census_dicts(case)
+    rate_cards = _rate_card_dicts(db)
+    variant_rates = _variant_rate_dicts(db)
+    return price_case_by_tier(census, quote.categories, rate_cards, variant_rates)

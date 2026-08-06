@@ -1796,7 +1796,7 @@ function _benefitSummaryCardHtml(p, editing) {
       <button onclick="cancelBenefitSummaryEdit(${p.id})">Cancel</button>
       <button onclick="deleteBenefitPlan(${p.id})" style="float:right;">Delete category</button>
     `
-    : `<button onclick="editBenefitSummary(${p.id})">Edit</button>`;
+    : `<button onclick="editBenefitSummary(${p.id})">Edit</button> <button onclick="duplicateBenefitPlan(${p.id})">Duplicate</button>`;
 
   const title = editing
     ? `<input type="text" id="plan-name-input-${p.id}" value="${escapeHtml(p.plan_name || '')}" placeholder="e.g. Category A" style="font-size:1.1em;font-weight:600;width:100%;box-sizing:border-box;margin-bottom:8px;" />`
@@ -1894,6 +1894,17 @@ async function addManualBenefitPlan() {
       body: JSON.stringify({plan_name: `Category ${nextLetter}`, category: nextLetter}),
     });
     toast('Category added - fill in its details below');
+    await loadBenefitsSummary();
+    editBenefitSummary(plan.id);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+async function duplicateBenefitPlan(planId) {
+  try {
+    const plan = await api(`/cases/${currentCase.id}/benefits/${planId}/duplicate`, {method: 'POST'});
+    toast('Category duplicated - adjust any differences below');
     await loadBenefitsSummary();
     editBenefitSummary(plan.id);
   } catch (err) {
@@ -2640,6 +2651,12 @@ async function loadNewBusinessRating() {
   } catch (err) {
     nbLastQuote = null;
   }
+  try {
+    nbQuoteByTier = nbLastQuote ? await api(`/cases/${currentCase.id}/new-business-quote/by-tier`) : null;
+  } catch (err) {
+    nbQuoteByTier = null;
+  }
+  nbSelectedTierProduct = null;
 
   const priorByCategory = {};
   if (nbLastQuote) {
@@ -2881,6 +2898,12 @@ async function nbComputeQuote() {
       body: JSON.stringify({ categories }),
     });
     nbLastQuote = quote;
+    nbSelectedTierProduct = null; // reset to this fresh quote's own picks, not a stale what-if selection
+    try {
+      nbQuoteByTier = await api(`/cases/${currentCase.id}/new-business-quote/by-tier`);
+    } catch (err) {
+      nbQuoteByTier = null;
+    }
     document.getElementById('nb-result-area').innerHTML = nbResultHtml(quote);
     toast('Quote computed');
   } catch (err) {
@@ -2888,11 +2911,66 @@ async function nbComputeQuote() {
   }
 }
 
+let nbQuoteByTier = null;
+let nbSelectedTierProduct = null;
+
+function _nbCategoryTableHtml(categories) {
+  const warnings = [];
+  categories.forEach(c => (c.warnings || []).forEach(w => warnings.push(`Category ${c.category}: ${w}`)));
+  return `
+    <table>
+      <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
+      ${categories.map(c => `
+        <tr>
+          <td>${escapeHtml(c.category)}</td>
+          <td>${escapeHtml(c.product)}</td>
+          <td>${escapeHtml(c.network)}</td>
+          <td>${c.member_count}</td>
+          <td>${c.net_annual_premium.toLocaleString()}</td>
+          <td>${(c.loading_pct * 100).toFixed(1)}%</td>
+          <td>${c.gross_annual_premium.toLocaleString()}</td>
+        </tr>
+      `).join('')}
+    </table>
+    ${warnings.length ? `<div class="hint" style="margin-top:10px;">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
+  `;
+}
+
+function nbSelectTier(product) {
+  nbSelectedTierProduct = product;
+  nbRenderArea();
+}
+
+function _nbTierIconRowHtml(quote) {
+  if (!nbQuoteByTier || !nbQuoteByTier.length) return '';
+  const currentProducts = new Set(quote.result.categories.map(c => c.product));
+  const defaultSelected = currentProducts.size === 1 ? [...currentProducts][0] : null;
+  const selected = nbSelectedTierProduct || defaultSelected;
+  return `
+    <div class="tier-icon-row" style="display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap;">
+      ${nbQuoteByTier.map(t => `
+        <button
+          class="tier-icon"
+          style="flex:1; min-width:140px; text-align:left; background:var(--surface-2); border:2px solid ${t.product === selected ? 'var(--accent)' : 'var(--border)'}; border-radius:10px; padding:12px 14px; cursor:${t.case_gross_annual_premium != null ? 'pointer' : 'default'}; opacity:${t.case_gross_annual_premium != null ? '1' : '0.5'};"
+          ${t.case_gross_annual_premium != null ? `onclick="nbSelectTier('${t.product}')"` : 'disabled'}
+        >
+          <div style="font-size:12px; color:var(--ink-muted); font-weight:600; text-transform:uppercase; letter-spacing:0.03em;">${escapeHtml(t.product)}</div>
+          <div style="font-size:19px; font-weight:700; font-variant-numeric:tabular-nums; margin-top:4px;">${t.case_gross_annual_premium != null ? 'AED ' + t.case_gross_annual_premium.toLocaleString() : 'Not available'}</div>
+          ${t.product === selected ? '<div style="display:inline-block; margin-top:6px; font-size:10.5px; padding:2px 8px; border-radius:999px; background:var(--good-bg); color:var(--good); font-weight:700;">Current</div>' : ''}
+        </button>
+      `).join('')}
+    </div>
+  `;
+}
+
 function nbResultHtml(quote) {
   const opp = quote.opportunity_assessment;
   const oppClass = opp ? (NB_OPPORTUNITY_CLASS[opp.verdict] || 'tier-Standard') : 'tier-Standard';
-  const warnings = [];
-  quote.result.categories.forEach(c => (c.warnings || []).forEach(w => warnings.push(`Category ${c.category}: ${w}`)));
+  const currentProducts = new Set(quote.result.categories.map(c => c.product));
+  const defaultSelected = currentProducts.size === 1 ? [...currentProducts][0] : null;
+  const selected = nbSelectedTierProduct || defaultSelected;
+  const selectedTier = nbQuoteByTier && selected ? nbQuoteByTier.find(t => t.product === selected) : null;
+  const shownCategories = selectedTier && selectedTier.case_gross_annual_premium != null ? selectedTier.categories : quote.result.categories;
 
   return `
     <div class="card">
@@ -2903,59 +2981,8 @@ function nbResultHtml(quote) {
         ${opp && opp.target_vs_rated_variance_pct != null ? `<div class="kpi"><span class="label">Target vs. rated variance</span><span class="value">${opp.target_vs_rated_variance_pct > 0 ? '+' : ''}${opp.target_vs_rated_variance_pct}%</span></div>` : ''}
         ${opp && opp.risk_tier ? `<div class="kpi"><span class="label">Risk tier</span><span class="value">${escapeHtml(opp.risk_tier)}</span></div>` : ''}
       </div>
-      <table>
-        <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
-        ${quote.result.categories.map(c => `
-          <tr>
-            <td>${escapeHtml(c.category)}</td>
-            <td>${escapeHtml(c.product)}</td>
-            <td>${escapeHtml(c.network)}</td>
-            <td>${c.member_count}</td>
-            <td>${c.net_annual_premium.toLocaleString()}</td>
-            <td>${(c.loading_pct * 100).toFixed(1)}%</td>
-            <td>${c.gross_annual_premium.toLocaleString()}</td>
-          </tr>
-        `).join('')}
-      </table>
-      ${warnings.length ? `<div class="hint">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
-    </div>
-    ${quote.result.categories.map(nbTierLadderHtml).join('')}
-  `;
-}
-
-function nbTierLadderHtml(categoryResult) {
-  const ladder = categoryResult.tier_ladder;
-  if (!ladder || ladder.length < 2) return '';
-
-  const ladderWarnings = [];
-  ladder.forEach(productRow => {
-    (productRow.warnings || []).forEach(w => ladderWarnings.push(`${productRow.product}: ${w}`));
-    (productRow.networks || []).forEach(n => (n.warnings || []).forEach(w => ladderWarnings.push(`${productRow.product} / ${n.network}: ${w}`)));
-  });
-
-  const rows = ladder.flatMap(productRow =>
-    (productRow.networks.length ? productRow.networks : [null]).map(n => ({ product: productRow.product, n }))
-  );
-
-  return `
-    <div class="card">
-      <h3>Category ${escapeHtml(categoryResult.category)} - tier &amp; network comparison</h3>
-      <div class="hint">Same variant selections priced under every ${escapeHtml(categoryResult.tpa)} network, one Product tier above and below the one chosen - never a different TPA's networks.</div>
-      <table>
-        <tr><th>Product</th><th>Network</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
-        ${rows.map(({ product, n }) => n ? `
-          <tr ${n.is_chosen ? 'style="font-weight:600;"' : ''}>
-            <td>${escapeHtml(product)}</td>
-            <td>${escapeHtml(n.network)}${n.is_chosen ? ' (chosen)' : ''}</td>
-            <td>${n.net_annual_premium != null ? n.net_annual_premium.toLocaleString() : '-'}</td>
-            <td>${n.loading_pct != null ? (n.loading_pct * 100).toFixed(1) + '%' : '-'}</td>
-            <td>${n.gross_annual_premium != null ? n.gross_annual_premium.toLocaleString() : '-'}</td>
-          </tr>
-        ` : `
-          <tr><td>${escapeHtml(product)}</td><td colspan="4" style="color:var(--ink-muted);">No networks available for this TPA</td></tr>
-        `).join('')}
-      </table>
-      ${ladderWarnings.length ? `<div class="hint">${ladderWarnings.map(escapeHtml).join('<br>')}</div>` : ''}
+      ${_nbTierIconRowHtml(quote)}
+      ${_nbCategoryTableHtml(shownCategories)}
     </div>
   `;
 }
