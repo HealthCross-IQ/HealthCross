@@ -412,6 +412,27 @@ function _parseThousands(value) {
   return (value ?? '').toString().replace(/,/g, '').trim();
 }
 
+// Mirrors the backend's own category normalization (app/api/
+// routes_new_business_rating.py's _normalize_category) - a Benefits tab
+// category letter typed as "a" or "A " must still match a census-derived
+// category of "A", or its Product/Network pick silently fails to pre-fill.
+function _normalizeCategory(value) {
+  return (value ?? '').toString().trim().toUpperCase() || null;
+}
+
+// Every category letter is picked from this fixed A-Z list rather than
+// typed freehand - free text is exactly how "A", "A " and "a" ended up as
+// three different categories on a real case. `current` is included as an
+// extra option even if outside A-Z so an unusual pre-existing value is
+// never silently discarded, just surfaced for the underwriter to fix.
+const CATEGORY_LETTERS = Array.from({length: 26}, (_, i) => String.fromCharCode(65 + i));
+function _categoryOptionsHtml(current, blankLabel) {
+  const value = _normalizeCategory(current) || '';
+  const letters = (value && !CATEGORY_LETTERS.includes(value)) ? [value, ...CATEGORY_LETTERS] : CATEGORY_LETTERS;
+  const blank = `<option value="">${escapeHtml(blankLabel || '-')}</option>`;
+  return blank + letters.map(l => `<option value="${escapeHtml(l)}" ${l === value ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('');
+}
+
 /* ---------------- chart helpers (hand-rolled SVG, no external library) ---------------- */
 
 function bindChartTooltips(container) {
@@ -1172,7 +1193,7 @@ function renderCaseWorkspace() {
           <label style="font-weight:normal; display:flex; align-items:center; gap:4px; margin:0; white-space:nowrap;">
             <input type="checkbox" id="file-benefits-append" style="width:auto;"> one category per file
           </label>
-          <input type="text" id="file-benefits-category" placeholder="Category (e.g. A)" style="width:140px;">
+          <select id="file-benefits-category" style="width:140px;">${_categoryOptionsHtml('', 'Category (e.g. A)')}</select>
           <button onclick="uploadFile('benefits')">Upload</button>
           <span id="status-benefits" class="status-pending"></span>
         </div>
@@ -1517,7 +1538,7 @@ function renderQuickUploadReview() {
       : item.status === 'uploading' ? '<span class="hint">Uploading...</span>'
       : `<button onclick="quickUploadRemove(${idx})">Remove</button>`;
     const categoryCell = item.selectedKind === 'benefits'
-      ? `<input type="text" value="${escapeHtml(item.category || '')}" placeholder="e.g. A" style="width:80px;" oninput="quickUploadSetCategory(${idx}, this.value)" ${item.status === 'done' || item.status === 'uploading' ? 'disabled' : ''}>`
+      ? `<select style="width:80px;" onchange="quickUploadSetCategory(${idx}, this.value)" ${item.status === 'done' || item.status === 'uploading' ? 'disabled' : ''}>${_categoryOptionsHtml(item.category, 'e.g. A')}</select>`
       : '';
     return `
       <tr>
@@ -1726,7 +1747,7 @@ function _benefitNbPickerHtml(p) {
   const categoryField = `
     <div>
       <label>Category letter</label>
-      <input type="text" id="nb-category-input-${p.id}" value="${escapeHtml(p.category || '')}" placeholder="e.g. A" style="width:80px;" />
+      <select id="nb-category-input-${p.id}" style="width:80px;">${_categoryOptionsHtml(p.category, 'e.g. A')}</select>
     </div>
   `;
 
@@ -2660,7 +2681,7 @@ async function loadNewBusinessRating() {
 
   const priorByCategory = {};
   if (nbLastQuote) {
-    (nbLastQuote.categories || []).forEach(c => { priorByCategory[c.category] = c; });
+    (nbLastQuote.categories || []).forEach(c => { priorByCategory[_normalizeCategory(c.category)] = c; });
   }
 
   // Each category's own Product/Network/TPA pick lives on its Benefits tab
@@ -2670,14 +2691,14 @@ async function loadNewBusinessRating() {
   const benefitsByCategory = {};
   try {
     const plans = await api(`/cases/${currentCase.id}/benefit-plans`);
-    plans.filter(p => p.role === 'existing' && p.category).forEach(p => { benefitsByCategory[p.category] = p; });
+    plans.filter(p => p.role === 'existing' && p.category).forEach(p => { benefitsByCategory[_normalizeCategory(p.category)] = p; });
   } catch (err) { /* no benefits uploaded yet */ }
 
   nbSuggestedProduct = censusCategories.suggested_product || null;
 
   nbCategories = censusCategories.categories.map(c => {
-    const prior = priorByCategory[c.category];
-    const benefitPlan = benefitsByCategory[c.category];
+    const prior = priorByCategory[_normalizeCategory(c.category)];
+    const benefitPlan = benefitsByCategory[_normalizeCategory(c.category)];
     return {
       category: c.category,
       member_count: c.member_count,
@@ -2917,9 +2938,13 @@ let nbSelectedTierProduct = null;
 function _nbCategoryTableHtml(categories) {
   const warnings = [];
   categories.forEach(c => (c.warnings || []).forEach(w => warnings.push(`Category ${c.category}: ${w}`)));
+  const totalMembers = categories.reduce((sum, c) => sum + c.member_count, 0);
+  const totalNet = categories.reduce((sum, c) => sum + c.net_annual_premium, 0);
+  const totalGross = categories.reduce((sum, c) => sum + c.gross_annual_premium, 0);
+  const avgGrossPerMember = totalMembers ? totalGross / totalMembers : null;
   return `
     <table>
-      <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th></tr>
+      <tr><th>Category</th><th>Product</th><th>Network</th><th>Members</th><th>Net premium</th><th>Loading %</th><th>Gross premium</th><th>Gross / member</th></tr>
       ${categories.map(c => `
         <tr>
           <td>${escapeHtml(c.category)}</td>
@@ -2929,8 +2954,17 @@ function _nbCategoryTableHtml(categories) {
           <td>${c.net_annual_premium.toLocaleString()}</td>
           <td>${(c.loading_pct * 100).toFixed(1)}%</td>
           <td>${c.gross_annual_premium.toLocaleString()}</td>
+          <td>${c.member_count ? (c.gross_annual_premium / c.member_count).toLocaleString(undefined, {maximumFractionDigits: 2}) : '-'}</td>
         </tr>
       `).join('')}
+      <tr style="font-weight:600; border-top:2px solid var(--border);">
+        <th>Total / Average</th><th></th><th></th>
+        <th>${totalMembers}</th>
+        <th>${totalNet.toLocaleString(undefined, {maximumFractionDigits: 2})}</th>
+        <th></th>
+        <th>${totalGross.toLocaleString(undefined, {maximumFractionDigits: 2})}</th>
+        <th>${avgGrossPerMember != null ? avgGrossPerMember.toLocaleString(undefined, {maximumFractionDigits: 2}) : '-'}</th>
+      </tr>
     </table>
     ${warnings.length ? `<div class="hint" style="margin-top:10px;">${warnings.map(escapeHtml).join('<br>')}</div>` : ''}
   `;
