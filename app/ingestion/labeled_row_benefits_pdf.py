@@ -184,8 +184,14 @@ def _header_fields(pdf: "pdfplumber.PDF") -> Optional[Dict[str, str]]:
         return None
     page = pdf.pages[0]
     tables = page.find_tables()
-    top_bound = tables[0].bbox[1] if tables else page.height
-    header_text = page.within_bbox((0, 0, page.width, top_bound)).extract_text() or ""
+    top_bound = min(tables[0].bbox[1], page.height) if tables else page.height
+    # A table starting essentially at the very top of the page leaves no
+    # real room above it for a header - top_bound can even come back as a
+    # tiny negative number (e.g. -3e-05) from PDF coordinate rounding
+    # rather than a clean 0. within_bbox rejects both a negative height
+    # and an exact-zero one, so this document genuinely has no header
+    # region to read rather than being a crop worth attempting.
+    header_text = page.within_bbox((0, 0, page.width, top_bound)).extract_text() or "" if top_bound > 1 else ""
     lines = [line.strip() for line in header_text.split("\n") if line.strip()]
     if not lines or _HEADER_TITLE not in lines[0].lower():
         return None

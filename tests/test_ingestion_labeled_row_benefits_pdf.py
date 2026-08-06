@@ -116,3 +116,47 @@ def test_returns_none_for_a_cigna_smartcare_document_despite_a_coincidental_head
     with open(CIGNA_SMARTCARE, "rb") as f:
         result = parse_labeled_row_benefits_pdf(f, CIGNA_SMARTCARE.name)
     assert result is None
+
+
+def test_does_not_crash_when_the_first_table_starts_at_the_very_top_of_the_page(monkeypatch):
+    """Regression test: a real document's first table can start at a
+    y-coordinate that comes back as a tiny negative number (e.g.
+    -3.05e-05) from PDF coordinate rounding rather than a clean 0 -
+    pdfplumber's within_bbox rejects both a negative-height AND an
+    exact-zero-height crop outright, so this document's header region
+    (genuinely nonexistent when a table starts at the very top) must be
+    skipped rather than crashing the whole upload with a raw ValueError.
+    """
+    from app.ingestion import labeled_row_benefits_pdf
+
+    class _FakeTable:
+        bbox = (0, 0, 595.2, -3.0517500022142485e-05)
+
+    class _FakePage:
+        width = 595.2
+        height = 842
+
+        def find_tables(self):
+            return [_FakeTable()]
+
+        def within_bbox(self, bbox):
+            if bbox[3] - bbox[1] <= 0:
+                raise ValueError(f"{bbox} has a negative width or height.")
+            return self
+
+        def extract_text(self):
+            return "Some Other Document\nUnrelated content"
+
+    class _FakePdf:
+        pages = [_FakePage()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(labeled_row_benefits_pdf.pdfplumber, "open", lambda file: _FakePdf())
+
+    result = parse_labeled_row_benefits_pdf(b"", "unrelated.pdf")
+    assert result is None

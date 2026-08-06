@@ -168,3 +168,44 @@ def test_benefits_append_mode_replaces_only_the_reuploaded_category(client, monk
     plans = {p.category: p for p in existing_plans}
     assert set(plans.keys()) == {"A", "B"}
     assert plans["A"].plan_name == "SILVER - CAT A (corrected)"
+
+
+def test_benefits_append_mode_infers_category_from_filename_when_document_has_none(client, monkeypatch):
+    """A real-world case: four insurer documents (e.g. Cigna's own
+    "SmartCare Plan 1/2/3" tier naming, or a bespoke "CAT VIP") whose
+    content never literally says "Category A/B/C/D" at all - only the
+    filename the broker gave each file ("Category_B.pdf") carries the
+    letter. Without this fallback, every such upload lands with no
+    category and all four end up indistinguishable in the Benefits tab.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
+    monkeypatch.setattr(routes_cases, "extract_generic_benefit_rows", lambda file, filename: [])
+    monkeypatch.setattr(
+        routes_cases,
+        "parse_benefits_pdf_text_fallback",
+        lambda file, filename: {"summary": {}, "raw_text": "no table structure recognized"},
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    for fname in ["Category_B.pdf", "Categroy_A.pdf", "random_notes.pdf"]:
+        resp = client.post(
+            f"/cases/{case_id}/benefits?mode=append",
+            files={"file": (fname, io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+        )
+        assert resp.status_code == 200
+
+    db = client.db_session_local()
+    existing_plans = db.query(routes_cases.models.BenefitPlan).filter_by(case_id=case_id, role="existing").all()
+    db.close()
+    by_category = {p.category: p for p in existing_plans}
+    assert by_category["B"].source_format == "pdf-text-fallback"
+    assert by_category["A"].source_format == "pdf-text-fallback"
+    # A filename that itself carries no category letter (e.g. an unrelated
+    # cover note attached in the same batch) is left uncategorized rather
+    # than guessed at - it just doesn't get folded into A or B.
+    assert None in by_category

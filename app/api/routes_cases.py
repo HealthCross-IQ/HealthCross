@@ -1,4 +1,5 @@
-from typing import List, Union
+import re
+from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
@@ -35,6 +36,22 @@ def _get_case_or_404(db: Session, case_id: int) -> models.Case:
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
     return case
+
+
+_CATEGORY_FROM_FILENAME_RE = re.compile(r"cat(?:egor|egro)?y?[\s_-]+([A-Za-z])(?:[\s_.]|$)", re.IGNORECASE)
+
+
+def _infer_category_from_filename(filename: str) -> Optional[str]:
+    """Best-effort fallback for 'append' mode (one file per category) when
+    a file's own content never literally spells out its category letter -
+    common when the insurer's own tier naming (e.g. Cigna's "SmartCare Plan
+    1/2/3", or a bespoke "CAT VIP") doesn't match the broker's own A/B/C/D
+    category lettering at all, but the filename itself does (e.g.
+    "Category_B.pdf", or the real-world typo "Categroy_A.pdf"). Never
+    overrides a category the parser actually found in the document.
+    """
+    match = _CATEGORY_FROM_FILENAME_RE.search(filename)
+    return match.group(1).upper() if match else None
 
 
 @router.post("", response_model=schemas.CaseOut)
@@ -396,7 +413,14 @@ def upload_benefits(
         # shares this file's category letter, so uploading category B's file
         # doesn't wipe out category A's plan uploaded a moment ago. A plan
         # with no detected category can't be matched this way, so it's just
-        # added alongside whatever's already there.
+        # added alongside whatever's already there - unless the filename
+        # itself carries the category letter (e.g. "Category_B.pdf") and
+        # this file produced exactly one plan, since the document's own
+        # content commonly uses the insurer's own tier naming (e.g. Cigna's
+        # "SmartCare Plan 1/2/3") rather than the broker's own A/B/C/D
+        # lettering at all.
+        if len(plans) == 1 and not plans[0].category:
+            plans[0].category = _infer_category_from_filename(file.filename)
         categories_in_upload = {p.category for p in plans if p.category}
         if categories_in_upload:
             db.query(models.BenefitPlan).filter(

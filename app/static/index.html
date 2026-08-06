@@ -1513,13 +1513,20 @@ function renderQuickUploadReview() {
 
 async function quickUploadConfirm() {
   const toUpload = quickUploadFiles.filter(item => item.status === 'pending' && item.selectedKind);
+  // More than one benefits file in the same batch means one file per
+  // category (see the Manual upload tab's own append checkbox) - each
+  // upload must append rather than the default replace, or every file
+  // after the first would wipe out the one before it, leaving only the
+  // last category standing.
+  const benefitsFileCount = toUpload.filter(item => item.selectedKind === 'benefits').length;
   for (const item of toUpload) {
     item.status = 'uploading';
     renderQuickUploadReview();
     try {
       const form = new FormData();
       form.append('file', item.file);
-      const result = await api(`/cases/${currentCase.id}/${item.selectedKind}`, { method: 'POST', body: form });
+      const query = item.selectedKind === 'benefits' && benefitsFileCount > 1 ? '?mode=append' : '';
+      const result = await api(`/cases/${currentCase.id}/${item.selectedKind}${query}`, { method: 'POST', body: form });
       item.status = 'done';
       item.reason = Array.isArray(result) ? `${result.length} row(s) uploaded` : 'Uploaded';
     } catch (err) {
