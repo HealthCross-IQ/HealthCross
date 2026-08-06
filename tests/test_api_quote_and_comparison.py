@@ -449,3 +449,52 @@ def test_delete_benefit_plan_rejects_quoted_role(client):
 
     resp = client.delete(f"/cases/{case_id}/benefits/{quoted.id}")
     assert resp.status_code == 404
+
+
+def test_manual_summary_edit_sets_category_and_new_business_pick(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(client, case_id)
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {}, "category": "A", "nb_product": "Bronze", "nb_network": "Net A", "nb_tpa": "TPA X"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category"] == "A"
+    assert body["nb_product"] == "Bronze"
+    assert body["nb_network"] == "Net A"
+    assert body["nb_tpa"] == "TPA X"
+
+
+def test_manual_summary_edit_blank_nb_fields_clear_them(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(
+        client, case_id, category="A", nb_product="Bronze", nb_network="Net A", nb_tpa="TPA X"
+    )
+
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{existing.id}/summary",
+        json={"fields": {}, "category": "", "nb_product": "", "nb_network": "", "nb_tpa": ""},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category"] is None
+    assert body["nb_product"] is None
+    assert body["nb_network"] is None
+    assert body["nb_tpa"] is None
+
+
+def test_manual_summary_edit_omitted_nb_fields_leave_them_unchanged(client):
+    case_id = _create_case(client)
+    existing = _insert_existing_plan(
+        client, case_id, category="A", nb_product="Bronze", nb_network="Net A", nb_tpa="TPA X"
+    )
+
+    resp = client.put(f"/cases/{case_id}/benefits/{existing.id}/summary", json={"fields": {}})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["category"] == "A"
+    assert body["nb_product"] == "Bronze"
+    assert body["nb_network"] == "Net A"
+    assert body["nb_tpa"] == "TPA X"

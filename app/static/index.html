@@ -1666,6 +1666,57 @@ async function loadCensusSummary() {
 /* ---------------- benefits ---------------- */
 
 const NOT_SPECIFIED_TEXT = 'Not specified in source document';
+let _benefitsRateCardOptions = null;
+
+function _benefitNbPickerHtml(p) {
+  const categoryField = `
+    <div>
+      <label>Category letter</label>
+      <input type="text" id="nb-category-input-${p.id}" value="${escapeHtml(p.category || '')}" placeholder="e.g. A" style="width:80px;" />
+    </div>
+  `;
+
+  if (!_benefitsRateCardOptions) {
+    return `
+      <div class="row" style="align-items:flex-end; margin-bottom:8px;">${categoryField}</div>
+      <div class="hint" style="margin-bottom:8px;">Upload HealthCross's own rate card (New Business Quote tab) to also set this category's Product/Network here.</div>
+    `;
+  }
+  const products = _benefitsRateCardOptions.products;
+  const product = p.nb_product || '';
+  const networksForProduct = product ? (_benefitsRateCardOptions.product_networks[product] || []) : [];
+  const networkValue = p.nb_network ? `${p.nb_network}|${p.nb_tpa || ''}` : '';
+  return `
+    <div class="row" style="align-items:flex-end; margin-bottom:8px;">
+      ${categoryField}
+      <div>
+        <label>New Business product</label>
+        <select id="nb-product-select-${p.id}" onchange="_onBenefitNbProductChange(${p.id}, this.value)">
+          <option value="">None</option>
+          ${products.map(prod => `<option value="${escapeHtml(prod)}" ${product === prod ? 'selected' : ''}>${escapeHtml(prod)}</option>`).join('')}
+        </select>
+      </div>
+      <div>
+        <label>New Business network</label>
+        <select id="nb-network-select-${p.id}" ${!product ? 'disabled' : ''}>
+          <option value="">None</option>
+          ${networksForProduct.map(n => `<option value="${escapeHtml(n.network)}|${escapeHtml(n.tpa)}" ${networkValue === `${n.network}|${n.tpa}` ? 'selected' : ''}>${escapeHtml(n.network)} (${escapeHtml(n.tpa)})</option>`).join('')}
+        </select>
+      </div>
+    </div>
+    <div class="hint" style="margin-bottom:8px;">This category's own New Business Product/Network - prices the New Business Quote for this category once set (see the New Business Quote tab).</div>
+  `;
+}
+
+function _onBenefitNbProductChange(planId, product) {
+  const plan = _benefitsSummaryPlans.find(p => p.id === planId);
+  if (!plan) return;
+  plan.nb_product = product;
+  plan.nb_network = '';
+  plan.nb_tpa = '';
+  const card = document.querySelector(`#benefits-summary-area .card[data-plan-id="${planId}"]`);
+  if (card) card.outerHTML = _benefitSummaryCardHtml(plan, true);
+}
 
 function _benefitSummaryCardHtml(p, editing) {
   const rows = Object.entries(p.summary).map(([field, value]) => {
@@ -1691,11 +1742,17 @@ function _benefitSummaryCardHtml(p, editing) {
 
   const title = editing
     ? `<input type="text" id="plan-name-input-${p.id}" value="${escapeHtml(p.plan_name || '')}" placeholder="e.g. Category A" style="font-size:1.1em;font-weight:600;width:100%;box-sizing:border-box;margin-bottom:8px;" />`
-    : `<h3>${escapeHtml(p.plan_name || 'Plan')}</h3>`;
+    : `<h3>${escapeHtml(p.plan_name || 'Plan')}${p.category ? ` <span style="color:var(--ink-muted); font-weight:400;">(Cat ${escapeHtml(p.category)})</span>` : ''}</h3>`;
+
+  const nbSummaryLine = !editing && (p.nb_product || p.nb_network)
+    ? `<div class="hint">New Business: ${escapeHtml(p.nb_product || '-')} / ${escapeHtml(p.nb_network || '-')}${p.nb_tpa ? ' (' + escapeHtml(p.nb_tpa) + ')' : ''}</div>`
+    : '';
 
   return `
     <div class="card" data-plan-id="${p.id}">
       ${title}
+      ${nbSummaryLine}
+      ${editing ? _benefitNbPickerHtml(p) : ''}
       <table>${rows}</table>
       <div style="margin-top:10px;">${actions}</div>
     </div>
@@ -1704,6 +1761,11 @@ function _benefitSummaryCardHtml(p, editing) {
 
 async function loadBenefitsSummary() {
   const area = document.getElementById('benefits-summary-area');
+  try {
+    _benefitsRateCardOptions = await api('/new-business/rate-card-options');
+  } catch (err) {
+    _benefitsRateCardOptions = null;
+  }
   try {
     const plans = await api(`/cases/${currentCase.id}/benefits-summary`);
     _benefitsSummaryPlans = plans;
@@ -1721,11 +1783,12 @@ function editBenefitSummary(planId) {
   if (card) card.outerHTML = _benefitSummaryCardHtml(plan, true);
 }
 
-function cancelBenefitSummaryEdit(planId) {
-  const plan = _benefitsSummaryPlans.find(p => p.id === planId);
-  if (!plan) return;
-  const card = document.querySelector(`#benefits-summary-area .card[data-plan-id="${planId}"]`);
-  if (card) card.outerHTML = _benefitSummaryCardHtml(plan, false);
+async function cancelBenefitSummaryEdit(planId) {
+  // Reload fresh from the server rather than re-rendering the in-memory
+  // plan object - _onBenefitNbProductChange mutates it in place (so the
+  // Product/Network selects can re-render live as the Product changes),
+  // so it may no longer reflect what was actually last saved.
+  await loadBenefitsSummary();
 }
 
 async function saveBenefitSummaryEdit(planId) {
@@ -1736,11 +1799,25 @@ async function saveBenefitSummaryEdit(planId) {
     fields[input.dataset.field] = input.value;
   });
   const nameInput = document.getElementById(`plan-name-input-${planId}`);
+  const categoryInput = document.getElementById(`nb-category-input-${planId}`);
+  const productSelect = document.getElementById(`nb-product-select-${planId}`);
+  const networkSelect = document.getElementById(`nb-network-select-${planId}`);
+  let nbNetwork, nbTpa;
+  if (networkSelect) {
+    [nbNetwork, nbTpa] = networkSelect.value ? networkSelect.value.split('|') : ['', ''];
+  }
   try {
     await api(`/cases/${currentCase.id}/benefits/${planId}/summary`, {
       method: 'PUT',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({fields, plan_name: nameInput ? nameInput.value : undefined}),
+      body: JSON.stringify({
+        fields,
+        plan_name: nameInput ? nameInput.value : undefined,
+        category: categoryInput ? categoryInput.value : undefined,
+        nb_product: productSelect ? productSelect.value : undefined,
+        nb_network: nbNetwork,
+        nb_tpa: nbTpa,
+      }),
     });
     toast('Benefit summary updated');
     await loadBenefitsSummary();
@@ -2511,20 +2588,27 @@ async function loadNewBusinessRating() {
     (nbLastQuote.categories || []).forEach(c => { priorByCategory[c.category] = c; });
   }
 
+  // Each category's own Product/Network/TPA pick lives on its Benefits tab
+  // card (BenefitPlan.nb_product/nb_network/nb_tpa) - the source of truth
+  // this pre-fills from, since a case's categories commonly price against
+  // different networks rather than sharing one value.
+  const benefitsByCategory = {};
+  try {
+    const plans = await api(`/cases/${currentCase.id}/benefit-plans`);
+    plans.filter(p => p.role === 'existing' && p.category).forEach(p => { benefitsByCategory[p.category] = p; });
+  } catch (err) { /* no benefits uploaded yet */ }
+
   nbSuggestedProduct = censusCategories.suggested_product || null;
 
   nbCategories = censusCategories.categories.map(c => {
     const prior = priorByCategory[c.category];
+    const benefitPlan = benefitsByCategory[c.category];
     return {
       category: c.category,
       member_count: c.member_count,
-      // A suggested product (from the case's existing insurer, see
-      // InsurerTierPreference) only pre-fills when nothing's been chosen
-      // yet - it's a starting point, never overrides what a broker (or a
-      // prior quote) already picked.
-      product: prior ? prior.product : (nbSuggestedProduct || ''),
-      network: prior ? prior.network : '',
-      tpa: prior ? prior.tpa : '',
+      product: (benefitPlan && benefitPlan.nb_product) || (prior ? prior.product : ''),
+      network: (benefitPlan && benefitPlan.nb_network) || (prior ? prior.network : ''),
+      tpa: (benefitPlan && benefitPlan.nb_tpa) || (prior ? prior.tpa : ''),
       commission_pct: prior && prior.commission_pct != null ? prior.commission_pct * 100 : '',
       variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
       previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
@@ -2567,10 +2651,8 @@ async function nbRenderArea() {
     </div>
   `;
 
-  const defaultsCard = nbRateCardOptions ? nbDefaultsCardHtml() : '';
-
   if (!nbRateCardOptions || !nbCategories.length) {
-    area.innerHTML = uploadCard + defaultsCard + (nbCategories.length ? '' : `<div class="card"><div class="hint">${nbCensusUncategorized ? 'Census has no category values set on any member yet - upload a census with a Category column to quote by category.' : 'Upload a census for this case first.'}</div></div>`);
+    area.innerHTML = uploadCard + (nbCategories.length ? '' : `<div class="card"><div class="hint">${nbCensusUncategorized ? 'Census has no category values set on any member yet - upload a census with a Category column to quote by category.' : 'Upload a census for this case first.'}</div></div>`);
     return;
   }
 
@@ -2578,10 +2660,9 @@ async function nbRenderArea() {
 
   area.innerHTML = `
     ${uploadCard}
-    ${defaultsCard}
     <div class="card">
       <h3>Quote by category</h3>
-      <div class="hint">Most cases use one Product for the whole group - some split different categories onto different Products. Each category's benefit-variant choices apply to every member in it; HealthCross's own rate card resolves each member's own Region/age/gender automatically.</div>
+      <div class="hint">Each category's own Product/Network/TPA is set on its Benefits tab category card - pre-filled here from there. Each category's benefit-variant choices apply to every member in it; HealthCross's own rate card resolves each member's own Region/age/gender automatically.</div>
       ${nbCensusUncategorized ? `<div class="hint">${nbCensusUncategorized} census member(s) have no Category set and won't be priced.</div>` : ''}
     </div>
     ${categoryCards}
@@ -2590,64 +2671,6 @@ async function nbRenderArea() {
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
   `;
-}
-
-function nbDefaultsCardHtml() {
-  const products = nbRateCardOptions.products;
-  const product = currentCase.default_product || '';
-  const networksForProduct = product ? (nbRateCardOptions.product_networks[product] || []) : [];
-  const networkValue = currentCase.default_network ? `${currentCase.default_network}|${currentCase.default_tpa || ''}` : '';
-  return `
-    <div class="card">
-      <h3>Case default Product / Network</h3>
-      <div class="hint">Used as the fallback Product/Network/TPA for any category that doesn't have its own pick yet - lets the New Business Quote auto-compute (on census/benefits/rate-card changes) without a manual "Compute quote" first.</div>
-      <div class="row" style="align-items:flex-end;">
-        <div>
-          <label>Default product</label>
-          <select onchange="nbSetDefaultProduct(this.value)">
-            <option value="">None</option>
-            ${products.map(p => `<option value="${escapeHtml(p)}" ${product === p ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
-          </select>
-        </div>
-        <div>
-          <label>Default network</label>
-          <select onchange="nbSetDefaultNetwork(this.value)" ${!product ? 'disabled' : ''}>
-            <option value="">None</option>
-            ${networksForProduct.map(n => `<option value="${escapeHtml(n.network)}|${escapeHtml(n.tpa)}" ${networkValue === `${n.network}|${n.tpa}` ? 'selected' : ''}>${escapeHtml(n.network)} (${escapeHtml(n.tpa)})</option>`).join('')}
-          </select>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
-async function nbSetDefaultProduct(product) {
-  try {
-    currentCase = await api(`/cases/${currentCase.id}`, {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({default_product: product || null, default_network: null, default_tpa: null}),
-    });
-    toast('Default product saved');
-    await nbRenderArea();
-  } catch (err) {
-    toast(err.message, true);
-  }
-}
-
-async function nbSetDefaultNetwork(value) {
-  const [network, tpa] = value ? value.split('|') : [null, null];
-  try {
-    currentCase = await api(`/cases/${currentCase.id}`, {
-      method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({default_network: network, default_tpa: tpa}),
-    });
-    toast('Default network saved');
-    await nbRenderArea();
-  } catch (err) {
-    toast(err.message, true);
-  }
 }
 
 function nbCategoryCardHtml(cat, idx) {

@@ -58,15 +58,6 @@ class Case(Base):
     # distinct from target_premium (a broker's target for a NEW quote).
     current_annual_premium = Column(Float, nullable=True)
 
-    # Case-level Product/Network/TPA picks, used as the fallback for any
-    # census category that doesn't yet have its own selection (from a
-    # prior New Business Quote) - lets the very first quote on a case
-    # auto-compute (see routes_new_business_rating._maybe_auto_requote)
-    # instead of requiring a manual visit to the New Business Quote tab.
-    default_product = Column(String, nullable=True)
-    default_network = Column(String, nullable=True)
-    default_tpa = Column(String, nullable=True)
-
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")
@@ -146,6 +137,18 @@ class BenefitPlan(Base):
     role = Column(String, nullable=False, default="existing")
     category = Column(String, nullable=True)  # broker/insurer category label, e.g. "A" / "B"
     gross_premium = Column(Float, nullable=True)
+
+    # This category's own New Business rate-card Product/Network/TPA pick,
+    # set on an EXISTING-role plan in the Benefits tab - the source of
+    # truth for that category's New Business Quote (see
+    # routes_new_business_rating._resolve_auto_quote_categories), so each
+    # category (client) prices against its own real network rather than
+    # one blanket case-wide default. Distinct from network_type above,
+    # which is only the coarse in_country/regional/worldwide classification
+    # used for benefits comparison, not a rate-card network identifier.
+    nb_product = Column(String, nullable=True)
+    nb_network = Column(String, nullable=True)
+    nb_tpa = Column(String, nullable=True)
 
     # Set on an EXISTING-role plan to pin which QUOTED-role plan it should
     # be compared against in /benefits-comparison, overriding the automatic

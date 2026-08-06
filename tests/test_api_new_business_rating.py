@@ -265,22 +265,40 @@ def test_quote_includes_a_tier_ladder_per_category(client, tmp_path):
     assert chosen_row["network"] == "MSH Regular"
 
 
-def test_case_level_defaults_let_the_first_quote_auto_compute_on_census_upload(client, rate_card_files, tmp_path):
-    # Before any manual "Compute quote" ever happens, a case with
-    # default_product/network/tpa already set should get its first quote
-    # automatically the moment a census is uploaded.
-    _upload_rate_cards(client, rate_card_files)
+def _insert_existing_plan_with_nb_pick(client, case_id, category, product=None, network=None, tpa=None):
     db = client.db_session_local()
     from app.models import db_models as models
 
-    case = models.Case(
-        broker_name="Broker", company_name="Acme", industry="trading",
-        default_product="Bronze", default_network="Net A", default_tpa="TPA X",
+    plan = models.BenefitPlan(
+        case_id=case_id, role="existing", plan_name=f"Category {category}",
+        category=category, nb_product=product, nb_network=network, nb_tpa=tpa,
+        standard_summary={},
     )
-    db.add(case)
+    db.add(plan)
     db.commit()
-    case_id = case.id
+    db.refresh(plan)
+    plan_id = plan.id
     db.close()
+    return plan_id
+
+
+def test_benefits_category_pick_lets_the_first_quote_auto_compute_on_census_upload(client, rate_card_files, tmp_path):
+    # Before any manual "Compute quote" ever happens, a case whose Benefits
+    # tab category already has its own Product/Network/TPA set (see
+    # BenefitPlan.nb_product/nb_network/nb_tpa) should get its first quote
+    # automatically the moment a matching census is uploaded.
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+    # _make_case's own census is category A - remove it so this test
+    # controls exactly when the census (the auto-quote trigger) arrives.
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    db.query(models.CensusRecord).filter_by(case_id=case_id).delete()
+    db.commit()
+    db.close()
+
+    _insert_existing_plan_with_nb_pick(client, case_id, "A", product="Bronze", network="Net A", tpa="TPA X")
 
     resp = client.get(f"/cases/{case_id}/new-business-quote")
     assert resp.status_code == 404  # nothing yet - no census
@@ -308,19 +326,18 @@ def test_case_level_defaults_let_the_first_quote_auto_compute_on_census_upload(c
     assert quoted_category["tpa"] == "TPA X"
 
 
-def test_without_case_level_defaults_or_a_prior_quote_nothing_auto_computes(client, rate_card_files, tmp_path):
+def test_without_a_benefits_category_pick_or_a_prior_quote_nothing_auto_computes(client, rate_card_files):
     _upload_rate_cards(client, rate_card_files)
-    case_id = _make_case(client)  # no default_product/network/tpa set
+    case_id = _make_case(client)  # census category A has no matching benefit plan/pick
 
     resp = client.get(f"/cases/{case_id}/new-business-quote")
     assert resp.status_code == 404
 
 
-def test_auto_requote_reuses_a_prior_quotes_own_selections_not_the_case_defaults(client, rate_card_files):
-    # A broker's own picks on an earlier manual "Compute quote" should
-    # survive later automatic re-quotes, even if the case also has
-    # different case-level defaults set (those are only a fallback for a
-    # category with no prior pick at all).
+def test_auto_requote_prefers_the_benefits_tab_pick_over_a_stale_prior_quote(client, rate_card_files):
+    # The Benefits tab is the source of truth going forward - if it's
+    # updated after an earlier manual quote, a later auto re-quote should
+    # pick up the new value rather than keep reusing the old one.
     _upload_rate_cards(client, rate_card_files)
     case_id = _make_case(client)
 
@@ -330,13 +347,7 @@ def test_auto_requote_reuses_a_prior_quotes_own_selections_not_the_case_defaults
     )
     assert resp.status_code == 200
 
-    db = client.db_session_local()
-    from app.models import db_models as models
-
-    case = db.get(models.Case, case_id)
-    case.default_product = "Bronze"  # deliberately different from the prior quote's own pick
-    db.commit()
-    db.close()
+    _insert_existing_plan_with_nb_pick(client, case_id, "A", product="Bronze", network="Net A", tpa="TPA X")
 
     # Trigger via a real re-upload of the census.
     import openpyxl
@@ -360,30 +371,26 @@ def test_auto_requote_reuses_a_prior_quotes_own_selections_not_the_case_defaults
     quotes = resp.json()
     assert len(quotes) == 2  # the manual quote, plus one auto-triggered by the census re-upload
     latest = quotes[0]  # ordered newest first
-    assert latest["categories"][0]["product"] == "Platinum"  # reused the prior quote's own pick, not the new default
+    assert latest["categories"][0]["product"] == "Bronze"  # the Benefits tab's own pick won, not the stale prior quote
 
 
-def test_add_manual_benefit_plan_triggers_auto_requote_when_defaults_are_set(client, rate_card_files):
+def test_saving_a_categorys_nb_pick_on_the_benefits_tab_auto_computes_the_quote_immediately(client, rate_card_files):
+    # Saving Product/Network/TPA on a Benefits tab category card is itself
+    # the input that unlocks auto-quoting - the underwriter shouldn't have
+    # to also re-upload the census just to see the quote appear.
     _upload_rate_cards(client, rate_card_files)
-    db = client.db_session_local()
-    from app.models import db_models as models
-
-    case = models.Case(
-        broker_name="Broker", company_name="Acme", industry="trading",
-        default_product="Bronze", default_network="Net A", default_tpa="TPA X",
-    )
-    db.add(case)
-    db.commit()
-    db.add(models.CensusRecord(case_id=case.id, category="A", age=30, gender="M", marital_status="single", relation="employee", emirates="Dubai"))
-    db.commit()
-    case_id = case.id
-    db.close()
+    case_id = _make_case(client)  # already has a census, per _make_case
+    plan_id = _insert_existing_plan_with_nb_pick(client, case_id, "A")  # no product/network/tpa yet
 
     resp = client.get(f"/cases/{case_id}/new-business-quote")
     assert resp.status_code == 404
 
-    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Category A"})
+    resp = client.put(
+        f"/cases/{case_id}/benefits/{plan_id}/summary",
+        json={"fields": {}, "nb_product": "Bronze", "nb_network": "Net A", "nb_tpa": "TPA X"},
+    )
     assert resp.status_code == 200
 
     resp = client.get(f"/cases/{case_id}/new-business-quote")
     assert resp.status_code == 200
+    assert resp.json()["categories"][0]["product"] == "Bronze"

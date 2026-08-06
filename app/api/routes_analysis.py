@@ -488,7 +488,16 @@ def get_benefits_summary(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No table of benefits uploaded for this case")
 
     return [
-        {"id": plan.id, "plan_name": plan.plan_name, "summary": _benefit_summary(plan)} for plan in existing_plans
+        {
+            "id": plan.id,
+            "plan_name": plan.plan_name,
+            "summary": _benefit_summary(plan),
+            "category": plan.category,
+            "nb_product": plan.nb_product,
+            "nb_network": plan.nb_network,
+            "nb_tpa": plan.nb_tpa,
+        }
+        for plan in existing_plans
     ]
 
 

@@ -540,6 +540,14 @@ def update_benefit_plan_summary(
     plan.standard_summary = summary
     if payload.plan_name is not None and payload.plan_name.strip():
         plan.plan_name = payload.plan_name.strip()
+    if payload.category is not None:
+        plan.category = payload.category.strip() or None
+    if payload.nb_product is not None:
+        plan.nb_product = payload.nb_product.strip() or None
+    if payload.nb_network is not None:
+        plan.nb_network = payload.nb_network.strip() or None
+    if payload.nb_tpa is not None:
+        plan.nb_tpa = payload.nb_tpa.strip() or None
     db.commit()
     db.refresh(plan)
     maybe_auto_requote(case.id, db)

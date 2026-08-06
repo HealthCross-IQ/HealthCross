@@ -35,9 +35,6 @@ class CaseOut(BaseModel):
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
-    default_product: Optional[str] = None
-    default_network: Optional[str] = None
-    default_tpa: Optional[str] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -86,6 +83,9 @@ class BenefitPlanOut(BaseModel):
     category: Optional[str] = None
     gross_premium: Optional[float] = None
     matched_quote_plan_id: Optional[int] = None
+    nb_product: Optional[str] = None
+    nb_network: Optional[str] = None
+    nb_tpa: Optional[str] = None
 
 
 class CaseCompletenessOut(BaseModel):
@@ -125,6 +125,15 @@ class BenefitSummaryUpdate(BaseModel):
     # Renames the plan/category itself (e.g. "OCR extract (verify against
     # source)" -> "Cat B - Dubai") - omitted/blank leaves the name as-is.
     plan_name: Optional[str] = None
+    # This category's own broker/insurer category label (e.g. "A") and its
+    # New Business rate-card Product/Network/TPA pick - the source of
+    # truth the New Business Quote prices against for this category (see
+    # BenefitPlan.nb_product/nb_network/nb_tpa). Omitted leaves the
+    # existing value as-is; an explicit "" clears it back to unset.
+    category: Optional[str] = None
+    nb_product: Optional[str] = None
+    nb_network: Optional[str] = None
+    nb_tpa: Optional[str] = None
 
 
 class ManualBenefitPlanCreate(BaseModel):

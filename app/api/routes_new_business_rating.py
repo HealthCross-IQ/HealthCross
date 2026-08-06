@@ -251,13 +251,15 @@ def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRe
 def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[List[dict]]:
     """Fills in Product/Network/TPA for every census category this case
     has, so a quote can be (re-)computed without the underwriter visiting
-    the New Business Quote tab again - preferring whatever a PRIOR quote
-    already had for that category (so a broker's own override survives a
-    later auto re-quote), then falling back to the case's own
-    default_product/default_network/default_tpa (see Case model), and, for
-    product only, the insurer's suggested tier. Returns None if any
-    category still can't be resolved - there just isn't enough
-    information yet for even the case-level defaults to cover.
+    the New Business Quote tab again. Each category's own EXISTING-role
+    benefit plan (Benefits tab, see BenefitPlan.nb_product/nb_network/
+    nb_tpa) is the source of truth - a case's own categories (e.g. A/B/C/D)
+    commonly price against different networks, so there's no single
+    case-wide default to fall back to. Falls back to whatever a PRIOR
+    quote already had for that category only when the Benefits tab hasn't
+    been given a pick yet, so a broker's own manual override on the New
+    Business Quote tab still survives a later auto re-quote. Returns None
+    if any category still can't be resolved.
     """
     counts: Dict[str, int] = defaultdict(int)
     for c in case.census_records:
@@ -266,10 +268,7 @@ def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[L
     if not counts:
         return None
 
-    suggested_product = None
-    if case.existing_insurer:
-        pref = db.query(models.InsurerTierPreference).filter_by(insurer_name=case.existing_insurer).first()
-        suggested_product = pref.suggested_product if pref else None
+    benefits_by_category = {p.category: p for p in case.benefit_plans if p.role == "existing" and p.category}
 
     latest_quote = (
         db.query(models.NewBusinessQuote)
@@ -281,10 +280,11 @@ def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[L
 
     categories = []
     for category_name in sorted(counts):
+        plan = benefits_by_category.get(category_name)
         prior = prior_by_category.get(category_name, {})
-        product = prior.get("product") or case.default_product or suggested_product
-        network = prior.get("network") or case.default_network
-        tpa = prior.get("tpa") or case.default_tpa
+        product = (plan.nb_product if plan else None) or prior.get("product")
+        network = (plan.nb_network if plan else None) or prior.get("network")
+        tpa = (plan.nb_tpa if plan else None) or prior.get("tpa")
         if not product or not network or not tpa:
             return None
         categories.append(
