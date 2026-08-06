@@ -756,6 +756,40 @@ def test_price_case_against_burning_cost_flags_members_with_no_matching_bucket()
     assert any("No booked-book burning cost" in w for w in cat["warnings"])
 
 
+def test_burning_cost_lookup_network_maps_nas_networks_to_their_msh_equivalent():
+    from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
+
+    assert _burning_cost_lookup_network("Comprehensive") == "MSH Platinum"
+    assert _burning_cost_lookup_network("GN") == "MSH Comprehensive Plus Mediclinic"
+    assert _burning_cost_lookup_network("GN excluding Mediclinic and American") == "MSH Comprehensive"
+    assert _burning_cost_lookup_network("GN Excluding American & Mediclinic Group") == "MSH Comprehensive"
+    assert _burning_cost_lookup_network("Restricted +++") == "MSH Premium"
+    assert _burning_cost_lookup_network("Restricted+++") == "MSH Premium"
+    assert _burning_cost_lookup_network("Restricted") == "MSH Enhanced"
+    assert _burning_cost_lookup_network("Super Restricted+ Zulaikha") == "MSH Regular"
+    # Already-MSH networks pass through unchanged, not just recognized NAS ones.
+    assert _burning_cost_lookup_network("MSH Platinum") == "MSH Platinum"
+    assert _burning_cost_lookup_network(None) is None
+
+
+def test_price_case_against_burning_cost_substitutes_the_msh_equivalent_for_a_nas_network():
+    from app.scoring.rules.portfolio_analysis import price_case_against_burning_cost
+
+    census = [{"category": "A", "age": 25, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"}]
+    # Category priced on NAS's own "Restricted" network - no NAS burning
+    # cost bucket will ever exist (the book is entirely MSH), but its MSH
+    # equivalent ("MSH Enhanced", per Enhanced=Restricted) does.
+    categories = [{"category": "A", "product": "Bronze", "network": "Restricted", "tpa": "NAS", "variant_selections": {}}]
+    burning_cost_rows = [
+        {"product": "Bronze", "network": "MSH Enhanced", "age_band": "18-40", "gender": "M", "burning_cost": 3000.0},
+    ]
+    result = price_case_against_burning_cost(census, categories, RATE_CARDS, burning_cost_rows)
+    cat = result["categories"][0]
+    assert cat["priced_member_count"] == 1
+    assert cat["net_annual_premium"] == 3000.0
+    assert not cat["warnings"]
+
+
 def test_summarize_burning_cost_overall_aggregates_the_whole_book():
     results = [
         analyze_portfolio_member(

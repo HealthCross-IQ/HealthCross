@@ -25,6 +25,39 @@ from app.scoring.rules.new_business_rating import category_loading_pct, gross_up
 
 BOOK_TPA = "MSH MENA"
 
+# Temporary stand-in until HealthCross has enough of its own booked NAS
+# business to compute real NAS-specific burning cost: the booked book is
+# entirely MSH MENA today (see BOOK_TPA above), so a New Business quote
+# category priced on a NAS Neuron network is compared against its MSH
+# equivalent's real burning cost instead of having no reference data for
+# NAS at all. Provided by underwriting (MSH network = NAS network); revisit
+# once real NAS book data exists. A couple of known alternate phrasings for
+# the same NAS network are included since real spreadsheets aren't always
+# worded identically from one upload to the next.
+NAS_TO_MSH_NETWORK = {
+    "comprehensive": "MSH Platinum",
+    "gn": "MSH Comprehensive Plus Mediclinic",
+    "gn excluding mediclinic and american": "MSH Comprehensive",
+    "gn excluding american & mediclinic group": "MSH Comprehensive",
+    "restricted +++": "MSH Premium",
+    "restricted+++": "MSH Premium",
+    "restricted": "MSH Enhanced",
+    "super restricted+ zulaikha": "MSH Regular",
+}
+
+
+def _burning_cost_lookup_network(network: Optional[str]) -> Optional[str]:
+    """Resolves a New Business quote category's own network to whatever
+    name the booked book's burning cost is actually keyed under - an
+    already-MSH network passes through unchanged, while a recognized NAS
+    Neuron network is substituted for its MSH equivalent (see
+    NAS_TO_MSH_NETWORK above) so it still has real burning cost to compare
+    against instead of no match at all.
+    """
+    if not network:
+        return network
+    return NAS_TO_MSH_NETWORK.get(network.strip().lower(), network)
+
 
 def resolve_group_product(member: dict, group_product_by_name: Dict[str, str]) -> Optional[str]:
     """A member's own contract (sub-group) takes priority over its
@@ -583,11 +616,12 @@ def price_case_against_burning_cost(
         band = _matching_age_band(member.get("age"), bands)
         band_label = f"{band[0]}-{band[1]}" if band else "Unmapped age"
         gender = member.get("gender") or "Unmapped"
-        key = (category["product"], category["network"], band_label, gender)
+        lookup_network = _burning_cost_lookup_network(category["network"])
+        key = (category["product"], lookup_network, band_label, gender)
         burning_cost = burning_cost_by_key.get(key)
         if burning_cost is None:
             per_category_warnings[cat_name].append(
-                f"No booked-book burning cost for {category['product']}/{category['network']}, "
+                f"No booked-book burning cost for {category['product']}/{lookup_network}, "
                 f"age band {band_label}, {gender}"
             )
             continue
