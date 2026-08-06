@@ -209,3 +209,32 @@ def test_benefits_append_mode_infers_category_from_filename_when_document_has_no
     # cover note attached in the same batch) is left uncategorized rather
     # than guessed at - it just doesn't get folded into A or B.
     assert None in by_category
+
+
+def test_benefits_append_mode_renames_a_generic_fallback_plan_to_its_own_category(client, monkeypatch):
+    """A generic fallback parser's own placeholder name ("Base Plan") is
+    the same for every such upload - once a real category letter is known
+    (even via the filename fallback above), the plan name should say
+    which category it is rather than leaving every upload indistinguishable.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
+    monkeypatch.setattr(
+        routes_cases,
+        "extract_generic_benefit_rows",
+        lambda file, filename: [{"label": "Annual Maximum", "value": "USD 1,000,000", "description": ""}],
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("Category_B.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body[0]["category"] == "B"
+    assert body[0]["plan_name"] == "Category B"

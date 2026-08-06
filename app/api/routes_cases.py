@@ -54,6 +54,12 @@ def _infer_category_from_filename(filename: str) -> Optional[str]:
     return match.group(1).upper() if match else None
 
 
+# Placeholder names a fallback parser assigns when the document itself
+# gives no real plan/tier name to use - the same for every such upload,
+# so nothing worth keeping once a real category letter is known instead.
+_GENERIC_PLAN_NAMES = {"Base Plan", "Text extract (verify against source - table structure not recognized)"}
+
+
 @router.post("", response_model=schemas.CaseOut)
 def create_case(payload: schemas.CaseCreate, db: Session = Depends(get_db)):
     case = models.Case(**payload.model_dump())
@@ -421,6 +427,12 @@ def upload_benefits(
         # lettering at all.
         if len(plans) == 1 and not plans[0].category:
             plans[0].category = _infer_category_from_filename(file.filename)
+        # A generic fallback parser's own placeholder name ("Base Plan",
+        # etc.) reads the same for every category uploaded this way,
+        # leaving them indistinguishable at a glance even once each has
+        # its own category letter - swap it for the category once known.
+        if len(plans) == 1 and plans[0].category and plans[0].plan_name in _GENERIC_PLAN_NAMES:
+            plans[0].plan_name = f"Category {plans[0].category}"
         categories_in_upload = {p.category for p in plans if p.category}
         if categories_in_upload:
             db.query(models.BenefitPlan).filter(
