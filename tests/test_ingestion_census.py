@@ -48,6 +48,22 @@ def test_parse_census_matches_real_broker_template_columns():
     assert records[0]["age"] is not None
 
 
+def test_parse_census_normalizes_category_whitespace_and_casing():
+    # A stray trailing space or a lowercase letter in the source spreadsheet
+    # (e.g. "A " or "a" instead of "A") must not create a second, distinct
+    # category - it splits what should be one Category A into two on the
+    # New Business Quote tab otherwise.
+    df = pd.DataFrame(
+        [
+            {"Category": "A ", "Gender": "F", "DOB": "1999-08-10", "Marital Status": "Single", "Relation": "Employee", "Emirates": "Dubai"},
+            {"Category": "a", "Gender": "M", "DOB": "1993-04-01", "Marital Status": "Married", "Relation": "Employee", "Emirates": "Dubai"},
+        ]
+    )
+    records = parse_census(_xlsx(df), "census.xlsx")
+
+    assert [r["category"] for r in records] == ["A", "A"]
+
+
 def test_parse_census_classifies_relation_labels():
     df = pd.DataFrame(
         [

@@ -109,7 +109,7 @@ def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date 
         records.append(
             {
                 "employee_ref": str(row.get("employee_ref")) if pd.notna(row.get("employee_ref")) else None,
-                "category": str(row.get("category")) if pd.notna(row.get("category")) else None,
+                "category": (str(row.get("category")).strip().upper() or None) if pd.notna(row.get("category")) else None,
                 "age": int(age) if pd.notna(age) else None,
                 "gender": gender,
                 "marital_status": _normalize_marital_status(row.get("marital_status")),

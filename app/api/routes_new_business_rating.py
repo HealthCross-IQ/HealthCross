@@ -150,10 +150,22 @@ def variant_options(
     return by_variant
 
 
+def _normalize_category(value: Optional[str]) -> Optional[str]:
+    """Collapses whitespace/casing differences (e.g. "A" vs "A " vs "a")
+    so the same category isn't split into several - fixes both older
+    census uploads stored before app/ingestion/census.py started
+    normalizing on parse, and any inconsistently-cased category letter
+    typed into a Benefits tab category card by hand.
+    """
+    if not value:
+        return None
+    return value.strip().upper() or None
+
+
 def _case_census_dicts(case: models.Case) -> List[dict]:
     return [
         {
-            "category": c.category,
+            "category": _normalize_category(c.category),
             "age": c.age,
             "gender": c.gender,
             "marital_status": c.marital_status,
@@ -179,8 +191,9 @@ def census_categories(case_id: int, db: Session = Depends(get_db)):
     counts: Dict[str, int] = defaultdict(int)
     uncategorized = 0
     for c in case.census_records:
-        if c.category:
-            counts[c.category] += 1
+        category = _normalize_category(c.category)
+        if category:
+            counts[category] += 1
         else:
             uncategorized += 1
 
@@ -263,12 +276,15 @@ def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[L
     """
     counts: Dict[str, int] = defaultdict(int)
     for c in case.census_records:
-        if c.category:
-            counts[c.category] += 1
+        category = _normalize_category(c.category)
+        if category:
+            counts[category] += 1
     if not counts:
         return None
 
-    benefits_by_category = {p.category: p for p in case.benefit_plans if p.role == "existing" and p.category}
+    benefits_by_category = {
+        _normalize_category(p.category): p for p in case.benefit_plans if p.role == "existing" and p.category
+    }
 
     latest_quote = (
         db.query(models.NewBusinessQuote)

@@ -194,6 +194,33 @@ def test_census_categories_reports_member_counts_and_uncategorized(client):
     assert body["uncategorized_member_count"] == 1
 
 
+def test_census_categories_merges_inconsistently_cased_or_padded_category_values(client):
+    # Regression test: a real case had "A" (44 members) and "A " (1 member,
+    # a stray trailing space from the source spreadsheet) show up as two
+    # separate Category A cards on the New Business Quote tab instead of
+    # one merged 45-member category. Older rows uploaded before
+    # app/ingestion/census.py started normalizing on parse can still carry
+    # this raw, inconsistent data - the read side must merge them too.
+    case_id = _make_case(client)
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    db.query(models.CensusRecord).filter_by(case_id=case_id).delete()
+    db.add_all(
+        [
+            models.CensusRecord(case_id=case_id, category="A", age=30, gender="M", marital_status="single", relation="employee", emirates="Dubai"),
+            models.CensusRecord(case_id=case_id, category="A ", age=28, gender="F", marital_status="married", relation="spouse", emirates="Dubai"),
+            models.CensusRecord(case_id=case_id, category="a", age=5, gender="M", marital_status="single", relation="child", emirates="Dubai"),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/census-categories")
+    assert resp.status_code == 200
+    assert resp.json()["categories"] == [{"category": "A", "member_count": 3}]
+
+
 def test_census_categories_suggests_a_product_tier_from_the_existing_insurer(client):
     from app.models import db_models as models
 
