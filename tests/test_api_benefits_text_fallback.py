@@ -297,3 +297,39 @@ def test_benefits_upload_explicit_category_overrides_filename_inference(client, 
     )
     assert resp.status_code == 200
     assert resp.json()[0]["category"] == "D"
+
+
+def test_benefits_append_mode_clears_out_leftover_uncategorized_plans(client, monkeypatch):
+    """A category-less existing-role plan (e.g. a stale "Base Plan" from
+    before a category could be resolved) has no value once a real,
+    properly-categorized batch is uploaded - it should be cleared out
+    automatically, not left sitting there as an orphaned duplicate.
+    """
+    monkeypatch.setattr(routes_cases, "is_scanned_pdf", lambda file: False)
+    monkeypatch.setattr(routes_cases, "parse_benefits_pdf", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_benefit_tables_only", lambda file, filename: {})
+    monkeypatch.setattr(routes_cases, "parse_labeled_row_benefits_pdf", lambda file, filename: None)
+    monkeypatch.setattr(
+        routes_cases,
+        "extract_generic_benefit_rows",
+        lambda file, filename: [{"label": "Annual Maximum", "value": "USD 1,000,000", "description": ""}],
+    )
+
+    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
+    case_id = resp.json()["id"]
+
+    # A leftover, uncategorized plan already on the case.
+    resp = client.post(f"/cases/{case_id}/benefits/manual", json={"plan_name": "Base Plan"})
+    assert resp.status_code == 200
+    assert resp.json()["category"] is None
+
+    resp = client.post(
+        f"/cases/{case_id}/benefits?mode=append",
+        files={"file": ("Category_A.pdf", io.BytesIO(b"%PDF-1.4 fake"), "application/pdf")},
+    )
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/benefits-summary")
+    plans = resp.json()
+    assert len(plans) == 1
+    assert plans[0]["category"] == "A"

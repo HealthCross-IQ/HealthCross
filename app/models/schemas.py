@@ -11,6 +11,7 @@ class CaseCreate(BaseModel):
     region: Optional[str] = None
     employee_count_declared: Optional[int] = None
     business_type: Optional[str] = None  # "new" or "existing"
+    existing_insurer: Optional[str] = None
     current_annual_premium: Optional[float] = None
     target_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
@@ -187,12 +188,10 @@ class ClaimsLedgerEntryOut(BaseModel):
 
 class CaseUpdate(BaseModel):
     business_type: Optional[str] = None
+    existing_insurer: Optional[str] = None
     current_annual_premium: Optional[float] = None
     target_premium: Optional[float] = None
     policy_start_date: Optional[date] = None
-    default_product: Optional[str] = None
-    default_network: Optional[str] = None
-    default_tpa: Optional[str] = None
 
 
 class ClaimsReportOut(BaseModel):

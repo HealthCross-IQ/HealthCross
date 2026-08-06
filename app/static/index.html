@@ -396,6 +396,22 @@ function escapeHtml(s) {
   return (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
 }
 
+// Comma-grouped number entry for premium fields - plain <input type="number">
+// can't display commas at all (browsers reject them outright), so these use
+// type="text" instead: formatted on blur/load for readability, and parsed
+// back to a plain numeric string (via _parseThousands) before being read.
+function _formatThousands(value) {
+  const digits = (value ?? '').toString().replace(/,/g, '').trim();
+  if (!digits || isNaN(Number(digits))) return digits;
+  const [whole, frac] = digits.split('.');
+  const withCommas = whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  return frac !== undefined ? `${withCommas}.${frac}` : withCommas;
+}
+
+function _parseThousands(value) {
+  return (value ?? '').toString().replace(/,/g, '').trim();
+}
+
 /* ---------------- chart helpers (hand-rolled SVG, no external library) ---------------- */
 
 function bindChartTooltips(container) {
@@ -617,8 +633,11 @@ function showNewCaseForm() {
               <option value="existing">Existing business (renewal)</option>
             </select>
           </div>
-          <div><label>Current annual premium (renewals only)</label><input type="number" name="current_annual_premium" placeholder="e.g. 3000000"></div>
-          <div><label>Target premium (new business only)</label><input type="number" name="target_premium" placeholder="e.g. 2800000"></div>
+          <div><label>Existing insurer</label><input type="text" name="existing_insurer" placeholder="e.g. Allianz"></div>
+        </div>
+        <div class="row">
+          <div><label>Current annual premium (renewals only)</label><input type="text" inputmode="numeric" name="current_annual_premium" placeholder="e.g. 3,000,000" onblur="this.value = _formatThousands(this.value)"></div>
+          <div><label>Target premium (new business only)</label><input type="text" inputmode="numeric" name="target_premium" placeholder="e.g. 2,800,000" onblur="this.value = _formatThousands(this.value)"></div>
         </div>
         <div class="row">
           <div>
@@ -644,8 +663,9 @@ async function createCase(event) {
     region: form.get('region') || null,
     employee_count_declared: form.get('employee_count_declared') ? Number(form.get('employee_count_declared')) : null,
     business_type: form.get('business_type') || null,
-    current_annual_premium: form.get('current_annual_premium') ? Number(form.get('current_annual_premium')) : null,
-    target_premium: form.get('target_premium') ? Number(form.get('target_premium')) : null,
+    existing_insurer: form.get('existing_insurer') || null,
+    current_annual_premium: _parseThousands(form.get('current_annual_premium')) ? Number(_parseThousands(form.get('current_annual_premium'))) : null,
+    target_premium: _parseThousands(form.get('target_premium')) ? Number(_parseThousands(form.get('target_premium'))) : null,
     policy_start_date: form.get('policy_start_date') || null,
   };
   try {
@@ -1094,12 +1114,16 @@ function renderCaseWorkspace() {
           </select>
         </div>
         <div>
+          <label>Existing insurer</label>
+          <input type="text" id="case-existing-insurer" value="${escapeHtml(c.existing_insurer || '')}" placeholder="e.g. Allianz">
+        </div>
+        <div>
           <label>Current annual premium (for renewal rating)</label>
-          <input type="number" id="current-annual-premium" value="${c.current_annual_premium ?? ''}" placeholder="e.g. 3000000">
+          <input type="text" inputmode="numeric" id="current-annual-premium" value="${_formatThousands(c.current_annual_premium ?? '')}" placeholder="e.g. 3,000,000" onblur="this.value = _formatThousands(this.value)">
         </div>
         <div>
           <label>Target premium (for new business rating)</label>
-          <input type="number" id="case-target-premium" value="${c.target_premium ?? ''}" placeholder="e.g. 2800000">
+          <input type="text" inputmode="numeric" id="case-target-premium" value="${_formatThousands(c.target_premium ?? '')}" placeholder="e.g. 2,800,000" onblur="this.value = _formatThousands(this.value)">
         </div>
         <div>
           <label>Policy start date</label>
@@ -1291,9 +1315,10 @@ async function loadCaseCompleteness() {
 }
 
 async function saveCaseDetails() {
-  const premiumValue = document.getElementById('current-annual-premium').value;
-  const targetPremiumValue = document.getElementById('case-target-premium').value;
+  const premiumValue = _parseThousands(document.getElementById('current-annual-premium').value);
+  const targetPremiumValue = _parseThousands(document.getElementById('case-target-premium').value);
   const businessType = document.getElementById('case-business-type').value;
+  const existingInsurer = document.getElementById('case-existing-insurer').value;
   const policyStartDate = document.getElementById('case-policy-start-date').value;
   try {
     currentCase = await api(`/cases/${currentCase.id}`, {
@@ -1301,6 +1326,7 @@ async function saveCaseDetails() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
         business_type: businessType,
+        existing_insurer: existingInsurer || null,
         current_annual_premium: premiumValue ? Number(premiumValue) : null,
         target_premium: targetPremiumValue ? Number(targetPremiumValue) : null,
         policy_start_date: policyStartDate || null,
@@ -1463,6 +1489,10 @@ function quickUploadSetKind(idx, value) {
   renderQuickUploadReview();
 }
 
+function quickUploadSetCategory(idx, value) {
+  quickUploadFiles[idx].category = value;
+}
+
 function quickUploadRemove(idx) {
   quickUploadFiles.splice(idx, 1);
   renderQuickUploadReview();
@@ -1486,6 +1516,9 @@ function renderQuickUploadReview() {
       : item.status === 'error' ? '<span class="tier-pill dir-review">Failed</span>'
       : item.status === 'uploading' ? '<span class="hint">Uploading...</span>'
       : `<button onclick="quickUploadRemove(${idx})">Remove</button>`;
+    const categoryCell = item.selectedKind === 'benefits'
+      ? `<input type="text" value="${escapeHtml(item.category || '')}" placeholder="e.g. A" style="width:80px;" oninput="quickUploadSetCategory(${idx}, this.value)" ${item.status === 'done' || item.status === 'uploading' ? 'disabled' : ''}>`
+      : '';
     return `
       <tr>
         <td>${escapeHtml(item.file.name)}</td>
@@ -1495,6 +1528,7 @@ function renderQuickUploadReview() {
             ${Object.entries(QUICK_UPLOAD_KIND_LABELS).map(([k, label]) => `<option value="${k}" ${item.selectedKind === k ? 'selected' : ''}>${label}</option>`).join('')}
           </select>
         </td>
+        <td>${categoryCell}</td>
         <td>${item.status === 'detecting' ? '<span class="hint">Detecting...</span>' : confPill}</td>
         <td class="hint" style="max-width:280px;">${escapeHtml(item.reason || '')}</td>
         <td>${statusCell}</td>
@@ -1504,14 +1538,16 @@ function renderQuickUploadReview() {
 
   const readyCount = quickUploadFiles.filter(f => f.status === 'pending' && f.selectedKind).length;
   const stillDetecting = quickUploadFiles.some(f => f.status === 'detecting');
+  const anyBenefits = quickUploadFiles.some(f => f.selectedKind === 'benefits');
 
   area.innerHTML = `
     <div style="overflow-x:auto; margin-top:14px;">
       <table>
-        <tr><th>File</th><th>Upload as</th><th>Confidence</th><th>Why</th><th></th></tr>
+        <tr><th>File</th><th>Upload as</th><th>Category</th><th>Confidence</th><th>Why</th><th></th></tr>
         ${rows}
       </table>
     </div>
+    ${anyBenefits ? '<div class="hint">For Benefits files, type the category letter it\'s for (e.g. A) - lines it up with the HealthCross quote\'s own categories and makes sure a re-upload replaces the right one instead of duplicating it.</div>' : ''}
     <div class="row" style="margin-top:10px;">
       <button class="primary" onclick="quickUploadConfirm()" ${readyCount && !stillDetecting ? '' : 'disabled'}>Confirm &amp; upload ${readyCount ? `(${readyCount})` : ''}</button>
       <button onclick="quickUploadClear()">Clear all</button>
@@ -1533,7 +1569,10 @@ async function quickUploadConfirm() {
     try {
       const form = new FormData();
       form.append('file', item.file);
-      const query = item.selectedKind === 'benefits' && benefitsFileCount > 1 ? '?mode=append' : '';
+      const params = new URLSearchParams();
+      if (item.selectedKind === 'benefits' && benefitsFileCount > 1) params.set('mode', 'append');
+      if (item.selectedKind === 'benefits' && item.category && item.category.trim()) params.set('category', item.category.trim());
+      const query = params.toString() ? `?${params.toString()}` : '';
       const result = await api(`/cases/${currentCase.id}/${item.selectedKind}${query}`, { method: 'POST', body: form });
       item.status = 'done';
       item.reason = Array.isArray(result) ? `${result.length} row(s) uploaded` : 'Uploaded';

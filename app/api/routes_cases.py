@@ -456,6 +456,19 @@ def upload_benefits(
                 models.BenefitPlan.role == "existing",
                 models.BenefitPlan.category.in_(categories_in_upload),
             ).delete(synchronize_session=False)
+            # This upload resolved a real category for itself, confirming
+            # the underwriter is doing a proper one-category-per-file batch
+            # - any OTHER existing-role plan still sitting around with no
+            # category at all is leftover scaffolding from before a
+            # category could be resolved (e.g. an OCR/parse failure, or a
+            # manually-added plan from an older build that never set its
+            # own category field), not something worth keeping alongside
+            # a fully-categorized set.
+            db.query(models.BenefitPlan).filter(
+                models.BenefitPlan.case_id == case.id,
+                models.BenefitPlan.role == "existing",
+                models.BenefitPlan.category.is_(None),
+            ).delete(synchronize_session=False)
     else:
         # Replace, not accumulate - see the census upload for why. Only this
         # case's EXISTING-role plans are replaced; a previously-uploaded quote
