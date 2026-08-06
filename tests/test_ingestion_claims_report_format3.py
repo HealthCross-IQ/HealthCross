@@ -162,3 +162,31 @@ def test_monthly_paid_parses_full_month_name_rows_and_skips_blank_ones():
     assert result["monthly_paid"][0] == {"year": 2025, "month": "Aug", "paid": 313.0, "partial": True}
     assert result["monthly_paid"][1]["month"] == "Sep"
     assert result["monthly_paid"][1]["paid"] == 127378.0
+
+
+# A second real export shape for item 17 (seen on a real Arabia Insurance/
+# Maxtube report): each row spells out its own month-ending date in full
+# ("31/10/2025") ahead of the year, and its value carries decimals -
+# distinct from SAMPLE_REPORT_TEXT's bare "August 31 2025 313" shape.
+ALT_MONTHLY_REPORT_TEXT = """
+Health insurance claims record
+2 Policy number
+6252
+3a Policy effective date 05/10/2025
+3b Policy expiry date 30/09/2026
+17 Total Claim paid per Month ending date Year Value
+17a October 31/10/2025 2025 4,219.80
+17b November 30/11/2025 2025 16,405.40
+17c December 31/12/2025 2025 36,150.21
+17k
+17l
+"""
+
+
+def test_monthly_paid_parses_the_full_ending_date_row_shape():
+    result = parse_claims_report_text(ALT_MONTHLY_REPORT_TEXT)
+    assert result["monthly_paid"] == [
+        {"year": 2025, "month": "Oct", "paid": 4219.80, "partial": True},
+        {"year": 2025, "month": "Nov", "paid": 16405.40, "partial": False},
+        {"year": 2025, "month": "Dec", "paid": 36150.21, "partial": False},
+    ]

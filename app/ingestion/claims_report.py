@@ -287,6 +287,7 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
                     "partial": False,
                 }
             )
+            continue
 
     # Flag the first month as partial if the policy didn't start on the 1st -
     # a stub month understates the true monthly run-rate if averaged as-is.
@@ -306,6 +307,12 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
 
 _FORMAT3_DATE_RE = re.compile(r"(\d{2}/\d{2}/\d{4})")
 _FORMAT3_MONTHLY_ROW_RE = re.compile(r"^([A-Za-z]+)\s+\d{1,2}\s+(\d{4})\s+([\d,]+)\s*$")
+# A second real export shape for item 17 (seen on a real Arabia Insurance/
+# Maxtube report): each row keeps its own month-ending date spelled out in
+# full ("31/10/2025") ahead of the year, and its value carries decimals -
+# "17a October 31/10/2025 2025 4,219.80" - rather than the bare
+# "October 15 2025 4,219" shape _FORMAT3_MONTHLY_ROW_RE expects.
+_FORMAT3_MONTHLY_ROW_ALT_RE = re.compile(r"^([A-Za-z]+)\s+\d{2}/\d{2}/\d{4}\s+(\d{4})\s+([\d,]+\.\d{2})\s*$")
 # Real row numbers only go up to 18, always followed by whitespace or
 # end-of-line before any letter/rest - unlike the generic _ROW_PREFIX_RE,
 # this deliberately does NOT match e.g. "607836-001 / 607836-004 / ..." (a
@@ -531,13 +538,25 @@ def _parse_format3_text(raw_text: str) -> Dict[str, Any]:
     monthly: List[dict] = []
     for line in lines:
         row_match = _FORMAT3_ROW_RE.match(line)
-        match = _FORMAT3_MONTHLY_ROW_RE.match(row_match.group(3) or "") if row_match else None
+        rest = (row_match.group(3) or "") if row_match else ""
+        match = _FORMAT3_MONTHLY_ROW_RE.match(rest)
         if match and match.group(1).lower()[:3] in _MONTH_NAMES:
             monthly.append(
                 {
                     "year": int(match.group(2)),
                     "month": match.group(1)[:3].title(),
                     "paid": _parse_number(match.group(3)),
+                    "partial": False,
+                }
+            )
+            continue
+        alt_match = _FORMAT3_MONTHLY_ROW_ALT_RE.match(rest)
+        if alt_match and alt_match.group(1).lower()[:3] in _MONTH_NAMES:
+            monthly.append(
+                {
+                    "year": int(alt_match.group(2)),
+                    "month": alt_match.group(1)[:3].title(),
+                    "paid": _parse_number(alt_match.group(3)),
                     "partial": False,
                 }
             )
