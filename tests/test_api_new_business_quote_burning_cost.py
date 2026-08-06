@@ -142,6 +142,43 @@ def test_burning_cost_comparison_matches_rate_card_quote_by_category(client, mem
     assert cat["rate_card_gross_annual_premium"] == rate_card_quote["result"]["categories"][0]["gross_annual_premium"]
 
 
+def test_burning_cost_comparison_matches_a_stale_un_normalized_category_from_before_the_fix(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx):
+    # Regression test: a quote persisted before category normalization
+    # existed can still carry its own category as typed at the time (e.g.
+    # lowercase "a"). Re-pricing it live against the current (normalized)
+    # census must still match, not silently show 0 for every category.
+    _upload_portfolio_book(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx)
+    case_id = _make_case_with_census(client)
+
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    quote = models.NewBusinessQuote(
+        case_id=case_id,
+        categories=[{"category": "a", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA", "commission_pct": None, "variant_selections": {}}],
+        case_gross_annual_premium=5333.33,
+        result={
+            "categories": [{
+                "category": "a", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA",
+                "member_count": 1, "net_annual_premium": 4000.0, "loading_pct": 0.25,
+                "gross_annual_premium": 5333.33, "member_breakdown": [], "warnings": [],
+            }],
+            "case_gross_annual_premium": 5333.33, "priced_member_count": 1, "uncategorized_member_count": 0,
+        },
+    )
+    db.add(quote)
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote/burning-cost-comparison")
+    assert resp.status_code == 200
+    cat = resp.json()["categories"][0]
+    assert cat["category"] == "A"  # normalized on the way out
+    assert cat["priced_member_count"] == 1
+    assert cat["net_annual_premium"] == 90.0
+    assert cat["rate_card_gross_annual_premium"] == 5333.33
+
+
 def test_burning_cost_comparison_returns_null_without_a_portfolio_book(client, rate_card_xlsx):
     with open(rate_card_xlsx, "rb") as f:
         client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})

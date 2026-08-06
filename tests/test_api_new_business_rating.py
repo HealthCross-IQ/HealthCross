@@ -449,3 +449,86 @@ def test_new_business_quote_by_tier_404s_without_a_prior_quote(client, rate_card
 
     resp = client.get(f"/cases/{case_id}/new-business-quote/by-tier")
     assert resp.status_code == 404
+
+
+def _insert_stale_quote(client, case_id, category_letter):
+    # Simulates a quote persisted BEFORE category normalization existed -
+    # its own stored `categories`/`result` carry the category as typed at
+    # the time (e.g. lowercase "a"), never rewritten since. Regression
+    # coverage for a real bug: /by-tier and /burning-cost-comparison
+    # re-price live against the CURRENT (now-normalized) census, so a stale
+    # un-normalized category here must still be matched, not silently
+    # produce zero members/premium for every category despite the quote's
+    # own stored total being real.
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    result = {
+        "categories": [
+            {
+                "category": category_letter, "product": "Bronze", "network": "Net A", "tpa": "TPA X",
+                "member_count": 2, "net_annual_premium": 4200.0, "loading_pct": 0.265,
+                "gross_annual_premium": 5714.29, "member_breakdown": [], "warnings": [],
+            }
+        ],
+        "case_gross_annual_premium": 5714.29,
+        "priced_member_count": 2,
+        "uncategorized_member_count": 0,
+    }
+    quote = models.NewBusinessQuote(
+        case_id=case_id,
+        categories=[
+            {"category": category_letter, "product": "Bronze", "network": "Net A", "tpa": "TPA X", "commission_pct": None, "variant_selections": {}}
+        ],
+        case_gross_annual_premium=5714.29,
+        result=result,
+    )
+    db.add(quote)
+    db.commit()
+    db.close()
+
+
+def test_auto_requote_resolves_from_a_stale_un_normalized_prior_quote(client, rate_card_files):
+    # No Benefits-tab pick exists for this category - the auto re-quote
+    # can only resolve Product/Network/TPA from the prior quote, whose own
+    # category was stored un-normalized ("a") from before the fix. Must
+    # still match the (now-normalized) census category "A".
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)  # census category "A", 2 members
+    _insert_stale_quote(client, case_id, "a")
+
+    import io
+
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Employee Ref", "Category", "Age", "Gender", "Marital Status", "Relation", "Emirate"])
+    ws.append(["E1", "A", 30, "M", "single", "employee", "Dubai"])
+    ws.append(["E2", "A", 28, "F", "married", "spouse", "Dubai"])
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+
+    resp = client.post(f"/cases/{case_id}/census", files={"file": ("census.xlsx", buf, "application/octet-stream")})
+    assert resp.status_code == 200
+
+    resp = client.get(f"/cases/{case_id}/new-business-quotes")
+    quotes = resp.json()
+    assert len(quotes) == 2  # the stale quote, plus one auto-triggered by the census re-upload
+    latest = quotes[0]
+    assert latest["categories"][0]["category"] == "A"
+    assert latest["categories"][0]["product"] == "Bronze"
+    assert latest["case_gross_annual_premium"] > 0
+
+
+def test_new_business_quote_by_tier_matches_a_stale_un_normalized_category_from_before_the_fix(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)  # census category "A" (2 members)
+    _insert_stale_quote(client, case_id, "a")  # stored lowercase, never re-saved since
+
+    resp = client.get(f"/cases/{case_id}/new-business-quote/by-tier")
+    assert resp.status_code == 200
+    bronze = next(r for r in resp.json() if r["product"] == "Bronze")
+    assert bronze["case_gross_annual_premium"] == pytest.approx(4200.0 / (1 - 0.265), rel=1e-6)
+    assert bronze["categories"][0]["member_count"] == 2

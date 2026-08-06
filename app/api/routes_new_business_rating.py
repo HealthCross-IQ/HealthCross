@@ -167,6 +167,17 @@ def _normalize_category(value: Optional[str]) -> Optional[str]:
     return value.strip().upper() or None
 
 
+def _normalize_quote_categories(categories: List[dict]) -> List[dict]:
+    """Normalizes a stored quote's own category letters before matching
+    them against a (now-normalized) census - a quote persisted before this
+    normalization existed can still carry its categories as "a" or "A ",
+    which would otherwise match zero census members when re-priced live
+    (see /by-tier and /burning-cost-comparison), silently showing every
+    figure as 0 despite the quote's own originally-stored total being real.
+    """
+    return [{**c, "category": _normalize_category(c.get("category"))} for c in categories]
+
+
 def _case_census_dicts(case: models.Case) -> List[dict]:
     return [
         {
@@ -262,7 +273,7 @@ def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRe
         raise HTTPException(status_code=400, detail="No rate card uploaded yet")
     variant_rates = _variant_rate_dicts(db)
 
-    categories = [c.model_dump() for c in payload.categories]
+    categories = _normalize_quote_categories([c.model_dump() for c in payload.categories])
     return _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
 
 
@@ -297,7 +308,9 @@ def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[L
         .order_by(models.NewBusinessQuote.created_at.desc())
         .first()
     )
-    prior_by_category = {c["category"]: c for c in (latest_quote.categories or [])} if latest_quote else {}
+    prior_by_category = (
+        {c["category"]: c for c in _normalize_quote_categories(latest_quote.categories or [])} if latest_quote else {}
+    )
 
     categories = []
     for category_name in sorted(counts):
@@ -401,7 +414,7 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     census = _case_census_dicts(case)
     rate_cards = _rate_card_dicts(db)
     variant_rates = _variant_rate_dicts(db)
-    return price_case_by_tier(census, quote.categories, rate_cards, variant_rates)
+    return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
 
 
 @router.get("/cases/{case_id}/new-business-quote/burning-cost-comparison")
@@ -438,11 +451,14 @@ def get_new_business_quote_burning_cost_comparison(case_id: int, db: Session = D
     census = _case_census_dicts(case)
     rate_cards = _rate_card_dicts(db)
     burning_cost_rows = summarize_burning_cost_by_product_network_age_gender(portfolio_results, rate_cards)
-    comparison = price_case_against_burning_cost(census, quote.categories, rate_cards, burning_cost_rows)
+    normalized_categories = _normalize_quote_categories(quote.categories)
+    comparison = price_case_against_burning_cost(census, normalized_categories, rate_cards, burning_cost_rows)
 
     # Line up each category against the rate-card quote's own gross premium
     # so the frontend doesn't have to re-match by category name itself.
-    quote_gross_by_category = {c["category"]: c["gross_annual_premium"] for c in quote.result["categories"]}
+    quote_gross_by_category = {
+        _normalize_category(c["category"]): c["gross_annual_premium"] for c in quote.result["categories"]
+    }
     for cat in comparison["categories"]:
         cat["rate_card_gross_annual_premium"] = quote_gross_by_category.get(cat["category"])
 
