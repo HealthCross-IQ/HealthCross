@@ -2714,6 +2714,7 @@ async function loadNewBusinessRating() {
       variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
       previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
       variantOptions: null,
+      existingBenefitPlan: benefitPlan || null,
     };
   });
 
@@ -2774,15 +2775,53 @@ async function nbRenderArea() {
   `;
 }
 
+// Maps a New Business variant name (Annual Limit, Deductible, ...) to the
+// matching value already on this category's EXISTING-role BenefitPlan, so
+// the broker can see what the incumbent plan offers right next to the
+// option they're picking - a hint only, nothing is auto-selected, so a
+// plan with unrelated variant names (a custom upload) just shows no hint
+// rather than a wrong one.
+const NB_VARIANT_EXISTING_LOOKUP = [
+  { keywords: ['annual limit'], summaryKey: 'annual_limit', field: 'annual_limit', format: v => `AED ${Number(v).toLocaleString()}` },
+  { keywords: ['deductible'], summaryKey: 'deductible', field: 'deductible', format: v => `AED ${Number(v).toLocaleString()}` },
+  { keywords: ['maternity'], summaryKey: 'maternity_limit', field: 'maternity_limit', format: v => `AED ${Number(v).toLocaleString()}` },
+  { keywords: ['pharmacy'], summaryKey: 'pharmacy_limit_and_coinsurance' },
+  { keywords: ['dental'], summaryKey: 'dental', field: 'dental_covered', format: v => v ? 'Covered' : 'Not covered' },
+  { keywords: ['optical'], summaryKey: 'optical', field: 'optical_covered', format: v => v ? 'Covered' : 'Not covered' },
+  { keywords: ['pre-existing', 'pre existing', 'chronic'], summaryKey: 'pre_existing_chronic_limit' },
+  { keywords: ['alternative', 'complementary'], summaryKey: 'alternative_or_complementary_treatment' },
+  { keywords: ['op copay', 'coinsurance', 'co-insurance', 'copay'], summaryKey: 'coinsurance', field: 'co_insurance_pct', format: v => `${v}%` },
+  { keywords: ['room'], field: 'room_type' },
+];
+
+function nbExistingValueForVariant(benefitPlan, variantName) {
+  if (!benefitPlan) return null;
+  const name = variantName.toLowerCase();
+  const entry = NB_VARIANT_EXISTING_LOOKUP.find(e => e.keywords.some(k => name.includes(k)));
+  if (!entry) return null;
+  const summary = benefitPlan.standard_summary;
+  if (entry.summaryKey && summary && summary[entry.summaryKey] && !/^not specified/i.test(summary[entry.summaryKey])) {
+    return summary[entry.summaryKey];
+  }
+  // dental_covered/optical_covered default to false when never parsed, so a
+  // bare false is "unknown", not a genuine "not covered" - only surface it
+  // when true, or when standard_summary said so explicitly above.
+  if (entry.field && benefitPlan[entry.field] != null && benefitPlan[entry.field] !== false) {
+    return entry.format ? entry.format(benefitPlan[entry.field]) : String(benefitPlan[entry.field]);
+  }
+  return null;
+}
+
 function nbCategoryCardHtml(cat, idx) {
   const products = nbRateCardOptions.products;
   const networksForProduct = cat.product ? (nbRateCardOptions.product_networks[cat.product] || []) : [];
   const variantSelects = cat.variantOptions ? Object.keys(cat.variantOptions).sort().map(variantName => {
     const options = cat.variantOptions[variantName];
     const selected = cat.variant_selections[variantName] || '';
+    const existingValue = nbExistingValueForVariant(cat.existingBenefitPlan, variantName);
     return `
       <div>
-        <label>${escapeHtml(variantName)}</label>
+        <label>${escapeHtml(variantName)}${existingValue ? ` <span style="color:var(--ink-muted); font-weight:400;">(existing: ${escapeHtml(existingValue)})</span>` : ''}</label>
         <select onchange="nbSetVariantSelection(${idx}, '${escapeHtml(variantName).replace(/'/g, "\\'")}', this.value)">
           <option value="">Base (included)</option>
           ${options.map(o => `<option value="${escapeHtml(o.option_value)}" ${selected === o.option_value ? 'selected' : ''}>${escapeHtml(o.option_value)}${o.direction !== 'Base' ? ` (${o.direction} ${o.impact_type === 'Percent' ? (o.direction === 'Upgrade' ? '+' : '-') + o.impact_value + '%' : 'AED ' + o.impact_value})` : ''}</option>`).join('')}
