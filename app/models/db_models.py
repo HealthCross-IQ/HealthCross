@@ -463,6 +463,56 @@ class QicSoaLine(Base):
     imported_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
+class HealthCrossFeeStatementLine(Base):
+    """One line from a QIC "Statement of Outstanding" addressed to
+    HealthCross itself (Customer Code 216331 = Dubai, 293276 = Abu Dhabi) -
+    what QIC owes HC for policy-linked fees/commission. Unlike QicSoaLine's
+    "Gross Amount", there's no single amount column here: `credit_amount`
+    minus `debit_amount` is the real net-owed-to-HC figure per line,
+    verified against this file's own printed "Net Due to You" total -
+    QIC's own "Transaction Type" labels (Others/TPA Fee/Other Fee) turned
+    out to all represent real fee amounts when validated that way, so
+    reconciliation nets every row regardless of that label.
+
+    `doc_no` here matches PaymentTrackerEntry.healthcross_doc, NOT
+    PaymentTrackerEntry.doc_no (the client-side QIC document number) - the
+    two are different QIC document series.
+
+    `division` is a per-*policy* attribute (which office administers that
+    policy) read straight from the row - it is NOT reliable for telling
+    which of the two branch statements (Dubai/Abu Dhabi) a row came from;
+    the Abu Dhabi statement's own rows can themselves read Division =
+    "Dubai Branch". `statement_customer_code` is the statement's own true
+    identity (216331 = Dubai, 293276 = Abu Dhabi, from the file's own
+    header block) - re-uploading a file only replaces rows sharing both
+    its statement_period and its statement_customer_code, so uploading one
+    branch never wipes the other's rows.
+    """
+
+    __tablename__ = "health_cross_fee_statement_lines"
+
+    id = Column(Integer, primary_key=True)
+
+    doc_no = Column(String, nullable=True, index=True)
+    doc_no_raw = Column(String, nullable=True)
+    doc_date = Column(Date, nullable=True)
+    due_date = Column(Date, nullable=True)
+    policy_no = Column(String, nullable=True, index=True)
+    assured_name = Column(String, nullable=True)
+    invoice_no = Column(String, nullable=True)
+    debit_amount = Column(Float, default=0)
+    credit_amount = Column(Float, default=0)
+    transaction_type = Column(String, nullable=True)
+    division = Column(String, nullable=True)  # per-policy office, NOT per-statement branch - see docstring
+    statement_customer_code = Column(String, nullable=True, index=True)  # "216331" (Dubai) / "293276" (Abu Dhabi)
+    policy_from_date = Column(Date, nullable=True)
+    policy_to_date = Column(Date, nullable=True)
+    age_band = Column(String, nullable=True)
+
+    statement_period = Column(String, nullable=True, index=True)
+    imported_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class BankTransaction(Base):
     """One raw line from an HC bank account statement export - used to
     confirm a QIC payment marked "Received" in the PaymentTrackerEntry

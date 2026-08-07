@@ -93,6 +93,92 @@ def test_qic_soa_upload_replaces_same_period_and_reconciles_against_tracker(clie
     assert body["missing_in_client_soa_count"] == 0
 
 
+def _fee_statement_bytes(rows, customer_code="216331"):
+    header_block = [
+        [None] * 21,
+        [None] * 21,
+        [None] * 21,
+        ["Customer Name", f"{customer_code}-HEALTH CROSS GROUP FZCO"] + [None] * 19,
+        ["Customer Code", customer_code] + [None] * 19,
+        ["Date", "31-Jul-2026"] + [None] * 19,
+        [None] * 21,
+        [
+            "Doc No", "Doc Date", "Due Date", "Line of Business", "Policy No", "Assured",
+            "Claim No /Participant Name", "Chassis No", "Invoice No", "Report Currency", "Doc Currency",
+            "Narration", "Debit FC", "Credit FC", "Debit LC", "Credit LC", "Division",
+            "Transaction Type", "Policy From Date", "Policy To Date", "Age Band",
+        ],
+    ]
+    df = pd.DataFrame(header_block + rows)
+    buf = io.BytesIO()
+    df.to_excel(buf, index=False, header=False)
+    buf.seek(0)
+    return buf.read()
+
+
+def test_health_cross_fee_statement_upload_replaces_only_its_own_statement_and_reconciles(client):
+    tracker_df = pd.DataFrame(
+        [
+            {
+                "Source": "Direct Channel", "Policy No.": "P1", "DocNo.": "128-1", "HealthCross Doc": "228-1",
+                "Invoice amount": 1000.0, "Premium\n( excl VAT)": 1000.0, "Product": "Silver",
+                "HC Fees": 100.0, "Total Value": 105.0, "HC Payment Status": None,
+            }
+        ]
+    )
+    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
+
+    dubai_row = [
+        "228-1", "15-SEP-2025", "04-NOV-2025", "Medical", "P1", "Acme",
+        "-", "-", "-", "AED", "AED", "Pol No: P1", 0, 105.0, 0, 105.0, "Dubai Branch",
+        "TPA Fee", "06-AUG-2025", "05-AUG-2026", "271 TO 365",
+    ]
+    resp = client.post(
+        "/finance/health-cross-fee-statement/upload?statement_period=2026-07",
+        files={"file": ("dubai.xlsx", _fee_statement_bytes([dubai_row], customer_code="216331"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+    assert resp.json()[0]["division"] == "Dubai Branch"
+
+    # The Abu Dhabi statement's own row is itself labeled Division "Dubai
+    # Branch" (a real quirk seen in production - Division reflects which
+    # office administers the policy, not which branch statement it's on).
+    # Uploading it for the SAME period must not wipe the Dubai statement's
+    # rows just because they share that Division value - only its own
+    # statement (by Customer Code) should be replaced.
+    abu_dhabi_row = [
+        "128-9", "17-APR-2026", "-", "Medical", "P9", "Other Client",
+        "-", "-", "-", "AED", "AED", "Pol No: P9", 50.0, 0, 50.0, 0, "Dubai Branch",
+        "Premium", "01-MAR-2026", "28-FEB-2027", "61 TO 90",
+    ]
+    resp = client.post(
+        "/finance/health-cross-fee-statement/upload?statement_period=2026-07",
+        files={"file": ("abudhabi.xlsx", _fee_statement_bytes([abu_dhabi_row], customer_code="293276"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    resp = client.get("/finance/health-cross-fee-statement", params={"statement_period": "2026-07"})
+    lines = resp.json()
+    assert len(lines) == 2
+    assert {l["statement_customer_code"] for l in lines} == {"216331", "293276"}
+
+    # Re-uploading Dubai's file again (e.g. a corrected re-export) replaces
+    # only its own 1 row, still leaving Abu Dhabi's row untouched.
+    resp = client.post(
+        "/finance/health-cross-fee-statement/upload?statement_period=2026-07",
+        files={"file": ("dubai2.xlsx", _fee_statement_bytes([dubai_row], customer_code="216331"), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    resp = client.get("/finance/health-cross-fee-statement", params={"statement_period": "2026-07"})
+    assert len(resp.json()) == 2
+
+    resp = client.get("/finance/reconciliation/tracker-vs-fee-statement", params={"statement_period": "2026-07"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["matched_count"] == 1
+    assert body["missing_in_fee_statement_count"] == 0
+
+
 def test_employees_recurring_expenses_and_generate(client):
     resp = client.post("/finance/employees", json={"full_name": "Sheetal", "role_title": "Head of Operations", "monthly_salary": 30000, "currency": "AED"})
     assert resp.status_code == 200

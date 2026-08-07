@@ -185,7 +185,7 @@ def parse_payment_tracker(file: BinaryIO, filename: str, sheet_name: Any = 0) ->
                 "icp": _float_or_none(row.get("icp")),
                 "client_vat": _float_or_none(row.get("client_vat")),
                 "client_payment_status": _str_or_none(row.get("client_payment_status")),
-                "healthcross_doc": _str_or_none(row.get("healthcross_doc")),
+                "healthcross_doc": normalize_doc_no(row.get("healthcross_doc")),
                 "client_premium_amount_excl_tax": _float_or_none(row.get("client_premium_amount_excl_tax")),
                 "product": _str_or_none(row.get("product")),
                 "is_manual_fee": _is_manual_fee(row.get("hc_fee_pct_raw")),

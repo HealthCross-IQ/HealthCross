@@ -439,6 +439,29 @@ class QicSoaLineOut(BaseModel):
     imported_at: datetime
 
 
+class HealthCrossFeeStatementLineOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    doc_no: Optional[str] = None
+    doc_no_raw: Optional[str] = None
+    doc_date: Optional[date] = None
+    due_date: Optional[date] = None
+    policy_no: Optional[str] = None
+    assured_name: Optional[str] = None
+    invoice_no: Optional[str] = None
+    debit_amount: float
+    credit_amount: float
+    transaction_type: Optional[str] = None
+    division: Optional[str] = None
+    statement_customer_code: Optional[str] = None
+    policy_from_date: Optional[date] = None
+    policy_to_date: Optional[date] = None
+    age_band: Optional[str] = None
+    statement_period: Optional[str] = None
+    imported_at: datetime
+
+
 class BankTransactionOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -594,6 +617,32 @@ class TrackerClientSoaReconciliationOut(BaseModel):
     settled_in_tracker_but_open_in_client_soa_count: int
     missing_in_tracker_count: int
     rows: List[PolicyReconciliationRow]
+
+
+class FeeStatementReconciliationRow(BaseModel):
+    policy_no: str
+    client_name: Optional[str] = None
+    doc_nos: List[str] = []
+    tracker_outstanding_amount: Optional[float] = None
+    tracker_outstanding_count: int = 0
+    fee_statement_amount: Optional[float] = None
+    fee_statement_count: int = 0
+    variance: Optional[float] = None
+    # "matched" / "amount_mismatch" / "missing_in_fee_statement" /
+    # "received_in_tracker_but_open_in_fee_statement" / "missing_in_tracker"
+    status: str
+
+
+class TrackerFeeStatementReconciliationOut(BaseModel):
+    statement_period: Optional[str] = None
+    total_policies_outstanding_in_tracker: int
+    total_policies_in_fee_statement: int
+    matched_count: int
+    mismatched_count: int
+    missing_in_fee_statement_count: int
+    received_in_tracker_but_open_in_fee_statement_count: int
+    missing_in_tracker_count: int
+    rows: List[FeeStatementReconciliationRow]
 
 
 class SoaPeriodComparisonRow(BaseModel):

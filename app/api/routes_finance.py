@@ -13,8 +13,10 @@ from app.finance.reconciliation import (
     compare_qic_soa_periods,
     reconcile_tracker_received_vs_bank,
     reconcile_tracker_vs_client_soa_by_policy,
+    reconcile_tracker_vs_fee_statement_by_policy,
 )
 from app.ingestion.bank_statement import parse_bank_statement
+from app.ingestion.health_cross_fee_statement import parse_health_cross_fee_statement
 from app.ingestion.payment_tracker import parse_payment_tracker
 from app.ingestion.qic_soa import parse_qic_soa
 from app.models import db_models as models
@@ -222,6 +224,55 @@ def upload_qic_soa(
     return lines
 
 
+@router.get("/health-cross-fee-statement", response_model=List[schemas.HealthCrossFeeStatementLineOut])
+def list_health_cross_fee_statement_lines(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
+    q = db.query(models.HealthCrossFeeStatementLine)
+    if statement_period:
+        q = q.filter_by(statement_period=statement_period)
+    return q.order_by(models.HealthCrossFeeStatementLine.doc_date.desc()).all()
+
+
+@router.post("/health-cross-fee-statement/upload", response_model=List[schemas.HealthCrossFeeStatementLineOut])
+def upload_health_cross_fee_statement(
+    file: UploadFile = File(...),
+    statement_period: str = Query(
+        ...,
+        description=(
+            "A label for which export period this is (e.g. '2026-07') - Dubai and Abu Dhabi are "
+            "separate files but share one period label; each upload only replaces rows for its own "
+            "statement (identified by the file's own Customer Code, in its header block) within that "
+            "period, not the other branch's rows."
+        ),
+    ),
+    sheet_name: Optional[str] = Query(None),
+    db: Session = Depends(get_db),
+):
+    try:
+        parsed = parse_health_cross_fee_statement(file.file, file.filename, sheet_name=sheet_name or 0)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not parse HealthCross Fee Statement file: {exc}")
+    if not parsed:
+        raise HTTPException(status_code=400, detail="No fee statement rows found in file")
+
+    # Scoped by the statement's own Customer Code, NOT the per-row Division -
+    # a row's Division is which office administers that policy, not which of
+    # the two branch statements it was exported from (the Abu Dhabi
+    # statement's own rows can themselves read Division "Dubai Branch").
+    customer_codes = {row.get("statement_customer_code") for row in parsed if row.get("statement_customer_code")}
+    if customer_codes:
+        db.query(models.HealthCrossFeeStatementLine).filter(
+            models.HealthCrossFeeStatementLine.statement_period == statement_period,
+            models.HealthCrossFeeStatementLine.statement_customer_code.in_(customer_codes),
+        ).delete(synchronize_session=False)
+
+    lines = [models.HealthCrossFeeStatementLine(statement_period=statement_period, **row) for row in parsed]
+    db.add_all(lines)
+    db.commit()
+    for line in lines:
+        db.refresh(line)
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Bank statement
 # ---------------------------------------------------------------------------
@@ -275,6 +326,16 @@ def get_tracker_vs_client_soa_reconciliation(statement_period: Optional[str] = N
         soa_query = soa_query.filter_by(statement_period=statement_period)
     soa_lines = [_to_dict(e) for e in soa_query.all()]
     return reconcile_tracker_vs_client_soa_by_policy(tracker_entries, soa_lines, statement_period=statement_period)
+
+
+@router.get("/reconciliation/tracker-vs-fee-statement", response_model=schemas.TrackerFeeStatementReconciliationOut)
+def get_tracker_vs_fee_statement_reconciliation(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
+    tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
+    fee_query = db.query(models.HealthCrossFeeStatementLine)
+    if statement_period:
+        fee_query = fee_query.filter_by(statement_period=statement_period)
+    fee_lines = [_to_dict(e) for e in fee_query.all()]
+    return reconcile_tracker_vs_fee_statement_by_policy(tracker_entries, fee_lines, statement_period=statement_period)
 
 
 @router.get("/reconciliation/qic-periods", response_model=schemas.SoaPeriodComparisonOut)

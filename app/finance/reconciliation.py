@@ -1,4 +1,4 @@
-"""Three reconciliation reports HealthCross runs over its finance data,
+"""Four reconciliation reports HealthCross runs over its finance data,
 each a pure function over plain dicts (never touching the DB directly) so
 they can be unit tested without a database - see app/api/routes_finance.py
 for how ORM rows are converted to dicts before being passed in here.
@@ -6,10 +6,14 @@ for how ORM rows are converted to dicts before being passed in here.
 1. reconcile_tracker_vs_client_soa_by_policy - does every Payment Tracker
    policy that's still outstanding on the client side exist (and match in
    amount) on QIC's Client Statement of Account, and vice versa.
-2. compare_qic_soa_periods - two QIC SOA exports (e.g. this month's vs. a
+2. reconcile_tracker_vs_fee_statement_by_policy - same idea, but for HC's
+   own fee/commission side: does every Payment Tracker policy still
+   outstanding on the HC-fee side exist (and match in amount) on QIC's
+   HealthCross Fee Statement, and vice versa.
+3. compare_qic_soa_periods - two QIC SOA exports (e.g. this month's vs. a
    later "recon" re-export) should describe the same underlying documents;
    flags what changed between them per doc.
-3. reconcile_tracker_received_vs_bank - every PaymentTrackerEntry HC marked
+4. reconcile_tracker_received_vs_bank - every PaymentTrackerEntry HC marked
    "Received" should be backed by a real inbound QIC credit in the bank
    statement. QIC settles HC's fee in periodic batched remittances rather
    than one wire per invoice, so this matches "everything marked Received
@@ -28,6 +32,14 @@ _STATUS_PRIORITY = {
     "amount_mismatch": 0,
     "missing_in_client_soa": 1,
     "settled_in_tracker_but_open_in_client_soa": 2,
+    "missing_in_tracker": 3,
+    "matched": 4,
+}
+
+_FEE_STATUS_PRIORITY = {
+    "amount_mismatch": 0,
+    "missing_in_fee_statement": 1,
+    "received_in_tracker_but_open_in_fee_statement": 2,
     "missing_in_tracker": 3,
     "matched": 4,
 }
@@ -131,6 +143,111 @@ def reconcile_tracker_vs_client_soa_by_policy(
         "mismatched_count": counts["amount_mismatch"],
         "missing_in_client_soa_count": counts["missing_in_client_soa"],
         "settled_in_tracker_but_open_in_client_soa_count": counts["settled_in_tracker_but_open_in_client_soa"],
+        "missing_in_tracker_count": counts["missing_in_tracker"],
+        "rows": rows,
+    }
+
+
+def reconcile_tracker_vs_fee_statement_by_policy(
+    tracker_entries: List[dict],
+    fee_statement_lines: List[dict],
+    statement_period: Optional[str] = None,
+    amount_tolerance: float = AMOUNT_TOLERANCE,
+) -> dict:
+    """Compares HC's Payment Tracker against QIC's HealthCross Fee
+    Statement ("Statement of Outstanding" addressed to HC itself), grouped
+    by Policy No - mirrors reconcile_tracker_vs_client_soa_by_policy's
+    shape and reasoning, but for the HC-fee side rather than the
+    client-premium side:
+
+    - Tracker outstanding = `hc_payment_status` isn't "Received" or "Done"
+      (column AI), summed on `total_value` (the VAT-inclusive fee, which is
+      what the fee statement's own amounts turned out to match exactly).
+    - Fee statement amount = credit_amount minus debit_amount per line,
+      summed regardless of QIC's own Transaction Type label - validated
+      against the file's own printed "Net Due to You" total, which is
+      exactly the sum of every row with no Transaction Type filtering.
+    - A policy on the fee statement with no *outstanding* tracker row
+      splits into two outcomes: if the tracker has the policy at all (just
+      already marked Received/Done), that's "received_in_tracker_but_open_
+      in_fee_statement" - HC's own record may be ahead of QIC's, or QIC
+      hasn't dropped it from its ledger yet, either way worth flagging
+      rather than treating as a policy HC never logged at all.
+    """
+    all_tracker_policies = set()
+    outstanding_by_policy: Dict[str, dict] = {}
+    for entry in tracker_entries:
+        policy_no = entry.get("policy_no")
+        if not policy_no:
+            continue
+        all_tracker_policies.add(policy_no)
+        status = (entry.get("hc_payment_status") or "").strip().lower()
+        if status.startswith("received") or status == "done":
+            continue
+        bucket = outstanding_by_policy.setdefault(
+            policy_no, {"amount": 0.0, "count": 0, "doc_nos": set(), "client_name": None}
+        )
+        bucket["amount"] += entry.get("total_value") or 0.0
+        bucket["count"] += 1
+        if entry.get("healthcross_doc"):
+            bucket["doc_nos"].add(entry["healthcross_doc"])
+        if entry.get("main_policy_holder"):
+            bucket["client_name"] = entry["main_policy_holder"]
+
+    fee_by_policy: Dict[str, dict] = {}
+    for line in fee_statement_lines:
+        policy_no = line.get("policy_no")
+        if not policy_no:
+            continue
+        bucket = fee_by_policy.setdefault(policy_no, {"amount": 0.0, "count": 0, "doc_nos": set(), "client_name": None})
+        bucket["amount"] += (line.get("credit_amount") or 0.0) - (line.get("debit_amount") or 0.0)
+        bucket["count"] += 1
+        if line.get("doc_no"):
+            bucket["doc_nos"].add(line["doc_no"])
+        if line.get("assured_name"):
+            bucket["client_name"] = line["assured_name"]
+
+    def _row(policy_no, status, tracker=None, fee=None, variance=None):
+        doc_nos = sorted((tracker or {}).get("doc_nos", set()) | (fee or {}).get("doc_nos", set()))
+        return {
+            "policy_no": policy_no,
+            "client_name": (tracker or {}).get("client_name") or (fee or {}).get("client_name"),
+            "doc_nos": doc_nos,
+            "tracker_outstanding_amount": tracker["amount"] if tracker else None,
+            "tracker_outstanding_count": tracker["count"] if tracker else 0,
+            "fee_statement_amount": fee["amount"] if fee else None,
+            "fee_statement_count": fee["count"] if fee else 0,
+            "variance": variance,
+            "status": status,
+        }
+
+    rows = []
+    for policy_no, tracker in outstanding_by_policy.items():
+        fee = fee_by_policy.get(policy_no)
+        if fee is None:
+            rows.append(_row(policy_no, "missing_in_fee_statement", tracker=tracker))
+            continue
+        variance = round(tracker["amount"] - fee["amount"], 2)
+        status = "matched" if abs(variance) <= amount_tolerance else "amount_mismatch"
+        rows.append(_row(policy_no, status, tracker=tracker, fee=fee, variance=variance))
+
+    for policy_no, fee in fee_by_policy.items():
+        if policy_no in outstanding_by_policy:
+            continue
+        status = "received_in_tracker_but_open_in_fee_statement" if policy_no in all_tracker_policies else "missing_in_tracker"
+        rows.append(_row(policy_no, status, fee=fee))
+
+    rows.sort(key=lambda r: (_FEE_STATUS_PRIORITY[r["status"]], r["policy_no"]))
+    counts = Counter(r["status"] for r in rows)
+
+    return {
+        "statement_period": statement_period,
+        "total_policies_outstanding_in_tracker": len(outstanding_by_policy),
+        "total_policies_in_fee_statement": len(fee_by_policy),
+        "matched_count": counts["matched"],
+        "mismatched_count": counts["amount_mismatch"],
+        "missing_in_fee_statement_count": counts["missing_in_fee_statement"],
+        "received_in_tracker_but_open_in_fee_statement_count": counts["received_in_tracker_but_open_in_fee_statement"],
         "missing_in_tracker_count": counts["missing_in_tracker"],
         "rows": rows,
     }

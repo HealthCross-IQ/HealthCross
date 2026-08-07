@@ -659,6 +659,20 @@ function loadReconciliationPanel() {
     </div>
 
     <div class="card">
+      <h3>Upload HealthCross Fee Statement</h3>
+      <div class="hint">
+        Upload the Dubai and Abu Dhabi files separately under the same period label - each upload only replaces
+        its own branch's rows for that period (read from the file itself), so uploading one never wipes the other.
+      </div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="feeStatementFile" /></div>
+        <div><label>Statement period label</label><input type="text" id="feeStatementPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="uploadFeeStatement()">Upload</button></div>
+      </div>
+      <div id="feeStatementUploadStatus"></div>
+    </div>
+
+    <div class="card">
       <h3>Payment Tracker vs. Client Statement of Account</h3>
       <div class="hint">
         Grouped by <strong>Policy No.</strong> (column G on both sheets) rather than Doc No., since one policy is
@@ -670,9 +684,26 @@ function loadReconciliationPanel() {
       <div class="row">
         <div><label>Statement period (optional - leave blank to check against ALL uploaded periods)</label>
           <input type="text" id="reconPeriod" placeholder="2026-06" /></div>
-        <div><button class="primary" onclick="runTrackerVsClientSoa()">Run</button></div>
+        <div><button class="primary" onclick="clientSoaRecon.run()">Run</button></div>
       </div>
       <div id="reconTrackerVsClientSoa"></div>
+    </div>
+
+    <div class="card">
+      <h3>Payment Tracker vs. HealthCross Fee Statement</h3>
+      <div class="hint">
+        Same idea, for HC's own fee/commission side: grouped by <strong>Policy No.</strong>, tracker filtered to
+        what's still outstanding on the HC-fee side (HC Payment Status, column AI, is blank - not "Received" or
+        "Done") before summing Total Value, compared against the fee statement's Credit LC minus Debit LC per
+        policy (every row counts, regardless of QIC's own Transaction Type label - validated against the file's
+        own printed "Net Due to You" total).
+      </div>
+      <div class="row">
+        <div><label>Statement period (optional - leave blank to check against ALL uploaded periods)</label>
+          <input type="text" id="feeReconPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="feeStatementRecon.run()">Run</button></div>
+      </div>
+      <div id="reconTrackerVsFeeStatement"></div>
     </div>
 
     <div class="card">
@@ -714,6 +745,26 @@ async function uploadSoa() {
   }
 }
 
+async function uploadFeeStatement() {
+  const fileInput = document.getElementById('feeStatementFile');
+  const statusEl = document.getElementById('feeStatementUploadStatus');
+  const period = document.getElementById('feeStatementPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  if (!period) { toast('Enter a statement period label', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    const rows = await api(`/finance/health-cross-fee-statement/upload?statement_period=${encodeURIComponent(period)}`, { method: 'POST', body: fd });
+    const division = rows[0]?.division || 'file';
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows (${esc(division)}) for period "${esc(period)}".</span>`;
+    toast(`Uploaded ${rows.length} fee statement rows`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
 async function uploadBank() {
   const fileInput = document.getElementById('bankFile');
   const statusEl = document.getElementById('bankUploadStatus');
@@ -734,142 +785,185 @@ async function uploadBank() {
   }
 }
 
-const RECON_STATUS_META = {
-  matched: { label: 'Matched', pill: 'pill-good' },
-  amount_mismatch: { label: 'Amount Mismatch', pill: 'pill-bad' },
-  missing_in_client_soa: { label: 'Missing in Client SOA', pill: 'pill-warn' },
-  settled_in_tracker_but_open_in_client_soa: { label: 'Settled in Tracker, Open in SOA', pill: 'pill-bad' },
-  missing_in_tracker: { label: 'Missing in Tracker', pill: 'pill-bad' },
-};
+// Shared controller for the two policy-level reconciliation reports (Tracker
+// vs Client SOA, Tracker vs HealthCross Fee Statement) - same shape (KPI
+// grid, search/status filter, table, CSV export), just pointed at a
+// different endpoint/amount-field/status set per instance.
+function createPolicyReconciliation(config) {
+  let data = null;
 
-function reconStatusPill(status) {
-  const meta = RECON_STATUS_META[status] || { label: status, pill: 'pill-neutral' };
-  return `<span class="pill ${meta.pill}">${esc(meta.label)}</span>`;
-}
-
-let policyReconData = null;
-
-async function runTrackerVsClientSoa() {
-  const el = document.getElementById('reconTrackerVsClientSoa');
-  const period = document.getElementById('reconPeriod').value.trim();
-  el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
-  try {
-    let url = '/finance/reconciliation/tracker-vs-client-soa';
-    if (period) url += `?statement_period=${encodeURIComponent(period)}`;
-    policyReconData = await api(url);
-  } catch (e) {
-    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
-    return;
+  function statusPill(status) {
+    const meta = config.statusMeta[status] || { label: status, pill: 'pill-neutral' };
+    return `<span class="pill ${meta.pill}">${esc(meta.label)}</span>`;
   }
 
-  const r = policyReconData;
-  // KPI grid + filter controls are built once per Run - only the table
-  // placeholder below is rebuilt per keystroke, so the search input never
-  // loses focus while typing.
-  el.innerHTML = `
-    <div class="kpi-grid">
-      <div class="kpi"><span class="label">Matched</span><span class="value">${r.matched_count}</span></div>
-      <div class="kpi"><span class="label">Amount Mismatch</span><span class="value">${r.mismatched_count}</span></div>
-      <div class="kpi"><span class="label">Missing in Client SOA</span><span class="value">${r.missing_in_client_soa_count}</span></div>
-      <div class="kpi"><span class="label">Settled in Tracker, Open in SOA</span><span class="value">${r.settled_in_tracker_but_open_in_client_soa_count}</span></div>
-      <div class="kpi"><span class="label">Missing in Tracker</span><span class="value">${r.missing_in_tracker_count}</span></div>
-    </div>
-    <div class="row" style="margin-top:10px;">
-      <div><label>Search (policy no., client, doc no.)</label><input type="text" id="reconSearch" placeholder="Type to search&hellip;" oninput="renderTrackerVsClientSoaTable()" /></div>
-      <div><label>Status</label>
-        <select id="reconStatusFilter" onchange="renderTrackerVsClientSoaTable()">
-          <option value="">All except Matched</option>
-          <option value="amount_mismatch">Amount Mismatch</option>
-          <option value="missing_in_client_soa">Missing in Client SOA</option>
-          <option value="settled_in_tracker_but_open_in_client_soa">Settled in Tracker, Open in SOA</option>
-          <option value="missing_in_tracker">Missing in Tracker</option>
-          <option value="matched">Matched</option>
-        </select>
+  function filteredRows() {
+    if (!data) return [];
+    const search = (document.getElementById(config.searchInputId)?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById(config.statusSelectId)?.value || '';
+    let rows = statusFilter ? data.rows.filter(r => r.status === statusFilter) : data.rows.filter(r => r.status !== 'matched');
+    if (search) {
+      rows = rows.filter(r =>
+        r.policy_no.toLowerCase().includes(search) ||
+        (r.client_name || '').toLowerCase().includes(search) ||
+        r.doc_nos.some(d => d.toLowerCase().includes(search))
+      );
+    }
+    return rows;
+  }
+
+  function renderTable() {
+    const el = document.getElementById(config.resultsTableId);
+    const rows = filteredRows();
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No rows match.</div>`; return; }
+    const shown = rows.slice(0, 300);
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Policy No.</th><th>Client</th><th>Doc No(s)</th>
+            <th>Tracker Outstanding</th><th>${esc(config.amountColumnLabel)}</th><th>Variance</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            ${shown.map(row => `
+              <tr>
+                <td>${esc(row.policy_no)}</td>
+                <td>${esc(row.client_name || '—')}</td>
+                <td>${esc(row.doc_nos.join(', ') || '—')}</td>
+                <td>${row.tracker_outstanding_amount !== null ? `${money(row.tracker_outstanding_amount)} <span class="hint" style="margin:0;">(${row.tracker_outstanding_count})</span>` : '—'}</td>
+                <td>${row[config.amountField] !== null ? `${money(row[config.amountField])} <span class="hint" style="margin:0;">(${row[config.countField]})</span>` : '—'}</td>
+                <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
+                <td>${statusPill(row.status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${rows.length > 300 ? `<div class="hint">Showing first 300 of ${rows.length} matching rows.</div>` : ''}
       </div>
-      <div><button class="small" onclick="downloadPolicyReconCsv()">&#8595; Download CSV</button></div>
-    </div>
-    <div id="reconResultsTable"></div>
-  `;
-  renderTrackerVsClientSoaTable();
-}
-
-function filteredPolicyReconRows() {
-  if (!policyReconData) return [];
-  const search = (document.getElementById('reconSearch')?.value || '').trim().toLowerCase();
-  const statusFilter = document.getElementById('reconStatusFilter')?.value || '';
-
-  let rows = policyReconData.rows;
-  if (statusFilter) {
-    rows = rows.filter(row => row.status === statusFilter);
-  } else {
-    rows = rows.filter(row => row.status !== 'matched');
+    `;
   }
-  if (search) {
-    rows = rows.filter(row =>
-      row.policy_no.toLowerCase().includes(search) ||
-      (row.client_name || '').toLowerCase().includes(search) ||
-      row.doc_nos.some(d => d.toLowerCase().includes(search))
-    );
+
+  async function run() {
+    const el = document.getElementById(config.containerId);
+    const period = (document.getElementById(config.periodInputId).value || '').trim();
+    el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
+    try {
+      let url = config.endpoint;
+      if (period) url += `?statement_period=${encodeURIComponent(period)}`;
+      data = await api(url);
+    } catch (e) {
+      el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+      return;
+    }
+    // KPI grid + filter controls are built once per Run - only the table
+    // placeholder below is rebuilt per keystroke, so the search input never
+    // loses focus while typing.
+    el.innerHTML = `
+      <div class="kpi-grid">
+        ${config.kpis.map(k => `<div class="kpi"><span class="label">${esc(k.label)}</span><span class="value">${data[k.key]}</span></div>`).join('')}
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div><label>Search (policy no., client, doc no.)</label><input type="text" id="${config.searchInputId}" placeholder="Type to search&hellip;" oninput="${config.varName}.renderTable()" /></div>
+        <div><label>Status</label>
+          <select id="${config.statusSelectId}" onchange="${config.varName}.renderTable()">
+            <option value="">All except Matched</option>
+            ${Object.entries(config.statusMeta).filter(([k]) => k !== 'matched').map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}
+            <option value="matched">Matched</option>
+          </select>
+        </div>
+        <div><button class="small" onclick="${config.varName}.downloadCsv()">&#8595; Download CSV</button></div>
+      </div>
+      <div id="${config.resultsTableId}"></div>
+    `;
+    renderTable();
   }
-  return rows;
-}
 
-function renderTrackerVsClientSoaTable() {
-  const el = document.getElementById('reconResultsTable');
-  const rows = filteredPolicyReconRows();
-  if (!rows.length) { el.innerHTML = `<div class="empty-state">No rows match.</div>`; return; }
-
-  const shown = rows.slice(0, 300);
-  el.innerHTML = `
-    <div class="table-wrap">
-      <table>
-        <thead><tr>
-          <th>Policy No.</th><th>Client</th><th>Doc No(s)</th>
-          <th>Tracker Outstanding</th><th>Client SOA</th><th>Variance</th><th>Status</th>
-        </tr></thead>
-        <tbody>
-          ${shown.map(row => `
-            <tr>
-              <td>${esc(row.policy_no)}</td>
-              <td>${esc(row.client_name || '—')}</td>
-              <td>${esc(row.doc_nos.join(', ') || '—')}</td>
-              <td>${row.tracker_outstanding_amount !== null ? `${money(row.tracker_outstanding_amount)} <span class="hint" style="margin:0;">(${row.tracker_outstanding_count})</span>` : '—'}</td>
-              <td>${row.client_soa_amount !== null ? `${money(row.client_soa_amount)} <span class="hint" style="margin:0;">(${row.client_soa_count})</span>` : '—'}</td>
-              <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
-              <td>${reconStatusPill(row.status)}</td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-      ${rows.length > 300 ? `<div class="hint">Showing first 300 of ${rows.length} matching rows.</div>` : ''}
-    </div>
-  `;
-}
-
-function downloadPolicyReconCsv() {
-  const rows = filteredPolicyReconRows();
-  if (!rows.length) { toast('Nothing to export for the current search/filter', true); return; }
-  const headers = ['Policy No', 'Client', 'Doc Nos', 'Tracker Outstanding Amount', 'Tracker Outstanding Count', 'Client SOA Amount', 'Client SOA Count', 'Variance', 'Status'];
-  const lines = [headers.join(',')];
-  for (const row of rows) {
-    const cells = [
-      row.policy_no, row.client_name || '', row.doc_nos.join('; '),
-      row.tracker_outstanding_amount ?? '', row.tracker_outstanding_count,
-      row.client_soa_amount ?? '', row.client_soa_count,
-      row.variance ?? '', RECON_STATUS_META[row.status]?.label || row.status,
+  function downloadCsv() {
+    const rows = filteredRows();
+    if (!rows.length) { toast('Nothing to export for the current search/filter', true); return; }
+    const headers = [
+      'Policy No', 'Client', 'Doc Nos', 'Tracker Outstanding Amount', 'Tracker Outstanding Count',
+      `${config.amountColumnLabel} Amount`, `${config.amountColumnLabel} Count`, 'Variance', 'Status',
     ];
-    lines.push(cells.map(csvCell).join(','));
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      const cells = [
+        row.policy_no, row.client_name || '', row.doc_nos.join('; '),
+        row.tracker_outstanding_amount ?? '', row.tracker_outstanding_count,
+        row[config.amountField] ?? '', row[config.countField],
+        row.variance ?? '', config.statusMeta[row.status]?.label || row.status,
+      ];
+      lines.push(cells.map(csvCell).join(','));
+    }
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${config.csvPrefix}_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
-  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `tracker_vs_client_soa_${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+
+  return { run, renderTable, downloadCsv };
 }
+
+const clientSoaRecon = createPolicyReconciliation({
+  varName: 'clientSoaRecon',
+  endpoint: '/finance/reconciliation/tracker-vs-client-soa',
+  periodInputId: 'reconPeriod',
+  containerId: 'reconTrackerVsClientSoa',
+  resultsTableId: 'reconClientSoaResultsTable',
+  searchInputId: 'reconClientSoaSearch',
+  statusSelectId: 'reconClientSoaStatusFilter',
+  amountField: 'client_soa_amount',
+  countField: 'client_soa_count',
+  amountColumnLabel: 'Client SOA',
+  csvPrefix: 'tracker_vs_client_soa',
+  kpis: [
+    { key: 'matched_count', label: 'Matched' },
+    { key: 'mismatched_count', label: 'Amount Mismatch' },
+    { key: 'missing_in_client_soa_count', label: 'Missing in Client SOA' },
+    { key: 'settled_in_tracker_but_open_in_client_soa_count', label: 'Settled in Tracker, Open in SOA' },
+    { key: 'missing_in_tracker_count', label: 'Missing in Tracker' },
+  ],
+  statusMeta: {
+    matched: { label: 'Matched', pill: 'pill-good' },
+    amount_mismatch: { label: 'Amount Mismatch', pill: 'pill-bad' },
+    missing_in_client_soa: { label: 'Missing in Client SOA', pill: 'pill-warn' },
+    settled_in_tracker_but_open_in_client_soa: { label: 'Settled in Tracker, Open in SOA', pill: 'pill-bad' },
+    missing_in_tracker: { label: 'Missing in Tracker', pill: 'pill-bad' },
+  },
+});
+
+const feeStatementRecon = createPolicyReconciliation({
+  varName: 'feeStatementRecon',
+  endpoint: '/finance/reconciliation/tracker-vs-fee-statement',
+  periodInputId: 'feeReconPeriod',
+  containerId: 'reconTrackerVsFeeStatement',
+  resultsTableId: 'reconFeeStatementResultsTable',
+  searchInputId: 'reconFeeStatementSearch',
+  statusSelectId: 'reconFeeStatementStatusFilter',
+  amountField: 'fee_statement_amount',
+  countField: 'fee_statement_count',
+  amountColumnLabel: 'Fee Statement',
+  csvPrefix: 'tracker_vs_fee_statement',
+  kpis: [
+    { key: 'matched_count', label: 'Matched' },
+    { key: 'mismatched_count', label: 'Amount Mismatch' },
+    { key: 'missing_in_fee_statement_count', label: 'Missing in Fee Statement' },
+    { key: 'received_in_tracker_but_open_in_fee_statement_count', label: 'Received in Tracker, Open in Statement' },
+    { key: 'missing_in_tracker_count', label: 'Missing in Tracker' },
+  ],
+  statusMeta: {
+    matched: { label: 'Matched', pill: 'pill-good' },
+    amount_mismatch: { label: 'Amount Mismatch', pill: 'pill-bad' },
+    missing_in_fee_statement: { label: 'Missing in Fee Statement', pill: 'pill-warn' },
+    received_in_tracker_but_open_in_fee_statement: { label: 'Received in Tracker, Open in Statement', pill: 'pill-bad' },
+    missing_in_tracker: { label: 'Missing in Tracker', pill: 'pill-bad' },
+  },
+});
 
 async function runQicPeriods() {
   const el = document.getElementById('reconQicPeriods');

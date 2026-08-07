@@ -592,7 +592,27 @@ Holder/Number/Currency/period) sits above the real transaction table on a
 real export, so the parser scans for the `Date/Value Date/Reference
 Number/Description` header row rather than assuming row 1.
 
-**Three reconciliation reports** (`app/finance/reconciliation.py`, pure
+**HealthCross Fee Statement** (`HealthCrossFeeStatementLine`,
+`app/ingestion/health_cross_fee_statement.py`,
+`POST /finance/health-cross-fee-statement/upload`) - QIC's "Statement of
+Outstanding" addressed to HealthCross itself (one export per branch -
+Customer Code 216331 = Dubai, 293276 = Abu Dhabi), what QIC owes HC for
+policy-linked fees/commission. Like the bank statement, a details block
+sits above the real table, so the parser scans for the header row. There's
+no single amount column - `credit_amount` minus `debit_amount` is the real
+net-owed-to-HC figure per line, summed **regardless of QIC's own
+Transaction Type label** ("Others"/"TPA Fee"/"Other Fee" all turned out to
+represent real fee amounts when validated against the file's own printed
+"Net Due to You" total). A row's `division` is a per-*policy* attribute
+(which office administers that policy) and is *not* reliable for telling
+which of the two branch statements a row came from - the Abu Dhabi
+statement's own rows can themselves read Division "Dubai Branch". Each
+upload is scoped for replacement by `statement_period` **and** the
+statement's own Customer Code (`statement_customer_code`, read from the
+file's own header block), so uploading Dubai then Abu Dhabi under the same
+period label never wipes the other branch's rows.
+
+**Four reconciliation reports** (`app/finance/reconciliation.py`, pure
 functions over plain dicts, unit-testable without a database):
 - `GET /finance/reconciliation/tracker-vs-client-soa?statement_period=` -
   compares the Payment Tracker against QIC's Client Statement of Account,
@@ -609,6 +629,14 @@ functions over plain dicts, unit-testable without a database):
   Settled, but QIC's SOA still shows it open - a status HC likely got
   wrong, not a policy HC never logged) / `missing_in_tracker` (on the SOA,
   never logged in the tracker at all under any status).
+- `GET /finance/reconciliation/tracker-vs-fee-statement?statement_period=`
+  - the same idea for HC's own fee/commission side: tracker filtered to
+  what's still outstanding on the HC-fee side (`HC Payment Status`, column
+  AI, isn't "Received" or "Done") summed on `Total Value`, compared
+  against the fee statement's net Credit-minus-Debit per policy. Same five
+  outcomes, relabeled for this side: `matched` / `amount_mismatch` /
+  `missing_in_fee_statement` / `received_in_tracker_but_open_in_fee_statement`
+  / `missing_in_tracker`.
 - `GET /finance/reconciliation/qic-periods?period_a=&period_b=` - two QIC
   SOA exports (e.g. a month's export vs. a later "recon" re-export) should
   describe the same documents; reports only what `changed` / is
