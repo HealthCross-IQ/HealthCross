@@ -16,7 +16,6 @@ from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
 from app.models import schemas
-from app.reference.benefit_category_mapping import CATEGORY_TO_STANDARD_FIELD, map_label_to_category
 from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_case_by_tier, price_tier_ladder
 from app.scoring.rules.portfolio_analysis import (
     price_case_against_burning_cost,
@@ -154,121 +153,6 @@ def variant_options(
             )
         )
     return by_variant
-
-
-# The rate card's own variant names ("Annual Limit", "Deductible", "OP
-# Copay") are terser than the full insurer TOB row wording
-# map_label_to_category was built to parse (see
-# app/reference/benefit_category_mapping.py's docstring - it matches on
-# section+label phrases like "Outpatient Co-insurance/Deductible"), so it
-# doesn't recognize these three even though they're the most common
-# variant names in practice. Hand-mapped here to the same standard_summary
-# field names CATEGORY_TO_STANDARD_FIELD uses, so both paths format
-# identically - only used when the canonical mapper found no category at
-# all, never to override a category it did recognize.
-_VARIANT_NAME_FIELD_FALLBACK = {
-    "annual limit": "annual_limit",
-    "deductible": "deductible",
-    "op copay": "coinsurance",
-}
-
-# Canonical categories the detailed insurer comparison recognizes but the
-# fixed 12-field standard_summary has no slot for (e.g. "Dental
-# Co-insurance" is distinct from "Dental Annual Limit" there) - only listed
-# here when BenefitPlan still keeps a matching structured column of its
-# own to fall back to instead.
-_CATEGORY_STRUCTURED_FIELD_FALLBACK = {
-    "Room Type / Accommodation": "room_type",
-}
-
-_STRUCTURED_FIELD_COLUMN = {
-    "annual_limit": "annual_limit",
-    "deductible": "deductible",
-    "maternity_limit": "maternity_limit",
-    "coinsurance": "co_insurance_pct",
-    "dental": "dental_covered",
-    "optical": "optical_covered",
-    "room_type": "room_type",
-}
-_STRUCTURED_FIELD_FORMAT = {
-    "annual_limit": lambda v: f"AED {v:,.0f}",
-    "deductible": lambda v: f"AED {v:,.0f}",
-    "maternity_limit": lambda v: f"AED {v:,.0f}",
-    "coinsurance": lambda v: f"{v:g}%",
-    "dental": lambda v: "Covered",
-    "optical": lambda v: "Covered",
-    "room_type": lambda v: str(v),
-}
-
-
-def _existing_value_for_field(plan: models.BenefitPlan, field: str) -> Optional[str]:
-    summary = plan.standard_summary or {}
-    value = summary.get(field)
-    if value and not value.lower().startswith("not specified"):
-        return value
-    column = _STRUCTURED_FIELD_COLUMN.get(field)
-    if not column:
-        return None
-    raw = getattr(plan, column, None)
-    # dental_covered/optical_covered default to false when never parsed, so
-    # a bare false is "unknown", not a genuine "not covered" - only surface
-    # a structured column value when it's a real, explicitly-set one.
-    if raw is None or raw is False:
-        return None
-    formatter = _STRUCTURED_FIELD_FORMAT.get(field)
-    return formatter(raw) if formatter else str(raw)
-
-
-def _existing_value_for_variant(plan: Optional[models.BenefitPlan], variant_name: str) -> Optional[str]:
-    """Resolves what the case's EXISTING-role BenefitPlan (Benefits tab)
-    already has on file for a New Business variant name, so the New
-    Business Quote tab can show it as a hint next to the option a broker
-    is picking (see the frontend's nbCategoryCardHtml). Reuses the same
-    canonical benefit-category mapper the detailed insurer comparison uses
-    rather than keeping a second, drifting synonym list - see
-    _VARIANT_NAME_FIELD_FALLBACK above for the one exception.
-    """
-    if not plan:
-        return None
-    category = map_label_to_category(None, variant_name)
-    if category:
-        field = CATEGORY_TO_STANDARD_FIELD.get(category)
-        if field:
-            return _existing_value_for_field(plan, field)
-        structured_field = _CATEGORY_STRUCTURED_FIELD_FALLBACK.get(category)
-        return _existing_value_for_field(plan, structured_field) if structured_field else None
-    field = _VARIANT_NAME_FIELD_FALLBACK.get(variant_name.strip().lower())
-    return _existing_value_for_field(plan, field) if field else None
-
-
-@router.get("/cases/{case_id}/new-business/existing-variant-values", response_model=Dict[str, str])
-def existing_variant_values(
-    case_id: int,
-    category: str = Query(...),
-    variant_names: List[str] = Query(...),
-    db: Session = Depends(get_db),
-):
-    """What the case's own EXISTING-role Benefits-tab plan for this
-    category already has on file for each of the given New Business
-    variant names - lets the New Business Quote tab show the incumbent's
-    own value next to the option a broker is picking, without requiring a
-    trip to the Benefits tab. Only keys with a resolvable value are
-    returned; the frontend treats a missing key as "nothing to show".
-    """
-    case = db.get(models.Case, case_id)
-    if not case:
-        raise HTTPException(status_code=404, detail="Case not found")
-    normalized = _normalize_category(category)
-    plan = next(
-        (p for p in case.benefit_plans if p.role == "existing" and _normalize_category(p.category) == normalized),
-        None,
-    )
-    result = {}
-    for name in variant_names:
-        value = _existing_value_for_variant(plan, name)
-        if value:
-            result[name] = value
-    return result
 
 
 def _normalize_category(value: Optional[str]) -> Optional[str]:

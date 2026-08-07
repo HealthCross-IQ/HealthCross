@@ -2714,7 +2714,6 @@ async function loadNewBusinessRating() {
       variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
       previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
       variantOptions: null,
-      existingBenefitPlan: benefitPlan || null,
     };
   });
 
@@ -2781,10 +2780,9 @@ function nbCategoryCardHtml(cat, idx) {
   const variantSelects = cat.variantOptions ? Object.keys(cat.variantOptions).sort().map(variantName => {
     const options = cat.variantOptions[variantName];
     const selected = cat.variant_selections[variantName] || '';
-    const existingValue = (cat.existingVariantValues || {})[variantName];
     return `
       <div>
-        <label>${escapeHtml(variantName)}${existingValue ? ` <span style="color:var(--ink-muted); font-weight:400;">(existing: ${escapeHtml(existingValue)})</span>` : ''}</label>
+        <label>${escapeHtml(variantName)}</label>
         <select onchange="nbSetVariantSelection(${idx}, '${escapeHtml(variantName).replace(/'/g, "\\'")}', this.value)">
           <option value="">Base (included)</option>
           ${options.map(o => `<option value="${escapeHtml(o.option_value)}" ${selected === o.option_value ? 'selected' : ''}>${escapeHtml(o.option_value)}${o.direction !== 'Base' ? ` (${o.direction} ${o.impact_type === 'Percent' ? (o.direction === 'Upgrade' ? '+' : '-') + o.impact_value + '%' : 'AED ' + o.impact_value})` : ''}</option>`).join('')}
@@ -2879,14 +2877,6 @@ async function nbFetchVariantOptions(idx) {
     cat.variantOptions = await api(`/new-business/variant-options?region=${encodeURIComponent(cat.previewRegion)}&tpa=${encodeURIComponent(cat.tpa)}&network=${encodeURIComponent(cat.network)}`);
   } catch (err) {
     cat.variantOptions = {};
-  }
-  cat.existingVariantValues = {};
-  const variantNames = Object.keys(cat.variantOptions);
-  if (variantNames.length && cat.existingBenefitPlan) {
-    try {
-      const params = variantNames.map(n => `variant_names=${encodeURIComponent(n)}`).join('&');
-      cat.existingVariantValues = await api(`/cases/${currentCase.id}/new-business/existing-variant-values?category=${encodeURIComponent(cat.category)}&${params}`);
-    } catch (err) { /* no existing plan for this category, or nothing resolvable */ }
   }
 }
 
