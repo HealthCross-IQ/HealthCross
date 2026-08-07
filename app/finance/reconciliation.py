@@ -3,8 +3,9 @@ each a pure function over plain dicts (never touching the DB directly) so
 they can be unit tested without a database - see app/api/routes_finance.py
 for how ORM rows are converted to dicts before being passed in here.
 
-1. reconcile_tracker_vs_qic_soa - does every Payment Tracker doc exist (and
-   match in amount) on QIC's own Statement of Account, and vice versa.
+1. reconcile_tracker_vs_client_soa_by_policy - does every Payment Tracker
+   policy that's still outstanding on the client side exist (and match in
+   amount) on QIC's Client Statement of Account, and vice versa.
 2. compare_qic_soa_periods - two QIC SOA exports (e.g. this month's vs. a
    later "recon" re-export) should describe the same underlying documents;
    flags what changed between them per doc.
@@ -15,84 +16,122 @@ for how ORM rows are converted to dicts before being passed in here.
    on the same date" (summed) against the nearest bank credit within a
    date window, not one row at a time.
 """
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from typing import Dict, List, Optional
 
 AMOUNT_TOLERANCE = 0.05
 
+# Most-actionable first: something's genuinely wrong (mismatch, missing) before
+# a clean match, which the UI usually filters out entirely.
+_STATUS_PRIORITY = {
+    "amount_mismatch": 0,
+    "missing_in_client_soa": 1,
+    "settled_in_tracker_but_open_in_client_soa": 2,
+    "missing_in_tracker": 3,
+    "matched": 4,
+}
 
-def reconcile_tracker_vs_qic_soa(
+
+def reconcile_tracker_vs_client_soa_by_policy(
     tracker_entries: List[dict],
-    qic_soa_lines: List[dict],
+    client_soa_lines: List[dict],
     statement_period: Optional[str] = None,
     amount_tolerance: float = AMOUNT_TOLERANCE,
 ) -> dict:
-    qic_by_doc: Dict[str, dict] = {}
-    for line in qic_soa_lines:
-        doc_no = line.get("doc_no")
-        if doc_no:
-            qic_by_doc[doc_no] = line
+    """Compares HC's Payment Tracker against QIC's Client Statement of
+    Account, grouped by Policy No (column G on both sheets) rather than by
+    individual Doc No - a policy is often billed in several installments
+    sharing one Doc No, and the two systems should agree on the total
+    outstanding per policy even when the per-installment split drifts.
 
-    matched_tracker_docs = set()
-    rows = []
+    QIC's Client SOA is an outstanding-only snapshot - it only lists
+    documents QIC hasn't closed out yet - so the tracker side is filtered
+    the same way first (Client Payment Status != "Settled", column W)
+    before summing; otherwise an already-settled tracker row (correctly
+    absent from the SOA) would misreport as "missing in client SOA".
+
+    A policy on the SOA with no *outstanding* tracker row splits into two
+    distinct outcomes rather than one generic "missing": if the policy
+    exists in the tracker at all (just marked Settled), that's a status
+    HC got wrong, not a policy HC never logged - "missing_in_tracker" is
+    reserved for the latter, genuinely-never-logged case.
+    """
+    all_tracker_policies = set()
+    outstanding_by_policy: Dict[str, dict] = {}
     for entry in tracker_entries:
-        doc_no = entry.get("doc_no")
-        if not doc_no:
+        policy_no = entry.get("policy_no")
+        if not policy_no:
             continue
-        qic_line = qic_by_doc.get(doc_no)
-        tracker_amount = entry.get("invoice_amount")
-        if qic_line is None:
-            status = "missing_in_qic"
-            qic_amount = None
-            variance = None
-        else:
-            matched_tracker_docs.add(doc_no)
-            qic_amount = qic_line.get("gross_amount")
-            variance = (
-                round((tracker_amount or 0) - (qic_amount or 0), 2)
-                if tracker_amount is not None and qic_amount is not None
-                else None
-            )
-            status = "matched" if variance is not None and abs(variance) <= amount_tolerance else "amount_mismatch"
-
-        rows.append(
-            {
-                "doc_no": doc_no,
-                "client_name": entry.get("main_policy_holder"),
-                "tracker_entry_id": entry.get("id"),
-                "tracker_total_value": tracker_amount,
-                "qic_soa_line_id": qic_line.get("id") if qic_line else None,
-                "qic_gross_amount": qic_amount,
-                "variance": variance,
-                "status": status,
-            }
-        )
-
-    for doc_no, qic_line in qic_by_doc.items():
-        if doc_no in matched_tracker_docs:
+        all_tracker_policies.add(policy_no)
+        status = (entry.get("client_payment_status") or "").strip().lower()
+        if status == "settled":
             continue
-        rows.append(
-            {
-                "doc_no": doc_no,
-                "client_name": qic_line.get("insured_name"),
-                "tracker_entry_id": None,
-                "tracker_total_value": None,
-                "qic_soa_line_id": qic_line.get("id"),
-                "qic_gross_amount": qic_line.get("gross_amount"),
-                "variance": None,
-                "status": "missing_in_tracker",
-            }
+        bucket = outstanding_by_policy.setdefault(
+            policy_no, {"amount": 0.0, "count": 0, "doc_nos": set(), "client_name": None}
         )
+        bucket["amount"] += entry.get("invoice_amount") or 0.0
+        bucket["count"] += 1
+        if entry.get("doc_no"):
+            bucket["doc_nos"].add(entry["doc_no"])
+        if entry.get("main_policy_holder"):
+            bucket["client_name"] = entry["main_policy_holder"]
+
+    soa_by_policy: Dict[str, dict] = {}
+    for line in client_soa_lines:
+        policy_no = line.get("policy_no")
+        if not policy_no:
+            continue
+        bucket = soa_by_policy.setdefault(policy_no, {"amount": 0.0, "count": 0, "doc_nos": set(), "client_name": None})
+        bucket["amount"] += line.get("gross_amount") or 0.0
+        bucket["count"] += 1
+        if line.get("doc_no"):
+            bucket["doc_nos"].add(line["doc_no"])
+        if line.get("insured_name"):
+            bucket["client_name"] = line["insured_name"]
+
+    def _row(policy_no, status, tracker=None, soa=None, variance=None):
+        doc_nos = sorted((tracker or {}).get("doc_nos", set()) | (soa or {}).get("doc_nos", set()))
+        return {
+            "policy_no": policy_no,
+            "client_name": (tracker or {}).get("client_name") or (soa or {}).get("client_name"),
+            "doc_nos": doc_nos,
+            "tracker_outstanding_amount": tracker["amount"] if tracker else None,
+            "tracker_outstanding_count": tracker["count"] if tracker else 0,
+            "client_soa_amount": soa["amount"] if soa else None,
+            "client_soa_count": soa["count"] if soa else 0,
+            "variance": variance,
+            "status": status,
+        }
+
+    rows = []
+    for policy_no, tracker in outstanding_by_policy.items():
+        soa = soa_by_policy.get(policy_no)
+        if soa is None:
+            rows.append(_row(policy_no, "missing_in_client_soa", tracker=tracker))
+            continue
+        variance = round(tracker["amount"] - soa["amount"], 2)
+        status = "matched" if abs(variance) <= amount_tolerance else "amount_mismatch"
+        rows.append(_row(policy_no, status, tracker=tracker, soa=soa, variance=variance))
+
+    for policy_no, soa in soa_by_policy.items():
+        if policy_no in outstanding_by_policy:
+            continue
+        status = "settled_in_tracker_but_open_in_client_soa" if policy_no in all_tracker_policies else "missing_in_tracker"
+        rows.append(_row(policy_no, status, soa=soa))
+
+    rows.sort(key=lambda r: (_STATUS_PRIORITY[r["status"]], r["policy_no"]))
+    counts = Counter(r["status"] for r in rows)
 
     return {
         "statement_period": statement_period,
-        "total_tracker_rows": len({r["doc_no"] for r in rows if r["tracker_entry_id"] is not None}),
-        "total_qic_rows": len(qic_by_doc),
-        "matched_count": sum(1 for r in rows if r["status"] == "matched"),
-        "mismatched_count": sum(1 for r in rows if r["status"] == "amount_mismatch"),
-        "missing_in_qic_count": sum(1 for r in rows if r["status"] == "missing_in_qic"),
-        "missing_in_tracker_count": sum(1 for r in rows if r["status"] == "missing_in_tracker"),
+        "total_policies_outstanding_in_tracker": len(outstanding_by_policy),
+        "total_policies_in_client_soa": len(soa_by_policy),
+        "matched_count": counts["matched"],
+        "mismatched_count": counts["amount_mismatch"],
+        "missing_in_client_soa_count": counts["missing_in_client_soa"],
+        "settled_in_tracker_but_open_in_client_soa_count": counts["settled_in_tracker_but_open_in_client_soa"],
+        "missing_in_tracker_count": counts["missing_in_tracker"],
         "rows": rows,
     }
 

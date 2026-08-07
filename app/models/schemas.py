@@ -570,26 +570,30 @@ class ExpenseEntryOut(BaseModel):
     created_at: datetime
 
 
-class DocReconciliationRow(BaseModel):
-    doc_no: str
+class PolicyReconciliationRow(BaseModel):
+    policy_no: str
     client_name: Optional[str] = None
-    tracker_entry_id: Optional[int] = None
-    tracker_total_value: Optional[float] = None
-    qic_soa_line_id: Optional[int] = None
-    qic_gross_amount: Optional[float] = None
+    doc_nos: List[str] = []
+    tracker_outstanding_amount: Optional[float] = None
+    tracker_outstanding_count: int = 0
+    client_soa_amount: Optional[float] = None
+    client_soa_count: int = 0
     variance: Optional[float] = None
-    status: str  # "matched" / "amount_mismatch" / "missing_in_qic" / "missing_in_tracker"
+    # "matched" / "amount_mismatch" / "missing_in_client_soa" /
+    # "settled_in_tracker_but_open_in_client_soa" / "missing_in_tracker"
+    status: str
 
 
-class TrackerQicReconciliationOut(BaseModel):
+class TrackerClientSoaReconciliationOut(BaseModel):
     statement_period: Optional[str] = None
-    total_tracker_rows: int
-    total_qic_rows: int
+    total_policies_outstanding_in_tracker: int
+    total_policies_in_client_soa: int
     matched_count: int
     mismatched_count: int
-    missing_in_qic_count: int
+    missing_in_client_soa_count: int
+    settled_in_tracker_but_open_in_client_soa_count: int
     missing_in_tracker_count: int
-    rows: List[DocReconciliationRow]
+    rows: List[PolicyReconciliationRow]
 
 
 class SoaPeriodComparisonRow(BaseModel):

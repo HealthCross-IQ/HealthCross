@@ -3,34 +3,50 @@ from datetime import date
 from app.finance.reconciliation import (
     compare_qic_soa_periods,
     reconcile_tracker_received_vs_bank,
-    reconcile_tracker_vs_qic_soa,
+    reconcile_tracker_vs_client_soa_by_policy,
 )
 
 
-def test_reconcile_tracker_vs_qic_soa_covers_all_four_outcomes():
+def test_reconcile_tracker_vs_client_soa_by_policy_covers_all_five_outcomes():
     tracker_entries = [
-        {"id": 1, "doc_no": "128-1", "invoice_amount": 1000.0, "main_policy_holder": "A"},
-        {"id": 2, "doc_no": "128-2", "invoice_amount": 2000.0, "main_policy_holder": "B"},
-        {"id": 3, "doc_no": "128-3", "invoice_amount": 3000.0, "main_policy_holder": "C"},
+        # P-1: outstanding, sums to 1000 across two installments - matches SOA.
+        {"id": 1, "doc_no": "128-1", "policy_no": "P-1", "invoice_amount": 600.0, "main_policy_holder": "A", "client_payment_status": "Outstanding"},
+        {"id": 2, "doc_no": "128-1", "policy_no": "P-1", "invoice_amount": 400.0, "main_policy_holder": "A", "client_payment_status": "Outstanding"},
+        # P-2: outstanding at 2000, SOA shows 2500 - amount_mismatch.
+        {"id": 3, "doc_no": "128-2", "policy_no": "P-2", "invoice_amount": 2000.0, "main_policy_holder": "B", "client_payment_status": None},
+        # P-3: outstanding, no SOA line at all - missing_in_client_soa.
+        {"id": 4, "doc_no": "128-3", "policy_no": "P-3", "invoice_amount": 3000.0, "main_policy_holder": "C", "client_payment_status": "Outstanding"},
+        # P-4: fully Settled in tracker, but SOA still shows it open -
+        # settled_in_tracker_but_open_in_client_soa (not "missing", since HC
+        # does have the policy - it's just marked with the wrong status).
+        {"id": 5, "doc_no": "128-4", "policy_no": "P-4", "invoice_amount": 800.0, "main_policy_holder": "D", "client_payment_status": "Settled"},
     ]
-    qic_lines = [
-        {"id": 10, "doc_no": "128-1", "gross_amount": 1000.0, "insured_name": "A"},  # matched
-        {"id": 11, "doc_no": "128-2", "gross_amount": 2500.0, "insured_name": "B"},  # amount_mismatch
-        # 128-3 missing_in_qic
-        {"id": 12, "doc_no": "128-9", "gross_amount": 500.0, "insured_name": "D"},  # missing_in_tracker
+    soa_lines = [
+        {"policy_no": "P-1", "doc_no": "128-1", "gross_amount": 1000.0, "insured_name": "A"},
+        {"policy_no": "P-2", "doc_no": "128-2", "gross_amount": 2500.0, "insured_name": "B"},
+        {"policy_no": "P-4", "doc_no": "128-4", "gross_amount": 800.0, "insured_name": "D"},
+        # P-5 never appears in the tracker at all - missing_in_tracker.
+        {"policy_no": "P-5", "doc_no": "128-5", "gross_amount": 500.0, "insured_name": "E"},
     ]
 
-    result = reconcile_tracker_vs_qic_soa(tracker_entries, qic_lines, statement_period="2026-06")
+    result = reconcile_tracker_vs_client_soa_by_policy(tracker_entries, soa_lines, statement_period="2026-06")
 
-    statuses = {row["doc_no"]: row["status"] for row in result["rows"]}
-    assert statuses["128-1"] == "matched"
-    assert statuses["128-2"] == "amount_mismatch"
-    assert statuses["128-3"] == "missing_in_qic"
-    assert statuses["128-9"] == "missing_in_tracker"
+    statuses = {row["policy_no"]: row["status"] for row in result["rows"]}
+    assert statuses["P-1"] == "matched"
+    assert statuses["P-2"] == "amount_mismatch"
+    assert statuses["P-3"] == "missing_in_client_soa"
+    assert statuses["P-4"] == "settled_in_tracker_but_open_in_client_soa"
+    assert statuses["P-5"] == "missing_in_tracker"
     assert result["matched_count"] == 1
     assert result["mismatched_count"] == 1
-    assert result["missing_in_qic_count"] == 1
+    assert result["missing_in_client_soa_count"] == 1
+    assert result["settled_in_tracker_but_open_in_client_soa_count"] == 1
     assert result["missing_in_tracker_count"] == 1
+
+    # P-1's two installments were summed into one policy-level row.
+    p1_row = next(r for r in result["rows"] if r["policy_no"] == "P-1")
+    assert p1_row["tracker_outstanding_amount"] == 1000.0
+    assert p1_row["tracker_outstanding_count"] == 2
 
 
 def test_compare_qic_soa_periods_only_reports_differences():

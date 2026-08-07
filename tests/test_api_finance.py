@@ -73,7 +73,9 @@ def test_qic_soa_upload_replaces_same_period_and_reconciles_against_tracker(clie
     )
     _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
 
-    soa_df = pd.DataFrame([{"Doc No": "128 - 1", "Gross Amount": 1000.0, "AMOUNT": 1000.0, "Dr/Cr": "D", "Insured Name": "Acme"}])
+    soa_df = pd.DataFrame(
+        [{"Doc No": "128 - 1", "Policy No": "P1", "Gross Amount": 1000.0, "AMOUNT": 1000.0, "Dr/Cr": "D", "Insured Name": "Acme"}]
+    )
     resp = _upload(client, "/finance/qic-soa/upload?statement_period=2026-06", "soa.xlsx", soa_df)
     assert resp.status_code == 200
     assert len(resp.json()) == 1
@@ -84,11 +86,11 @@ def test_qic_soa_upload_replaces_same_period_and_reconciles_against_tracker(clie
     resp = client.get("/finance/qic-soa", params={"statement_period": "2026-06"})
     assert len(resp.json()) == 1
 
-    resp = client.get("/finance/reconciliation/tracker-vs-qic", params={"statement_period": "2026-06"})
+    resp = client.get("/finance/reconciliation/tracker-vs-client-soa", params={"statement_period": "2026-06"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["matched_count"] == 1
-    assert body["missing_in_qic_count"] == 0
+    assert body["missing_in_client_soa_count"] == 0
 
 
 def test_employees_recurring_expenses_and_generate(client):

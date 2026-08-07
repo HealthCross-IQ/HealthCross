@@ -12,7 +12,7 @@ from app.finance.fee_engine import FeeRate, compute_hc_fee
 from app.finance.reconciliation import (
     compare_qic_soa_periods,
     reconcile_tracker_received_vs_bank,
-    reconcile_tracker_vs_qic_soa,
+    reconcile_tracker_vs_client_soa_by_policy,
 )
 from app.ingestion.bank_statement import parse_bank_statement
 from app.ingestion.payment_tracker import parse_payment_tracker
@@ -267,14 +267,14 @@ def upload_bank_statement(
 # ---------------------------------------------------------------------------
 
 
-@router.get("/reconciliation/tracker-vs-qic", response_model=schemas.TrackerQicReconciliationOut)
-def get_tracker_vs_qic_reconciliation(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
+@router.get("/reconciliation/tracker-vs-client-soa", response_model=schemas.TrackerClientSoaReconciliationOut)
+def get_tracker_vs_client_soa_reconciliation(statement_period: Optional[str] = None, db: Session = Depends(get_db)):
     tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
-    qic_query = db.query(models.QicSoaLine)
+    soa_query = db.query(models.QicSoaLine)
     if statement_period:
-        qic_query = qic_query.filter_by(statement_period=statement_period)
-    qic_lines = [_to_dict(e) for e in qic_query.all()]
-    return reconcile_tracker_vs_qic_soa(tracker_entries, qic_lines, statement_period=statement_period)
+        soa_query = soa_query.filter_by(statement_period=statement_period)
+    soa_lines = [_to_dict(e) for e in soa_query.all()]
+    return reconcile_tracker_vs_client_soa_by_policy(tracker_entries, soa_lines, statement_period=statement_period)
 
 
 @router.get("/reconciliation/qic-periods", response_model=schemas.SoaPeriodComparisonOut)

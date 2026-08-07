@@ -594,10 +594,21 @@ Number/Description` header row rather than assuming row 1.
 
 **Three reconciliation reports** (`app/finance/reconciliation.py`, pure
 functions over plain dicts, unit-testable without a database):
-- `GET /finance/reconciliation/tracker-vs-qic?statement_period=` - does
-  every tracker doc exist (and match in amount) on QIC's SOA, and vice
-  versa - `matched` / `amount_mismatch` / `missing_in_qic` /
-  `missing_in_tracker`.
+- `GET /finance/reconciliation/tracker-vs-client-soa?statement_period=` -
+  compares the Payment Tracker against QIC's Client Statement of Account,
+  grouped by **Policy No.** (column G on both sheets) rather than Doc No.,
+  since one policy is often billed across several installments sharing a
+  Doc No. The tracker side is filtered to what's still outstanding first
+  (`Client Payment Status` != "Settled", column W) before summing, since
+  QIC's Client SOA only ever lists what it hasn't closed out - comparing
+  against the full, unfiltered tracker would misreport already-settled
+  policies as missing. Five outcomes per policy: `matched` /
+  `amount_mismatch` / `missing_in_client_soa` (tracker shows it
+  outstanding, SOA has no record of it) /
+  `settled_in_tracker_but_open_in_client_soa` (HC's tracker marks it
+  Settled, but QIC's SOA still shows it open - a status HC likely got
+  wrong, not a policy HC never logged) / `missing_in_tracker` (on the SOA,
+  never logged in the tracker at all under any status).
 - `GET /finance/reconciliation/qic-periods?period_a=&period_b=` - two QIC
   SOA exports (e.g. a month's export vs. a later "recon" re-export) should
   describe the same documents; reports only what `changed` / is
