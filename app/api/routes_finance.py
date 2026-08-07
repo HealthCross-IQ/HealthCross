@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.finance.cash_flow import forecast_expenses, monthly_cash_flow
 from app.finance.common import normalize_doc_no
+from app.finance.end_of_service import compute_end_of_service_gratuity
 from app.finance.fee_engine import FeeRate, compute_hc_fee
 from app.finance.reconciliation import (
     compare_qic_soa_periods,
@@ -303,13 +304,25 @@ def _get_employee_or_404(db: Session, employee_id: int) -> models.Employee:
     return _get_or_404(db, models.Employee, employee_id, "Employee")
 
 
+def _with_end_of_service(employee: models.Employee) -> models.Employee:
+    # Attached as plain (non-column) attributes - EmployeeOut picks them up
+    # via from_attributes. Computed as-of end_date if the employee has left,
+    # otherwise as-of today (an ongoing accrual estimate).
+    gratuity = compute_end_of_service_gratuity(
+        employee.start_date, employee.monthly_salary, employee.end_date or date.today()
+    )
+    employee.years_of_service = gratuity["years_of_service"] if employee.start_date else None
+    employee.end_of_service_gratuity = gratuity["gratuity_amount"] if employee.start_date else None
+    return employee
+
+
 @router.post("/employees", response_model=schemas.EmployeeOut)
 def create_employee(payload: schemas.EmployeeCreate, db: Session = Depends(get_db)):
     employee = models.Employee(**payload.model_dump())
     db.add(employee)
     db.commit()
     db.refresh(employee)
-    return employee
+    return _with_end_of_service(employee)
 
 
 @router.get("/employees", response_model=List[schemas.EmployeeOut])
@@ -317,7 +330,7 @@ def list_employees(active_only: bool = False, db: Session = Depends(get_db)):
     q = db.query(models.Employee)
     if active_only:
         q = q.filter_by(is_active=True)
-    return q.order_by(models.Employee.full_name).all()
+    return [_with_end_of_service(e) for e in q.order_by(models.Employee.full_name).all()]
 
 
 @router.patch("/employees/{employee_id}", response_model=schemas.EmployeeOut)
@@ -327,7 +340,7 @@ def update_employee(employee_id: int, payload: schemas.EmployeeUpdate, db: Sessi
         setattr(employee, field, value)
     db.commit()
     db.refresh(employee)
-    return employee
+    return _with_end_of_service(employee)
 
 
 @router.delete("/employees/{employee_id}", status_code=204)

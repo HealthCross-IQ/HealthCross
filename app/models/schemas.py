@@ -489,6 +489,12 @@ class EmployeeOut(BaseModel):
     is_active: bool
     notes: Optional[str] = None
     created_at: datetime
+    # End-of-service gratuity, computed fresh on every read (see
+    # app/finance/end_of_service.py) - never stored, since it changes daily
+    # for an active employee. years_of_service/gratuity are None only when
+    # start_date isn't set yet.
+    years_of_service: Optional[float] = None
+    end_of_service_gratuity: Optional[float] = None
 
 
 class RecurringExpenseCreate(BaseModel):

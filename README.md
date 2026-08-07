@@ -619,6 +619,18 @@ known once billed), and the actual monthly expense ledger itself
 auto-create this month's salary + fixed-recurring rows from the roster/
 templates, skipping anyone who already has one so it's safe to re-run).
 
+Each `Employee` carries a `start_date` (joining date) and optional
+`end_date`. `GET /finance/employees` (and create/update) attach two
+computed-on-read fields, `years_of_service` and `end_of_service_gratuity`,
+via `app/finance/end_of_service.py` - UAE end-of-service gratuity per
+Federal Decree-Law No. 33 of 2021: 21 days' basic salary per year of
+service for the first 5 years, 30 days/year after that, pro-rated for a
+partial final year, capped at two years' total salary. `monthly_salary` is
+treated as the basic-salary figure for this calculation. These fields are
+never stored - they're computed fresh on every read, as of `end_date` for
+an employee who has left, or "today" (a running accrual estimate) for one
+still active.
+
 **Cash flow and expense forecast** (`app/finance/cash_flow.py`):
 - `GET /finance/cash-flow?year=` - actual monthly HC-fee inflow (tracker
   rows HC has collected, grouped by `payment_receive_date`) vs. actual

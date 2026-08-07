@@ -1,6 +1,7 @@
 import io
 
 import pandas as pd
+import pytest
 
 
 def _xlsx_bytes(df: pd.DataFrame) -> bytes:
@@ -133,6 +134,35 @@ def test_employee_edit_and_delete_keeps_expense_history(client):
     matching = [e for e in resp.json() if e["id"] == expense_id]
     assert len(matching) == 1
     assert matching[0]["employee_id"] is None
+
+
+def test_employee_end_of_service_computed_from_start_date(client):
+    import datetime
+
+    six_years_ago = (datetime.date.today() - datetime.timedelta(days=365 * 6)).isoformat()
+    resp = client.post(
+        "/finance/employees",
+        json={"full_name": "Karim", "monthly_salary": 12000, "currency": "AED", "start_date": six_years_ago},
+    )
+    body = resp.json()
+    assert body["years_of_service"] > 5.9
+    assert body["end_of_service_gratuity"] > 0
+
+    # No start_date yet - not computable.
+    resp = client.post("/finance/employees", json={"full_name": "New Hire", "monthly_salary": 8000, "currency": "AED"})
+    body = resp.json()
+    assert body["start_date"] is None
+    assert body["years_of_service"] is None
+    assert body["end_of_service_gratuity"] is None
+
+    # Setting an end_date fixes the gratuity as of that date rather than today.
+    employee_id = client.post(
+        "/finance/employees",
+        json={"full_name": "Leaver", "monthly_salary": 10000, "currency": "AED", "start_date": "2020-01-01"},
+    ).json()["id"]
+    resp = client.patch(f"/finance/employees/{employee_id}", json={"end_date": "2023-01-01"})
+    body = resp.json()
+    assert body["years_of_service"] == pytest.approx(3.0, abs=0.01)
 
 
 def test_recurring_expense_edit_and_delete(client):
