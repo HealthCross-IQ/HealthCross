@@ -2847,7 +2847,11 @@ function nbSetProduct(idx, product) {
   nbCategories[idx].network = '';
   nbCategories[idx].tpa = '';
   nbCategories[idx].variantOptions = null;
-  nbCategories[idx].variant_selections = {};
+  // variant_selections deliberately kept, not reset - a selection that no
+  // longer has a matching priced option under the new Product/Network
+  // simply isn't applied (see price_member's own fallback-to-base
+  // behavior, which already warns rather than erroring), so there's no
+  // correctness risk in preserving picks that do still carry over.
   nbRenderArea();
 }
 
@@ -2856,7 +2860,6 @@ async function nbSetNetwork(idx, value) {
   const [network, tpa] = value.split('|');
   nbCategories[idx].network = network;
   nbCategories[idx].tpa = tpa;
-  nbCategories[idx].variant_selections = {};
   await nbFetchVariantOptions(idx);
   nbRenderArea();
 }
