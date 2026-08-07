@@ -2775,50 +2775,13 @@ async function nbRenderArea() {
   `;
 }
 
-// Maps a New Business variant name (Annual Limit, Deductible, ...) to the
-// matching value already on this category's EXISTING-role BenefitPlan, so
-// the broker can see what the incumbent plan offers right next to the
-// option they're picking - a hint only, nothing is auto-selected, so a
-// plan with unrelated variant names (a custom upload) just shows no hint
-// rather than a wrong one.
-const NB_VARIANT_EXISTING_LOOKUP = [
-  { keywords: ['annual limit'], summaryKey: 'annual_limit', field: 'annual_limit', format: v => `AED ${Number(v).toLocaleString()}` },
-  { keywords: ['deductible'], summaryKey: 'deductible', field: 'deductible', format: v => `AED ${Number(v).toLocaleString()}` },
-  { keywords: ['maternity'], summaryKey: 'maternity_limit', field: 'maternity_limit', format: v => `AED ${Number(v).toLocaleString()}` },
-  { keywords: ['pharmacy'], summaryKey: 'pharmacy_limit_and_coinsurance' },
-  { keywords: ['dental'], summaryKey: 'dental', field: 'dental_covered', format: v => v ? 'Covered' : 'Not covered' },
-  { keywords: ['optical'], summaryKey: 'optical', field: 'optical_covered', format: v => v ? 'Covered' : 'Not covered' },
-  { keywords: ['pre-existing', 'pre existing', 'chronic'], summaryKey: 'pre_existing_chronic_limit' },
-  { keywords: ['alternative', 'complementary'], summaryKey: 'alternative_or_complementary_treatment' },
-  { keywords: ['op copay', 'coinsurance', 'co-insurance', 'copay'], summaryKey: 'coinsurance', field: 'co_insurance_pct', format: v => `${v}%` },
-  { keywords: ['room'], field: 'room_type' },
-];
-
-function nbExistingValueForVariant(benefitPlan, variantName) {
-  if (!benefitPlan) return null;
-  const name = variantName.toLowerCase();
-  const entry = NB_VARIANT_EXISTING_LOOKUP.find(e => e.keywords.some(k => name.includes(k)));
-  if (!entry) return null;
-  const summary = benefitPlan.standard_summary;
-  if (entry.summaryKey && summary && summary[entry.summaryKey] && !/^not specified/i.test(summary[entry.summaryKey])) {
-    return summary[entry.summaryKey];
-  }
-  // dental_covered/optical_covered default to false when never parsed, so a
-  // bare false is "unknown", not a genuine "not covered" - only surface it
-  // when true, or when standard_summary said so explicitly above.
-  if (entry.field && benefitPlan[entry.field] != null && benefitPlan[entry.field] !== false) {
-    return entry.format ? entry.format(benefitPlan[entry.field]) : String(benefitPlan[entry.field]);
-  }
-  return null;
-}
-
 function nbCategoryCardHtml(cat, idx) {
   const products = nbRateCardOptions.products;
   const networksForProduct = cat.product ? (nbRateCardOptions.product_networks[cat.product] || []) : [];
   const variantSelects = cat.variantOptions ? Object.keys(cat.variantOptions).sort().map(variantName => {
     const options = cat.variantOptions[variantName];
     const selected = cat.variant_selections[variantName] || '';
-    const existingValue = nbExistingValueForVariant(cat.existingBenefitPlan, variantName);
+    const existingValue = (cat.existingVariantValues || {})[variantName];
     return `
       <div>
         <label>${escapeHtml(variantName)}${existingValue ? ` <span style="color:var(--ink-muted); font-weight:400;">(existing: ${escapeHtml(existingValue)})</span>` : ''}</label>
@@ -2916,6 +2879,14 @@ async function nbFetchVariantOptions(idx) {
     cat.variantOptions = await api(`/new-business/variant-options?region=${encodeURIComponent(cat.previewRegion)}&tpa=${encodeURIComponent(cat.tpa)}&network=${encodeURIComponent(cat.network)}`);
   } catch (err) {
     cat.variantOptions = {};
+  }
+  cat.existingVariantValues = {};
+  const variantNames = Object.keys(cat.variantOptions);
+  if (variantNames.length && cat.existingBenefitPlan) {
+    try {
+      const params = variantNames.map(n => `variant_names=${encodeURIComponent(n)}`).join('&');
+      cat.existingVariantValues = await api(`/cases/${currentCase.id}/new-business/existing-variant-values?category=${encodeURIComponent(cat.category)}&${params}`);
+    } catch (err) { /* no existing plan for this category, or nothing resolvable */ }
   }
 }
 
