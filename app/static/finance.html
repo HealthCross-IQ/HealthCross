@@ -805,8 +805,7 @@ function createPolicyReconciliation(config) {
     if (search) {
       rows = rows.filter(r =>
         r.policy_no.toLowerCase().includes(search) ||
-        (r.client_name || '').toLowerCase().includes(search) ||
-        r.doc_nos.some(d => d.toLowerCase().includes(search))
+        (r.client_name || '').toLowerCase().includes(search)
       );
     }
     return rows;
@@ -821,7 +820,7 @@ function createPolicyReconciliation(config) {
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Policy No.</th><th>Client</th><th>Doc No(s)</th>
+            <th>Policy No.</th><th>Client</th>
             <th>Tracker Outstanding</th><th>${esc(config.amountColumnLabel)}</th><th>Variance</th><th>Status</th>
           </tr></thead>
           <tbody>
@@ -829,7 +828,6 @@ function createPolicyReconciliation(config) {
               <tr>
                 <td>${esc(row.policy_no)}</td>
                 <td>${esc(row.client_name || '—')}</td>
-                <td>${esc(row.doc_nos.join(', ') || '—')}</td>
                 <td>${row.tracker_outstanding_amount !== null ? `${money(row.tracker_outstanding_amount)} <span class="hint" style="margin:0;">(${row.tracker_outstanding_count})</span>` : '—'}</td>
                 <td>${row[config.amountField] !== null ? `${money(row[config.amountField])} <span class="hint" style="margin:0;">(${row[config.countField]})</span>` : '—'}</td>
                 <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
@@ -863,7 +861,7 @@ function createPolicyReconciliation(config) {
         ${config.kpis.map(k => `<div class="kpi"><span class="label">${esc(k.label)}</span><span class="value">${data[k.key]}</span></div>`).join('')}
       </div>
       <div class="row" style="margin-top:10px;">
-        <div><label>Search (policy no., client, doc no.)</label><input type="text" id="${config.searchInputId}" placeholder="Type to search&hellip;" oninput="${config.varName}.renderTable()" /></div>
+        <div><label>Search (policy no., client name)</label><input type="text" id="${config.searchInputId}" placeholder="Type to search&hellip;" oninput="${config.varName}.renderTable()" /></div>
         <div><label>Status</label>
           <select id="${config.statusSelectId}" onchange="${config.varName}.renderTable()">
             <option value="">All except Matched</option>
@@ -882,13 +880,13 @@ function createPolicyReconciliation(config) {
     const rows = filteredRows();
     if (!rows.length) { toast('Nothing to export for the current search/filter', true); return; }
     const headers = [
-      'Policy No', 'Client', 'Doc Nos', 'Tracker Outstanding Amount', 'Tracker Outstanding Count',
+      'Policy No', 'Client', 'Tracker Outstanding Amount', 'Tracker Outstanding Count',
       `${config.amountColumnLabel} Amount`, `${config.amountColumnLabel} Count`, 'Variance', 'Status',
     ];
     const lines = [headers.join(',')];
     for (const row of rows) {
       const cells = [
-        row.policy_no, row.client_name || '', row.doc_nos.join('; '),
+        row.policy_no, row.client_name || '',
         row.tracker_outstanding_amount ?? '', row.tracker_outstanding_count,
         row[config.amountField] ?? '', row[config.countField],
         row.variance ?? '', config.statusMeta[row.status]?.label || row.status,
