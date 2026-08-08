@@ -681,6 +681,52 @@ class BankReconciliationOut(BaseModel):
     rows: List[BankReconciliationRow]
 
 
+class ReceivedByDateRow(BaseModel):
+    receive_date: date
+    count: int
+    amount_received: float
+    bank_credit_amount: Optional[float] = None
+    bank_txn_date: Optional[date] = None
+    variance: Optional[float] = None
+    status: str  # "matched" / "no_bank_match"
+
+
+class FeeRateMismatchRow(BaseModel):
+    tracker_entry_id: Optional[int] = None
+    doc_no: Optional[str] = None
+    policy_no: Optional[str] = None
+    client_name: Optional[str] = None
+    channel: str
+    product: Optional[str] = None
+    recorded_fee_pct: Optional[float] = None
+    expected_fee_pct: float
+
+
+class ClientSettledHcOutstandingRow(BaseModel):
+    tracker_entry_id: Optional[int] = None
+    doc_no: Optional[str] = None
+    policy_no: Optional[str] = None
+    client_name: Optional[str] = None
+    total_value: Optional[float] = None
+    hc_payment_status: Optional[str] = None
+    due_date: Optional[date] = None
+
+
+class PaymentTrackerAnalysisOut(BaseModel):
+    received_by_date: List[ReceivedByDateRow]
+    total_due_for_collection: float
+    total_outstanding_hc_fee: float
+    total_fee: float
+    total_received: float
+    total_premium: float
+    average_fee_pct_of_premium: Optional[float] = None
+    fee_rate_mismatch_count: int
+    fee_rate_mismatches: List[FeeRateMismatchRow]
+    client_settled_hc_outstanding_count: int
+    client_settled_hc_outstanding_amount: float
+    client_settled_hc_outstanding: List[ClientSettledHcOutstandingRow]
+
+
 class CashFlowMonth(BaseModel):
     period: str  # "2026-07"
     inflow: float

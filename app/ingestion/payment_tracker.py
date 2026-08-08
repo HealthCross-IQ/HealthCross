@@ -112,7 +112,7 @@ def _date_or_none(value: Any):
 def _fee_pct_or_none(value: Any):
     """HC Fee % is a numeric rate (e.g. 0.115) on a rate-card row, or the
     literal text "manual calc" on a negotiated/mixed-tier row - see
-    app.finance.fee_engine._band_for_product for why some Products can't be
+    app.finance.fee_engine.band_for_product for why some Products can't be
     banded automatically.
     """
     if pd.isna(value):

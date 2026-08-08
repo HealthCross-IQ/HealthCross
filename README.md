@@ -648,6 +648,28 @@ functions over plain dicts, unit-testable without a database):
   and matches that total against the nearest bank credit within a date
   window, rather than attempting a one-to-one match.
 
+**Payment Tracker Analysis** (`app/finance/tracker_analysis.py`,
+`GET /finance/payment-tracker-analysis`) - a standalone dashboard over the
+tracker alone, not a reconciliation against another system:
+- HC fee received, grouped by `payment_receive_date` and matched against
+  the bank statement - reuses `reconcile_tracker_received_vs_bank`'s own
+  date/amount matching, just rolled up to one row per date.
+- Total still due for collection (client hasn't paid QIC yet, i.e.
+  `client_payment_status` != "Settled", summed on `invoice_amount`) and
+  total still outstanding on the HC-fee side (summed on `total_value`) -
+  the same two legs used throughout this module.
+- Fee-rate compliance: every rate-carded (non-manual) row's own recorded
+  HC Fee % checked against the active `FeeRateCard` for its channel x tier
+  band, flagging mismatches. Manual/negotiated rows, and Products that
+  don't band to a single tier, aren't checkable and are skipped rather
+  than flagged.
+- Client-settled-but-HC-fee-outstanding: rows where the client has already
+  paid QIC but HC hasn't yet collected its own fee on the same document -
+  the collection gap most worth chasing, since nothing on the client side
+  still blocks it.
+- Total fee, total received, total premium, and the average fee % of
+  premium across every tracker row.
+
 **Expenses** (`Employee`, `RecurringExpense`, `ExpenseEntry`) - a payroll
 roster (`POST /finance/employees`), templates for recurring non-salary
 costs like a portal-support fee or a usage-based telecom bill

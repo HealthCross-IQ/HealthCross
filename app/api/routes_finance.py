@@ -15,6 +15,7 @@ from app.finance.reconciliation import (
     reconcile_tracker_vs_client_soa_by_policy,
     reconcile_tracker_vs_fee_statement_by_policy,
 )
+from app.finance.tracker_analysis import analyze_payment_tracker
 from app.ingestion.bank_statement import parse_bank_statement
 from app.ingestion.health_cross_fee_statement import parse_health_cross_fee_statement
 from app.ingestion.payment_tracker import parse_payment_tracker
@@ -354,6 +355,13 @@ def get_tracker_vs_bank_reconciliation(db: Session = Depends(get_db)):
     tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
     bank_transactions = [_to_dict(e) for e in db.query(models.BankTransaction).all()]
     return reconcile_tracker_received_vs_bank(tracker_entries, bank_transactions)
+
+
+@router.get("/payment-tracker-analysis", response_model=schemas.PaymentTrackerAnalysisOut)
+def get_payment_tracker_analysis(db: Session = Depends(get_db)):
+    tracker_entries = [_to_dict(e) for e in db.query(models.PaymentTrackerEntry).all()]
+    bank_transactions = [_to_dict(e) for e in db.query(models.BankTransaction).all()]
+    return analyze_payment_tracker(tracker_entries, bank_transactions, _active_fee_rates(db))
 
 
 # ---------------------------------------------------------------------------

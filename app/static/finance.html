@@ -201,6 +201,7 @@ async function api(path, options) {
 const TABS = [
   { id: 'summary', label: 'Summary' },
   { id: 'tracker', label: 'Payment Tracker' },
+  { id: 'analysis', label: 'Analysis' },
   { id: 'reconciliation', label: 'Reconciliation' },
   { id: 'people', label: 'Employees & Expenses' },
   { id: 'cashflow', label: 'Cash Flow & Forecast' },
@@ -220,7 +221,7 @@ function switchTab(id) {
     document.getElementById(`tabbtn-${t.id}`).classList.toggle('active', t.id === id);
     document.getElementById(`panel-${t.id}`).classList.toggle('active', t.id === id);
   });
-  const loaders = { summary: loadSummary, tracker: loadTracker, reconciliation: loadReconciliationPanel, people: loadPeoplePanel, cashflow: loadCashflowPanel };
+  const loaders = { summary: loadSummary, tracker: loadTracker, analysis: loadAnalysisPanel, reconciliation: loadReconciliationPanel, people: loadPeoplePanel, cashflow: loadCashflowPanel };
   loaders[id] && loaders[id]();
 }
 
@@ -630,6 +631,136 @@ async function markReceived(id) {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+/* ---------------- Analysis ---------------- */
+
+function loadAnalysisPanel() {
+  const panel = document.getElementById('panel-analysis');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Payment Tracker Analysis</h3>
+      <div class="hint">
+        A single view over the Payment Tracker alone: HC fee received grouped by Payment Receive Date
+        (matched against the bank statement), amounts still due for collection and outstanding, HC fee %
+        checked against the active rate card, and totals across every tracker row.
+      </div>
+      <button class="primary" onclick="runAnalysis()">Refresh</button>
+      <div id="analysisContent"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  runAnalysis();
+}
+
+async function runAnalysis() {
+  const el = document.getElementById('analysisContent');
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api('/finance/payment-tracker-analysis');
+    const avgPct = r.average_fee_pct_of_premium !== null && r.average_fee_pct_of_premium !== undefined
+      ? `${(r.average_fee_pct_of_premium * 100).toFixed(2)}%` : '—';
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total Fee</span><span class="value">${money(r.total_fee)}</span></div>
+        <div class="kpi"><span class="label">Total Received</span><span class="value">${money(r.total_received)}</span></div>
+        <div class="kpi"><span class="label">Total Premium</span><span class="value">${money(r.total_premium)}</span></div>
+        <div class="kpi"><span class="label">Avg. Fee % of Premium</span><span class="value">${avgPct}</span></div>
+        <div class="kpi"><span class="label">Due for Collection (Client)</span><span class="value">${money(r.total_due_for_collection)}</span></div>
+        <div class="kpi"><span class="label">Outstanding (HC Fee)</span><span class="value">${money(r.total_outstanding_hc_fee)}</span></div>
+      </div>
+
+      <h3 style="margin-top:22px;">HC Fee Received by Date, vs. Bank</h3>
+      <div class="hint">Every date HC marked fee(s) as Received, summed and matched against the nearest bank credit within a tolerance window.</div>
+      ${receivedByDateTableHtml(r.received_by_date)}
+
+      <h3 style="margin-top:22px;">Client Settled, HC Fee Not Yet Received <span class="hint" style="margin:0;">(${r.client_settled_hc_outstanding_count}, ${money(r.client_settled_hc_outstanding_amount)})</span></h3>
+      <div class="hint">The client has already paid QIC, but HC hasn't yet collected its own fee on the same document - the collection gap most worth chasing.</div>
+      ${clientSettledHcOutstandingTableHtml(r.client_settled_hc_outstanding)}
+
+      <h3 style="margin-top:22px;">Fee Rate Mismatches <span class="hint" style="margin:0;">(${r.fee_rate_mismatch_count})</span></h3>
+      <div class="hint">Rate-carded rows whose own recorded HC Fee % doesn't match the active FeeRateCard for their channel &amp; tier band. Manual/negotiated rows are never checked here.</div>
+      ${feeRateMismatchTableHtml(r.fee_rate_mismatches)}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function receivedByDateTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No "Received" tracker rows with a Payment Receive Date yet.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Receive Date</th><th>Count</th><th>Amount Received</th><th>Bank Credit</th><th>Bank Txn Date</th><th>Variance</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.receive_date)}</td>
+              <td>${row.count}</td>
+              <td>${money(row.amount_received)}</td>
+              <td>${row.bank_credit_amount !== null && row.bank_credit_amount !== undefined ? money(row.bank_credit_amount) : '—'}</td>
+              <td>${esc(row.bank_txn_date || '—')}</td>
+              <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
+              <td>${row.status === 'matched' ? `<span class="pill pill-good">Matched</span>` : `<span class="pill pill-bad">No Bank Match</span>`}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function clientSettledHcOutstandingTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No rows - every Settled client invoice already has its HC fee collected.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Doc No.</th><th>Policy No.</th><th>Client</th><th>HC Fee</th><th>HC Status</th><th>Due Date</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.doc_no || '—')}</td>
+              <td>${esc(row.policy_no || '—')}</td>
+              <td>${esc(row.client_name || '—')}</td>
+              <td>${money(row.total_value)}</td>
+              <td><span class="pill pill-bad">${esc(row.hc_payment_status || 'Outstanding')}</span></td>
+              <td>${esc(row.due_date || '—')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function feeRateMismatchTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No mismatches - every rate-carded row matches the active rate card.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Doc No.</th><th>Policy No.</th><th>Client</th><th>Channel</th><th>Product</th><th>Recorded %</th><th>Expected %</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.doc_no || '—')}</td>
+              <td>${esc(row.policy_no || '—')}</td>
+              <td>${esc(row.client_name || '—')}</td>
+              <td>${esc(row.channel)}</td>
+              <td>${esc(row.product || '—')}</td>
+              <td>${row.recorded_fee_pct !== null && row.recorded_fee_pct !== undefined ? (row.recorded_fee_pct * 100).toFixed(2) + '%' : '—'}</td>
+              <td>${(row.expected_fee_pct * 100).toFixed(2)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
 }
 
 /* ---------------- Reconciliation ---------------- */

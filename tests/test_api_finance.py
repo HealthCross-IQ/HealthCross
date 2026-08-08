@@ -179,6 +179,51 @@ def test_health_cross_fee_statement_upload_replaces_only_its_own_statement_and_r
     assert body["missing_in_fee_statement_count"] == 0
 
 
+def test_payment_tracker_analysis_endpoint(client):
+    tracker_df = pd.DataFrame(
+        [
+            {
+                "Source": "Direct Channel", "Policy No.": "P1", "DocNo.": "128-1",
+                "Invoice amount": 10500.0, "Premium\n( excl VAT)": 10000.0, "Product": "Silver",
+                "HC Fee %": 0.115, "HC Fees": 1150.0, "Total Value": 1207.5,
+                "Client Payment Status": "Settled", "HC Payment Status": "Received",
+                "Payment Receive Date": pd.Timestamp("2026-07-24"),
+            },
+            {
+                # Client already Settled, but HC hasn't collected its fee yet.
+                "Source": "Direct Channel", "Policy No.": "P2", "DocNo.": "128-2",
+                "Invoice amount": 5000.0, "Premium\n( excl VAT)": 5000.0, "Product": "Gold",
+                "HC Fee %": 0.10, "HC Fees": 500.0, "Total Value": 525.0,
+                "Client Payment Status": "Settled", "HC Payment Status": None,
+            },
+        ]
+    )
+    _upload(client, "/finance/payment-tracker/upload", "tracker.xlsx", tracker_df)
+
+    bank_df = pd.DataFrame(
+        [{"Date": "24-Jul-2026", "Value Date": "24-Jul-2026", "Reference Number": "R1", "Description": "QIC settlement", "Credit": 1207.5, "Debit": 0}]
+    )
+    buf = io.BytesIO()
+    bank_df.to_excel(buf, index=False)
+    buf.seek(0)
+    client.post("/finance/bank-statement/upload", files={"file": ("bank.xlsx", buf.read(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+
+    resp = client.get("/finance/payment-tracker-analysis")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert len(body["received_by_date"]) == 1
+    assert body["received_by_date"][0]["amount_received"] == 1207.5
+    assert body["received_by_date"][0]["status"] == "matched"
+
+    assert body["total_outstanding_hc_fee"] == 525.0
+    assert body["total_fee"] == 1150.0 + 500.0
+    assert body["total_received"] == 1207.5
+
+    assert body["client_settled_hc_outstanding_count"] == 1
+    assert body["client_settled_hc_outstanding"][0]["doc_no"] == "128-2"
+
+
 def test_employees_recurring_expenses_and_generate(client):
     resp = client.post("/finance/employees", json={"full_name": "Sheetal", "role_title": "Head of Operations", "monthly_salary": 30000, "currency": "AED"})
     assert resp.status_code == 200

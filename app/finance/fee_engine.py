@@ -23,7 +23,7 @@ VAT_PCT = 0.05
 # A Product value naming exactly one tier bands cleanly; a mixed value
 # (e.g. "Gold/Bronze", a real value seen on tracker rows for a group whose
 # members span more than one tier) can't be banded automatically - see
-# _band_for_product.
+# band_for_product.
 _BRONZE_SILVER_TIERS = {"bronze", "silver"}
 _GOLD_PLATINUM_TIERS = {"gold", "platinum"}
 
@@ -35,13 +35,15 @@ class FeeRate:
     fee_pct: float
 
 
-def _band_for_product(product: Optional[str]) -> Optional[str]:
+def band_for_product(product: Optional[str]) -> Optional[str]:
     """Bands a Product/tier label onto "bronze_silver" or "gold_platinum".
 
     Returns None when the label doesn't resolve to a single band - either
     it names no recognized tier, or it names tiers from BOTH bands at once
     (e.g. "Gold/Bronze") - in either case the caller must supply a manual
-    rate rather than have one inferred.
+    rate rather than have one inferred. Public (not underscore-prefixed)
+    because app.finance.tracker_analysis also uses this to check whether a
+    tracker row's recorded fee % matches its rate-card band.
     """
     if not product:
         return None
@@ -67,11 +69,11 @@ def compute_hc_fee(
 
     `channel` is "broker", "direct", or "group". Group business, and any
     "broker"/"direct" row whose `product` doesn't band cleanly (see
-    _band_for_product), REQUIRES `manual_fee_pct` - there's no rate-card
+    band_for_product), REQUIRES `manual_fee_pct` - there's no rate-card
     fallback to guess from, matching the source tracker's "manual calc"
     convention rather than inventing a rate.
     """
-    tier_band = _band_for_product(product)
+    tier_band = band_for_product(product)
     is_manual = manual_fee_pct is not None or channel == "group" or tier_band is None
 
     if is_manual:
