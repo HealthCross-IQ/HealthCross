@@ -5,6 +5,13 @@ def test_root_serves_the_ui_html(client):
     assert "HealthCross" in resp.text
 
 
+def test_finance_ui_serves_the_finance_html(client):
+    resp = client.get("/finance-ui")
+    assert resp.status_code == 200
+    assert "text/html" in resp.headers["content-type"]
+    assert "Finance Status" in resp.text
+
+
 def test_list_cases_returns_created_cases(client):
     resp = client.post("/cases", json={
         "broker_name": "Broker A",
