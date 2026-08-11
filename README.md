@@ -553,6 +553,37 @@ is preserved; this isn't a substitute for a real migration tool on a
 multi-user/production database, but it's enough for a single-file SQLite
 dev database.
 
+### Desktop app (optional)
+
+`uvicorn --reload` above is the normal way to run this during development,
+in a browser tab. `desktop_app.py` is an alternative for day-to-day use
+that opens the same app in its own plain window (via
+[pywebview](https://pywebview.flowrl.com/)) instead of a browser tab, with
+no visible console window and no terminal command to type each time -
+launched from a desktop shortcut instead. It runs the exact same FastAPI
+app as `uvicorn`, just in a background thread instead of the terminal.
+Both ways of running it read/write the same `underwriting.db`, and you
+can still open `http://127.0.0.1:8000` in a normal browser at any time
+regardless of which way the server was started.
+
+One-time setup:
+
+```bash
+pip install -r requirements.txt
+```
+
+Then create a Windows shortcut (right-click Desktop -> New -> Shortcut)
+with this as the location, substituting your own project path:
+
+```
+C:\path\to\HealthCross\.venv\Scripts\pythonw.exe C:\path\to\HealthCross\desktop_app.py
+```
+
+`pythonw.exe` (not `python.exe`) is what suppresses the console window.
+Set the shortcut's "Start in" field (Properties -> Shortcut tab) to your
+project folder too, so `underwriting.db` and the static files resolve
+correctly regardless of where the shortcut itself lives.
+
 Scanned (image-only) table-of-benefits PDFs need the `tesseract-ocr` system
 package too - `pip install` alone won't provide it:
 ```bash
