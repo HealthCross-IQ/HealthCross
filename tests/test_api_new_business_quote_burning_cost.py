@@ -51,18 +51,24 @@ def rate_card_xlsx(tmp_path):
 
 @pytest.fixture()
 def members_xlsx(tmp_path):
-    # A single 35-year-old male, fully within the 18-40 band the rate card
+    # Five 35-year-old males, fully within the 18-40 band the rate card
     # itself prices, on a real recognized network raw label ("PLATINUM" ->
-    # MSH Platinum via app/reference/network_type_mapping.py).
+    # MSH Platinum via app/reference/network_type_mapping.py). Five members
+    # (5.0 earned member-years once fully elapsed) meets
+    # MIN_CREDIBLE_MEMBER_YEARS so their bucket isn't excluded from the
+    # burning-cost comparison as low-credibility - a single member would be.
     return _write_xlsx(
         tmp_path, "members.xlsx", MEMBERS_HEADER,
-        [[
-            "Acme Sub LLC", "Acme Holdings", "P100", "QC1-ACM-A", "ACM0001",
-            "1990-06-01", "M", "Single", "India", "Principal",
-            "Dubai", "QIC/HC/BR/ACM/DXB/A", "PLATINUM",
-            "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-            12000, 12000, None, None, 500,
-        ]],
+        [
+            [
+                "Acme Sub LLC", "Acme Holdings", "P100", "QC1-ACM-A", f"ACM000{i}",
+                "1990-06-01", "M", "Single", "India", "Principal",
+                "Dubai", "QIC/HC/BR/ACM/DXB/A", "PLATINUM",
+                "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+                12000, 12000, None, None, 500,
+            ]
+            for i in range(1, 6)
+        ],
     )
 
 
@@ -70,12 +76,15 @@ def members_xlsx(tmp_path):
 def claims_xlsx(tmp_path):
     return _write_xlsx(
         tmp_path, "claims.xlsx", CLAIMS_HEADER,
-        [[
-            "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
-            "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-            "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
-            "J309", "Allergic rhinitis", 100.0, 90.0,
-        ]],
+        [
+            [
+                f"ACM000{i}", f"CLM{i}", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+                "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+                "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+                "J309", "Allergic rhinitis", 100.0, 90.0,
+            ]
+            for i in range(1, 6)
+        ],
     )
 
 
@@ -133,8 +142,9 @@ def test_burning_cost_comparison_matches_rate_card_quote_by_category(client, mem
     body = resp.json()
     cat = body["categories"][0]
     assert cat["category"] == "A"
-    # actual_claims (90.0) / earned_member_years (1.0, fully elapsed) = 90.0 net,
-    # then the SAME Gold loading the rate-card quote itself used.
+    # actual_claims (450.0 across 5 members) / earned_member_years (5.0,
+    # fully elapsed) = 90.0 net, then the SAME Gold loading the rate-card
+    # quote itself used.
     assert cat["net_annual_premium"] == 90.0
     assert cat["priced_member_count"] == 1
     assert cat["loading_pct"] == rate_card_quote["result"]["categories"][0]["loading_pct"]

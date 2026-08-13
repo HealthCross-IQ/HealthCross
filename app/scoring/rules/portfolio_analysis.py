@@ -466,6 +466,19 @@ def _matching_age_band(age: Optional[int], bands: List[tuple]) -> Optional[tuple
     return None
 
 
+# A bucket's burning cost is one claims-total divided by one member-years
+# total - with only a couple of member-years behind it, a single large
+# claim can swing the per-member-year rate by 100x, which reads as a wild
+# outlier even though it's really just a tiny, unlucky (or lucky) sample.
+# Below this many earned member-years, a bucket is flagged low_credibility
+# rather than silently trusted - callers decide what to do with that
+# (price_case_against_burning_cost excludes it entirely; the Portfolio
+# Analysis UI just badges it so the raw number stays visible for
+# diagnosis). Not a formal actuarial credibility standard, just a
+# pragmatic floor for "don't treat this as a reliable rate yet".
+MIN_CREDIBLE_MEMBER_YEARS = 5.0
+
+
 def summarize_burning_cost_by_age_gender(member_results: List[dict], rate_cards: List[dict]) -> List[dict]:
     """Burning cost bucketed by the SAME (age-band x gender) structure the
     standard pricing rate card itself uses - each row here lines up with
@@ -499,6 +512,7 @@ def summarize_burning_cost_by_age_gender(member_results: List[dict], rate_cards:
                 "actual_claims": round(bucket["actual_claims"], 2),
                 "earned_member_years": round(earned_member_years, 4),
                 "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+                "low_credibility": 0 < earned_member_years < MIN_CREDIBLE_MEMBER_YEARS,
             }
         )
     rows.sort(key=lambda r: (r["age_band"], r["gender"]))
@@ -587,6 +601,7 @@ def summarize_burning_cost_by_product_network_age_gender(member_results: List[di
                 "actual_claims": round(bucket["actual_claims"], 2),
                 "earned_member_years": round(earned_member_years, 4),
                 "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+                "low_credibility": 0 < earned_member_years < MIN_CREDIBLE_MEMBER_YEARS,
             }
         )
     rows.sort(key=lambda r: (r["product"], r["network"], r["age_band"], r["gender"]))
@@ -614,13 +629,18 @@ def price_case_against_burning_cost(
     net total and flagged via a warning, rather than silently priced at
     zero - this is a reference figure to weigh against the rate card, not
     something that should look artificially cheap just because the book
-    has a data gap.
+    has a data gap. A bucket with a burning cost but too few earned
+    member-years to be credible (see MIN_CREDIBLE_MEMBER_YEARS) is treated
+    the same way - a single large claim on a handful of member-years can
+    swing that bucket's rate by 100x, which would otherwise show up as a
+    dramatic-looking variance that's really just sampling noise, not a
+    genuine signal the rate card is mispriced.
     """
     bands = age_bands_from_rate_cards(rate_cards)
     burning_cost_by_key = {
         (r["product"], r["network"], r["age_band"], r["gender"]): r["burning_cost"]
         for r in burning_cost_rows
-        if r.get("burning_cost") is not None
+        if r.get("burning_cost") is not None and not r.get("low_credibility")
     }
 
     categories_by_name = {c["category"]: c for c in categories}

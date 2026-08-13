@@ -3585,11 +3585,12 @@ function paAgeGenderHtml(rows) {
             <td>${r.member_count.toLocaleString()}</td>
             <td>${r.earned_member_years.toLocaleString()}</td>
             <td>${r.actual_claims.toLocaleString()}</td>
-            <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+            <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}${r.low_credibility ? ' <span class="tier-pill dir-review" title="Under 5 earned member-years - a single large claim can swing this rate by 100x, treat as unreliable">Thin data</span>' : ''}</td>
           </tr>
         `).join('')}
       </table>
     </div>
+    <div class="hint" style="margin-top:8px;">Rows marked "Thin data" have under 5 earned member-years behind them - a single large claim on that few members can swing the rate wildly, so these are excluded from the New Business Quote's burning-cost comparison rather than treated as a reliable rate.</div>
   `;
 }
 

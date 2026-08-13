@@ -789,6 +789,28 @@ def test_price_case_against_burning_cost_flags_members_with_no_matching_bucket()
     assert any("No booked-book burning cost" in w for w in cat["warnings"])
 
 
+def test_price_case_against_burning_cost_excludes_a_low_credibility_bucket():
+    # A bucket with a huge burning_cost but too few earned member-years
+    # behind it (one large claim on a handful of members) must be excluded
+    # the same way a missing bucket is, not trusted as a real rate - see
+    # MIN_CREDIBLE_MEMBER_YEARS.
+    from app.scoring.rules.portfolio_analysis import price_case_against_burning_cost
+
+    census = [{"category": "A", "age": 30, "gender": "M", "marital_status": "single", "relation": "employee", "emirates": "Dubai"}]
+    categories = [{"category": "A", "product": "Bronze", "network": "MSH Regular", "tpa": "MSH MENA", "variant_selections": {}}]
+    burning_cost_rows = [
+        {
+            "product": "Bronze", "network": "MSH Regular", "age_band": "18-40", "gender": "M",
+            "burning_cost": 284217.04, "low_credibility": True,
+        },
+    ]
+    result = price_case_against_burning_cost(census, categories, RATE_CARDS, burning_cost_rows)
+    cat = result["categories"][0]
+    assert cat["priced_member_count"] == 0
+    assert cat["net_annual_premium"] == 0.0
+    assert any("No booked-book burning cost" in w for w in cat["warnings"])
+
+
 def test_burning_cost_lookup_network_maps_nas_networks_to_their_msh_equivalent():
     from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
 
