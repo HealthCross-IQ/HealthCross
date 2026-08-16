@@ -21,7 +21,11 @@ from app.scoring.rules.claims_ledger_analysis import (
 )
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
-from app.scoring.rules.renewal_rating import RenewalRatingAssumptions, calculate_renewal_rating
+from app.scoring.rules.renewal_rating import (
+    RenewalRatingAssumptions,
+    benchmark_case_against_book,
+    calculate_renewal_rating,
+)
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
 
@@ -845,6 +849,39 @@ def get_claims_ledger_analysis(
     return result
 
 
+def _case_renewal_rating(
+    case: models.Case,
+    inflation_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+) -> Optional[dict]:
+    """Shared computation behind GET /{case_id}/renewal-rating and
+    GET /{case_id}/renewal-benchmark (which needs every eligible case's
+    own rating, not just one, to build a book-wide comparison). Returns
+    None rather than raising when a case isn't eligible (no ledger, no
+    current_annual_premium, or no full months of claims yet), so a
+    book-wide scan can skip ineligible cases instead of every one
+    becoming a 404/400 to catch.
+    """
+    entries = case.claims_ledger_entries
+    if not entries or not case.current_annual_premium:
+        return None
+    full_months = _full_months_from_ledger(entries)
+    if not full_months:
+        return None
+
+    avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
+    annualized = avg_month * 12
+
+    defaults = RenewalRatingAssumptions()
+    assumptions = RenewalRatingAssumptions(
+        inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
+        loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+    )
+    result = calculate_renewal_rating(annualized, case.current_annual_premium, assumptions=assumptions)
+    result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
+    return result
+
+
 @router.get("/{case_id}/renewal-rating")
 def get_renewal_rating(
     case_id: int,
@@ -859,27 +896,49 @@ def get_renewal_rating(
     and current_annual_premium set on the case (PATCH /cases/{id}).
     """
     case = _get_case_or_404(db, case_id)
-    entries = case.claims_ledger_entries
-    if not entries:
+    if not case.claims_ledger_entries:
         raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
     if not case.current_annual_premium:
         raise HTTPException(
             status_code=400,
             detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
         )
+    result = _case_renewal_rating(case, inflation_pct, loading_pct)
+    if result is None:
+        raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
+    return result
 
-    full_months = _full_months_from_ledger(entries)
-    if not full_months:
+
+@router.get("/{case_id}/renewal-benchmark")
+def get_renewal_benchmark(case_id: int, db: Session = Depends(get_db)):
+    """This case's own renewal rating (see get_renewal_rating) benchmarked
+    against every OTHER case in the book that also has its own computed
+    renewal rating (see benchmark_case_against_book) - case-to-case,
+    since HealthCross has no external market-rate data source. A
+    snapshot, not a trend: most cases only have one year of claims
+    history so far, so there's no year-over-year comparison to make yet.
+    Same eligibility/error rules as /renewal-rating for this case itself;
+    other cases that aren't eligible are just skipped, not errored on.
+    """
+    case = _get_case_or_404(db, case_id)
+    if not case.claims_ledger_entries:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+    if not case.current_annual_premium:
+        raise HTTPException(
+            status_code=400,
+            detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
+        )
+    this_result = _case_renewal_rating(case)
+    if this_result is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
 
-    avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
-    annualized = avg_month * 12
+    other_results = []
+    for other in db.query(models.Case).filter(models.Case.id != case_id).all():
+        other_result = _case_renewal_rating(other)
+        if other_result is not None:
+            other_results.append(other_result)
 
-    defaults = RenewalRatingAssumptions()
-    assumptions = RenewalRatingAssumptions(
-        inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
-        loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
-    )
-    result = calculate_renewal_rating(annualized, case.current_annual_premium, assumptions=assumptions)
-    result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
-    return result
+    return {
+        "case": this_result,
+        "book": benchmark_case_against_book(this_result, other_results),
+    }

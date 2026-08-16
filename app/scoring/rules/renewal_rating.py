@@ -12,10 +12,17 @@ division, not a multiplicative add-on - to get the required premium and
 the renewal increase.
 """
 from dataclasses import dataclass
-from typing import Optional
+from typing import List, Optional
 
 DEFAULT_INFLATION_PCT = 0.075
 DEFAULT_LOADING_PCT = 0.28
+
+# Below this many other cases with their own computed renewal rating, a
+# percentile/median isn't credible - same "don't trust a rate built on
+# too few data points" principle as
+# app/scoring/rules/portfolio_analysis.py's MIN_CREDIBLE_MEMBER_YEARS,
+# just case-count instead of member-years.
+MIN_CREDIBLE_CASE_COUNT = 5
 
 
 @dataclass
@@ -52,4 +59,57 @@ def calculate_renewal_rating(
             "inflation_pct": a.inflation_pct,
             "loading_pct": a.loading_pct,
         },
+    }
+
+
+def _median(values: List[float]) -> float:
+    s = sorted(values)
+    n = len(s)
+    mid = n // 2
+    return s[mid] if n % 2 else (s[mid - 1] + s[mid]) / 2
+
+
+def benchmark_case_against_book(this_result: dict, other_results: List[dict]) -> dict:
+    """Where this case's own actual loss ratio sits among every OTHER
+    case's own renewal rating (each computed the same way, via
+    calculate_renewal_rating) - a case-to-case benchmark rather than an
+    external market rate, since HealthCross has no such data source.
+    Deliberately a snapshot, not a trend: most cases only have one year
+    of claims history so far, so there's nothing to trend against yet -
+    see app/api/routes_analysis.py's get_renewal_benchmark.
+
+    Percentile counts a tie as half a rank rather than fully above or
+    below (the standard convention for a value's percentile within a
+    set). Flagged low_credibility below MIN_CREDIBLE_CASE_COUNT
+    comparable cases - the benchmark still computes, it's just not
+    trustworthy yet with a handful of cases behind it.
+    """
+    count = len(other_results)
+    if count == 0:
+        return {
+            "comparable_case_count": 0,
+            "percentile": None,
+            "median_loss_ratio": None,
+            "min_loss_ratio": None,
+            "max_loss_ratio": None,
+            "median_renewal_increase_pct": None,
+            "other_loss_ratios": [],
+            "low_credibility": True,
+        }
+
+    this_ratio = this_result["actual_loss_ratio"]
+    other_ratios = [r["actual_loss_ratio"] for r in other_results]
+    below = sum(1 for r in other_ratios if r < this_ratio)
+    equal = sum(1 for r in other_ratios if r == this_ratio)
+    percentile = round(100 * (below + 0.5 * equal) / count, 1)
+
+    return {
+        "comparable_case_count": count,
+        "percentile": percentile,
+        "median_loss_ratio": round(_median(other_ratios), 4),
+        "min_loss_ratio": round(min(other_ratios), 4),
+        "max_loss_ratio": round(max(other_ratios), 4),
+        "median_renewal_increase_pct": round(_median([r["renewal_increase_pct"] for r in other_results]), 2),
+        "other_loss_ratios": sorted(round(r, 4) for r in other_ratios),
+        "low_credibility": count < MIN_CREDIBLE_CASE_COUNT,
     }

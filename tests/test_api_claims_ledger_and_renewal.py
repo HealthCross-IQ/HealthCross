@@ -346,3 +346,56 @@ def test_renewal_rating_credibility_style_dynamic_assumptions(client):
     default_resp = client.get(f"/cases/{case_id}/renewal-rating")
     lower_loading_resp = client.get(f"/cases/{case_id}/renewal-rating", params={"loading_pct": 0.10})
     assert lower_loading_resp.json()["renewal_increase_pct"] < default_resp.json()["renewal_increase_pct"]
+
+
+def test_renewal_benchmark_with_no_comparable_cases(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-benchmark")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["book"]["comparable_case_count"] == 0
+    assert body["book"]["percentile"] is None
+    assert body["book"]["low_credibility"] is True
+
+
+def test_renewal_benchmark_compares_against_other_eligible_cases_only(client):
+    this_case = _create_case(client, company_name="This Case")
+    client.patch(f"/cases/{this_case}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, this_case, {(2025, 10): 90000, (2025, 11): 90000, (2025, 12): 90000})
+
+    # A comparable case, eligible (ledger + premium).
+    other_case = _create_case(client, company_name="Other Case")
+    client.patch(f"/cases/{other_case}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, other_case, {(2025, 10): 40000, (2025, 11): 40000, (2025, 12): 40000})
+
+    # An ineligible case (no current_annual_premium set) - must be skipped, not error the whole call.
+    ineligible_case = _create_case(client, company_name="Ineligible Case")
+    _insert_ledger_entries(client, ineligible_case, {(2025, 10): 50000, (2025, 11): 50000, (2025, 12): 50000})
+
+    other_resp = client.get(f"/cases/{other_case}/renewal-rating")
+    assert other_resp.status_code == 200
+    other_loss_ratio = other_resp.json()["actual_loss_ratio"]
+
+    resp = client.get(f"/cases/{this_case}/renewal-benchmark")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["book"]["comparable_case_count"] == 1  # only the eligible other case
+    assert body["book"]["other_loss_ratios"] == [other_loss_ratio]
+    assert body["book"]["percentile"] == 100.0  # this case's loss ratio (0.9) is higher
+    assert body["book"]["low_credibility"] is True  # only 1 comparable case, below the threshold
+
+
+def test_renewal_benchmark_404s_without_own_ledger(client):
+    case_id = _create_case(client)
+    resp = client.get(f"/cases/{case_id}/renewal-benchmark")
+    assert resp.status_code == 404
+
+
+def test_renewal_benchmark_400s_without_own_current_premium(client):
+    case_id = _create_case(client)
+    _insert_ledger_entries(client, case_id, {(2025, 10): 1000, (2025, 11): 2000, (2025, 12): 1500})
+    resp = client.get(f"/cases/{case_id}/renewal-benchmark")
+    assert resp.status_code == 400
