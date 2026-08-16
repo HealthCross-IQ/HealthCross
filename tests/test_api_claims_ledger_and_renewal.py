@@ -1,3 +1,4 @@
+import io
 from datetime import date
 
 import pytest
@@ -598,3 +599,75 @@ def test_member_rates_rejects_census_record_from_a_different_case(client):
 def test_member_rates_404s_for_missing_case(client):
     resp = client.get("/cases/999999/member-rates")
     assert resp.status_code == 404
+
+
+def _rate_card_xlsx_bytes():
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([None, None, None, None, None, None, None, None, None, "Brokerage in %", 0.125])
+    ws.append([None, None, None, None, None, None, None, None, None, "TPA Fee in AED", 0.065])
+    ws.append([None, None, None, None, None, None, None, None, None, "Health CROSS", 0.065])
+    ws.append(["Category", "Age Band", "Gross Premium in AED"])
+    ws.append(["Category A Male", "0-17", 9117])
+    ws.append(["Category A Male", "18-40", 11664])
+    ws.append(["Category A Female", "0-17", 9116])
+    ws.append(["Category A Female", "18-40", 13611])
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def test_import_member_rate_card_fills_existing_rates_by_category_gender_age(client):
+    case_id = _create_case(client)
+    _insert_census(client, case_id, [
+        {"employee_ref": "E1", "category": "A", "age": 30, "gender": "M", "relation": "employee"},
+        {"employee_ref": "E2", "category": "A", "age": 10, "gender": "F", "relation": "child"},
+        {"employee_ref": "E3", "category": "B", "age": 30, "gender": "M", "relation": "employee"},  # no Category B rows
+    ])
+
+    resp = client.post(
+        f"/cases/{case_id}/member-rates/import-rate-card",
+        files={"file": ("rates.xlsx", _rate_card_xlsx_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["matched_count"] == 2
+    assert len(body["unmatched"]) == 1
+    assert body["unmatched"][0]["employee_ref"] == "E3"
+    assert body["detected_fees"] == {
+        "commission_pct": pytest.approx(0.125),
+        "tpa_fee_pct": pytest.approx(0.065),
+        "hc_fee_pct": pytest.approx(0.065),
+    }
+
+    members_by_ref = {m["employee_ref"]: m for m in body["members"]}
+    assert members_by_ref["E1"]["existing_annual_rate"] == 11664.0
+    assert members_by_ref["E2"]["existing_annual_rate"] == 9116.0
+    assert members_by_ref["E3"]["existing_annual_rate"] is None
+
+
+def test_import_member_rate_card_404s_for_missing_case(client):
+    resp = client.post(
+        "/cases/999999/member-rates/import-rate-card",
+        files={"file": ("rates.xlsx", _rate_card_xlsx_bytes(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 404
+
+
+def test_import_member_rate_card_400s_for_a_file_with_no_rate_table(client):
+    case_id = _create_case(client)
+    import openpyxl
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Nothing", "Relevant", "Here"])
+    buf = io.BytesIO()
+    wb.save(buf)
+
+    resp = client.post(
+        f"/cases/{case_id}/member-rates/import-rate-card",
+        files={"file": ("rates.xlsx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400

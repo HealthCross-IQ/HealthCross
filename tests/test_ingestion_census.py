@@ -135,3 +135,24 @@ def test_parse_census_derives_age_as_of_policy_start_date_not_today():
     # policy start is 29, not the member's current-day age.
     assert records[0]["age"] == 29
     assert records[0]["policy_start_date"].isoformat() == "2020-01-01"
+
+
+def test_parse_census_floors_age_at_zero_for_a_newborn_added_mid_term():
+    # A newborn's DOB can fall AFTER the scheme's own policy_start_date
+    # (e.g. added as an endorsement mid-term) - age as of policy start
+    # would otherwise go negative, which silently drops the member from
+    # every age band in census_demographic_summary.
+    df = pd.DataFrame(
+        [
+            {
+                "Gender": "M",
+                "DOB": "2025-12-23",
+                "Marital Status": "Single",
+                "Relation": "Child",
+                "Nationality": "Canadian",
+                "Eff Date": "2025-10-01",
+            }
+        ]
+    )
+    records = parse_census(_xlsx(df), "census.xlsx")
+    assert records[0]["age"] == 0

@@ -1,10 +1,12 @@
+import io
 import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.ingestion.premium_summary_rate_card import lookup_rate, parse_premium_summary_rate_card
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
@@ -1056,20 +1058,17 @@ def _member_rate_row(member: models.CensusRecord, renewal_increase_pct: Optional
     }
 
 
-@router.get("/{case_id}/member-rates")
-def get_member_rates(case_id: int, db: Session = Depends(get_db)):
-    """Existing vs. new individual rate, per census member - "new" is
-    whatever the member's own new_annual_rate_override says if set,
-    otherwise existing_annual_rate grossed up by the case's own
-    renewal_increase_pct (see _member_rate_row), so the per-member table
-    stays in sync with the case-level renewal rating without duplicating
-    that calculation. case_renewal_increase_pct is None (no auto-computed
-    column, override-only) whenever the case doesn't have enough claims
-    history for a renewal rating yet - same eligibility as
-    /renewal-rating.
+def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> dict:
+    """Shared response shape for every /member-rates endpoint (GET, PATCH,
+    and the rate-card import below) - "new" is whatever the member's own
+    new_annual_rate_override says if set, otherwise existing_annual_rate
+    grossed up by the case's own renewal_increase_pct (see
+    _member_rate_row), so the per-member table stays in sync with the
+    case-level renewal rating without duplicating that calculation.
+    case_renewal_increase_pct is None (no auto-computed column,
+    override-only) whenever the case doesn't have enough claims history
+    for a renewal rating yet - same eligibility as /renewal-rating.
     """
-    case = _get_case_or_404(db, case_id)
-
     renewal_increase_pct = None
     if case.claims_ledger_entries and case.current_annual_premium:
         renewal = _case_renewal_rating(case)
@@ -1077,10 +1076,16 @@ def get_member_rates(case_id: int, db: Session = Depends(get_db)):
             renewal_increase_pct = renewal["renewal_increase_pct"]
 
     members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
-    return {
-        "case_renewal_increase_pct": renewal_increase_pct,
-        "members": members,
-    }
+    response = {"case_renewal_increase_pct": renewal_increase_pct, "members": members}
+    if extra:
+        response.update(extra)
+    return response
+
+
+@router.get("/{case_id}/member-rates")
+def get_member_rates(case_id: int, db: Session = Depends(get_db)):
+    case = _get_case_or_404(db, case_id)
+    return _member_rates_response(case)
 
 
 @router.patch("/{case_id}/member-rates")
@@ -1107,15 +1112,48 @@ def update_member_rates(case_id: int, rates: List[schemas.MemberRateIn], db: Ses
         member.new_annual_rate_override = rate.new_annual_rate_override
 
     db.commit()
+    return _member_rates_response(case)
 
-    renewal_increase_pct = None
-    if case.claims_ledger_entries and case.current_annual_premium:
-        renewal = _case_renewal_rating(case)
-        if renewal is not None:
-            renewal_increase_pct = renewal["renewal_increase_pct"]
 
-    members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
-    return {
-        "case_renewal_increase_pct": renewal_increase_pct,
-        "members": members,
-    }
+@router.post("/{case_id}/member-rates/import-rate-card")
+async def import_member_rate_card(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Bulk-fills existing_annual_rate for every census member matched
+    against a QIC/broker "Premium Summary" rate card (see
+    app/ingestion/premium_summary_rate_card.py) by the member's own
+    category/gender/age - instead of typing well over a hundred rates in
+    by hand. A member whose category/age/gender doesn't match any row in
+    the file is left untouched and reported back in "unmatched" so gaps
+    stay visible rather than silently zeroed. detected_fees is whatever
+    Brokerage/TPA/HC percentages the file's own header block states, for
+    the caller to offer applying to the case - never auto-applied here,
+    since that would silently overwrite the case's own fee split.
+    """
+    case = _get_case_or_404(db, case_id)
+    content = await file.read()
+    try:
+        parsed = parse_premium_summary_rate_card(io.BytesIO(content))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    matched_count = 0
+    unmatched = []
+    for member in case.census_records:
+        rate = lookup_rate(parsed["rates"], member.category, member.gender, member.age)
+        if rate is not None:
+            member.existing_annual_rate = rate
+            matched_count += 1
+        else:
+            unmatched.append({
+                "census_record_id": member.id,
+                "employee_ref": member.employee_ref,
+                "category": member.category,
+                "gender": member.gender,
+                "age": member.age,
+            })
+
+    db.commit()
+    return _member_rates_response(case, extra={
+        "matched_count": matched_count,
+        "unmatched": unmatched,
+        "detected_fees": parsed["fees"],
+    })

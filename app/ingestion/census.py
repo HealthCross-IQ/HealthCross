@@ -38,8 +38,15 @@ _CHILD_RELATIONS = {"son", "daughter", "child", "children"}
 
 
 def _calc_age(dob: date, as_of: date | None = None) -> int:
+    """Floored at 0 - age_as_of policy_start_date rather than today (see
+    callers) can go negative for a newborn added mid-term whose DOB falls
+    after the scheme's own start date. A negative age isn't meaningful
+    and silently drops the member from every age band in
+    census_demographic_summary (0 <= age <= 17 never matches -1), so
+    treat any pre-inception DOB as age 0 (infant) instead."""
     as_of = as_of or date.today()
-    return as_of.year - dob.year - ((as_of.month, as_of.day) < (dob.month, dob.day))
+    age = as_of.year - dob.year - ((as_of.month, as_of.day) < (dob.month, dob.day))
+    return max(age, 0)
 
 
 def _classify_relation(relation: Any) -> str:
