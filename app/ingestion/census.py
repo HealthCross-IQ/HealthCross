@@ -17,7 +17,7 @@ CENSUS_ALIASES: Dict[str, List[str]] = {
     "date_of_birth": ["dob", "date of birth", "birth date"],
     "gender": ["gender", "sex"],
     "marital_status": ["marital status", "marital"],
-    "relation": ["relation", "relationship", "member type"],
+    "relation": ["relation", "relationship", "member type", "dependency"],
     "emirates": ["emirates", "location", "emirate"],
     "salary_band": ["salary", "salary band", "salary category"],
     "nationality": ["nationality", "country"],

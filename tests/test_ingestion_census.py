@@ -90,6 +90,26 @@ def test_parse_census_classifies_principle_as_employee():
     assert records[0]["relation"] == "employee"
 
 
+def test_parse_census_recognizes_dependency_as_the_relation_column():
+    # A real QIC/broker export (e.g. MEMBER_LIST_*.xlsx) names this column
+    # "DEPENDENCY" rather than "Relation" - without this alias every row
+    # falls through to relation="other" (see _classify_relation), so
+    # employee_count comes back 0 even though the roster parses fine
+    # otherwise.
+    df = pd.DataFrame(
+        [
+            {"Gender": "M", "DOB": "1987-05-07", "MaritalStatus": "Married", "Dependency": "Principal", "Nationality": "India"},
+            {"Gender": "F", "DOB": "1998-12-23", "MaritalStatus": "Married", "Dependency": "Spouse", "Nationality": "Canada"},
+            {"Gender": "M", "DOB": "2025-12-23", "MaritalStatus": "Single", "Dependency": "Child", "Nationality": "Canada"},
+        ]
+    )
+    records = parse_census(_xlsx(df), "census.xlsx")
+
+    assert records[0]["relation"] == "employee"
+    assert records[1]["relation"] == "spouse"
+    assert records[2]["relation"] == "child"
+
+
 def test_parse_census_derives_age_from_dob_when_age_missing():
     df = pd.DataFrame([{"Gender": "M", "DOB": "1990-01-01", "Marital Status": "Single", "Relation": "Employee", "Nationality": "Indian"}])
     records = parse_census(_xlsx(df), "census.xlsx")

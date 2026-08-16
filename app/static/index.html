@@ -1098,6 +1098,9 @@ async function printRenewalClientSummary(variant) {
   const genderRows = census ? ['M', 'F'].map(g => `
     <div class="rcs-bar-row"><span>${g === 'M' ? 'Male' : 'Female'}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.gender_pct[g] * 100).toFixed(1)}%; ${g === 'F' ? 'background:#0ca30c;' : ''}"></div></div><span class="rcs-count">${census.gender_counts[g]}</span></div>
   `).join('') : '';
+  const relationRows = census ? Object.keys(census.relation_counts).filter(rel => census.relation_counts[rel] > 0).map(rel => `
+    <div class="rcs-bar-row"><span>${escapeHtml(rel)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.relation_pct[rel] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.relation_counts[rel]}</span></div>
+  `).join('') : '';
 
   const diagnosisRows = diagnoses.slice(0, 4).map(d => `<tr><th>${escapeHtml(d.diagnosis_description || d.diagnosis_code || 'Unknown')}</th><td class="rcs-num">AED ${d.value.toLocaleString()}</td></tr>`).join('');
 
@@ -1209,6 +1212,10 @@ async function printRenewalClientSummary(variant) {
     <div><h3>Age Band</h3><div class="rcs-bars">${ageBandRows}</div></div>
     <div><h3>Gender Split</h3><div class="rcs-bars">${genderRows}</div></div>
   </div></section>
+  <section class="rcs-section">
+    <h3>Relation Breakdown</h3>
+    <div class="rcs-bars">${relationRows}</div>
+  </section>
   ` : '<div class="rcs-redacted">No census uploaded for this case yet.</div>'}
   <section class="rcs-section">
     <h3>Claims &amp; Loss Experience</h3>
