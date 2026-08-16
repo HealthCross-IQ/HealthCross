@@ -25,6 +25,7 @@ from app.scoring.rules.renewal_rating import (
     RenewalRatingAssumptions,
     benchmark_case_against_book,
     calculate_renewal_rating,
+    case_loading_pct,
     premium_component_breakdown,
 )
 
@@ -966,11 +967,13 @@ def get_renewal_client_summary(case_id: int, db: Session = Depends(get_db)):
     benchmark = None
     premium_breakdown = None
     if case.claims_ledger_entries and case.current_annual_premium:
-        renewal = _case_renewal_rating(case)
+        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
+        renewal = _case_renewal_rating(case, loading_pct=loading)
         if renewal is not None:
             other_results = []
             for other in db.query(models.Case).filter(models.Case.id != case_id).all():
-                other_result = _case_renewal_rating(other)
+                other_loading = case_loading_pct(other.tpa_fee_pct, other.commission_pct, other.hc_fee_pct)
+                other_result = _case_renewal_rating(other, loading_pct=other_loading)
                 if other_result is not None:
                     other_results.append(other_result)
             benchmark = benchmark_case_against_book(renewal, other_results)

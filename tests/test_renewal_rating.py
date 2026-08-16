@@ -5,6 +5,7 @@ from app.scoring.rules.renewal_rating import (
     RenewalRatingAssumptions,
     benchmark_case_against_book,
     calculate_renewal_rating,
+    case_loading_pct,
     premium_component_breakdown,
 )
 
@@ -141,3 +142,27 @@ def test_premium_component_breakdown_rejects_all_zero_weights():
     result = calculate_renewal_rating(1_000_000, 1_000_000)
     with pytest.raises(ValueError):
         premium_component_breakdown(result, tpa_fee_pct=0, commission_pct=0, hc_fee_pct=0)
+
+
+def test_case_loading_pct_defaults_to_28_percent():
+    assert case_loading_pct(None, None, None) == pytest.approx(0.28)
+
+
+def test_case_loading_pct_sums_the_cases_own_fee_split():
+    # Matches a real acquisition-cost breakdown: brokerage 15% + TPA 6.5% + HC 6.5% = 28%.
+    assert case_loading_pct(tpa_fee_pct=0.065, commission_pct=0.15, hc_fee_pct=0.065) == pytest.approx(0.28)
+
+
+def test_case_loading_pct_feeds_calculate_renewal_rating_so_fees_move_the_bottom_line():
+    default_loading = case_loading_pct(None, None, None)
+    default_result = calculate_renewal_rating(
+        1_000_000, 1_000_000, RenewalRatingAssumptions(loading_pct=default_loading)
+    )
+
+    custom_loading = case_loading_pct(tpa_fee_pct=0.15, commission_pct=0.10, hc_fee_pct=0.08)
+    custom_result = calculate_renewal_rating(
+        1_000_000, 1_000_000, RenewalRatingAssumptions(loading_pct=custom_loading)
+    )
+
+    assert custom_loading == pytest.approx(0.33)
+    assert custom_result["required_premium"] != pytest.approx(default_result["required_premium"])

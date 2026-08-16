@@ -72,6 +72,38 @@ def calculate_renewal_rating(
     }
 
 
+def resolve_fee_pcts(
+    tpa_fee_pct: Optional[float] = None,
+    commission_pct: Optional[float] = None,
+    hc_fee_pct: Optional[float] = None,
+) -> tuple:
+    """Fills in any unset fee % with its DEFAULT_*_PCT counterpart, so a
+    case that hasn't set its own fee split still reproduces
+    DEFAULT_LOADING_PCT overall - shared by case_loading_pct (what feeds
+    calculate_renewal_rating) and premium_component_breakdown (how the
+    result is split for display), so the two stay consistent."""
+    return (
+        DEFAULT_TPA_FEE_PCT if tpa_fee_pct is None else tpa_fee_pct,
+        DEFAULT_COMMISSION_PCT if commission_pct is None else commission_pct,
+        DEFAULT_HC_FEE_PCT if hc_fee_pct is None else hc_fee_pct,
+    )
+
+
+def case_loading_pct(
+    tpa_fee_pct: Optional[float] = None,
+    commission_pct: Optional[float] = None,
+    hc_fee_pct: Optional[float] = None,
+) -> float:
+    """The actual total renewal loading implied by a case's own TPA
+    Fee/Commission/HC Fee split. Pass this as calculate_renewal_rating's
+    loading_pct so required_premium/renewal_increase_pct reflect the
+    case's own fee structure instead of always the 28% default -
+    otherwise the fee fields only relabel an already-fixed number (see
+    premium_component_breakdown) rather than actually changing it."""
+    tpa, commission, hc = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct)
+    return tpa + commission + hc
+
+
 def premium_component_breakdown(
     renewal_result: dict,
     tpa_fee_pct: Optional[float] = None,
@@ -93,9 +125,7 @@ def premium_component_breakdown(
     actually used, only to each other, so the three components always
     reconstruct the exact required_premium regardless of what's set.
     """
-    tpa = DEFAULT_TPA_FEE_PCT if tpa_fee_pct is None else tpa_fee_pct
-    commission = DEFAULT_COMMISSION_PCT if commission_pct is None else commission_pct
-    hc = DEFAULT_HC_FEE_PCT if hc_fee_pct is None else hc_fee_pct
+    tpa, commission, hc = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct)
     total_weight = tpa + commission + hc
     if total_weight <= 0:
         raise ValueError("tpa_fee_pct + commission_pct + hc_fee_pct must sum to a positive value.")
