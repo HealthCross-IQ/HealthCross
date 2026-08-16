@@ -106,6 +106,15 @@ class CensusRecord(Base):
     policy_end_date = Column(Date, nullable=True)
     member_start_date = Column(Date, nullable=True)
     member_end_date = Column(Date, nullable=True)
+    # This member's own current/expiring individual rate, and an optional
+    # manual override for their renewal rate - see
+    # app/api/routes_analysis.py's get_member_rates, which fills in the
+    # renewal rate for any member without an override as
+    # existing_annual_rate grossed up by the case's own renewal_increase_pct
+    # (calculate_renewal_rating), not a separate stored value, so it always
+    # stays in sync with the case-level renewal calculation.
+    existing_annual_rate = Column(Float, nullable=True)
+    new_annual_rate_override = Column(Float, nullable=True)
 
     case = relationship("Case", back_populates="census_records")
 

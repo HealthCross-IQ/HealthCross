@@ -505,3 +505,87 @@ def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client
     assert custom_required_premium != pytest.approx(default_required_premium)
     trended_claims = custom_body["renewal"]["trended_claims"]
     assert custom_required_premium == pytest.approx(trended_claims / (1 - 0.33), abs=0.5)
+
+
+def _insert_census(client, case_id, members):
+    db = client.db_session_local()
+    db.add_all([models.CensusRecord(case_id=case_id, **m) for m in members])
+    db.commit()
+    db.close()
+
+
+def test_member_rates_computes_new_rate_from_case_renewal_increase(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
+    _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
+
+    resp = client.get(f"/cases/{case_id}/renewal-client-summary")
+    renewal_increase_pct = resp.json()["renewal"]["renewal_increase_pct"]
+
+    get_resp = client.get(f"/cases/{case_id}/member-rates")
+    assert get_resp.status_code == 200
+    body = get_resp.json()
+    assert body["case_renewal_increase_pct"] == pytest.approx(renewal_increase_pct)
+    assert len(body["members"]) == 1
+    census_record_id = body["members"][0]["census_record_id"]
+    assert body["members"][0]["existing_annual_rate"] is None
+
+    patch_resp = client.patch(
+        f"/cases/{case_id}/member-rates",
+        json=[{"census_record_id": census_record_id, "existing_annual_rate": 5000}],
+    )
+    assert patch_resp.status_code == 200
+    member = patch_resp.json()["members"][0]
+    assert member["existing_annual_rate"] == 5000
+    expected_new_rate = round(5000 * (1 + renewal_increase_pct / 100), 2)
+    assert member["computed_new_rate"] == pytest.approx(expected_new_rate)
+    assert member["effective_new_rate"] == pytest.approx(expected_new_rate)
+    assert member["rate_change_pct"] == pytest.approx(renewal_increase_pct, abs=0.01)
+
+
+def test_member_rates_override_wins_over_computed_new_rate(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
+    _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
+    census_record_id = client.get(f"/cases/{case_id}/member-rates").json()["members"][0]["census_record_id"]
+
+    patch_resp = client.patch(
+        f"/cases/{case_id}/member-rates",
+        json=[{"census_record_id": census_record_id, "existing_annual_rate": 5000, "new_annual_rate_override": 6000}],
+    )
+    member = patch_resp.json()["members"][0]
+    assert member["computed_new_rate"] != 6000
+    assert member["effective_new_rate"] == 6000
+    assert member["rate_change_pct"] == pytest.approx(20.0)
+
+
+def test_member_rates_without_renewal_data_leaves_new_rate_unset(client):
+    case_id = _create_case(client, company_name="No Claims Yet")
+    _insert_census(client, case_id, [{"employee_ref": "E1", "age": 40, "gender": "M", "relation": "employee"}])
+
+    resp = client.get(f"/cases/{case_id}/member-rates")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["case_renewal_increase_pct"] is None
+    assert body["members"][0]["computed_new_rate"] is None
+    assert body["members"][0]["effective_new_rate"] is None
+
+
+def test_member_rates_rejects_census_record_from_a_different_case(client):
+    case_id = _create_case(client)
+    other_case_id = _create_case(client, company_name="Other Co")
+    _insert_census(client, other_case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
+    other_census_id = client.get(f"/cases/{other_case_id}/member-rates").json()["members"][0]["census_record_id"]
+
+    resp = client.patch(
+        f"/cases/{case_id}/member-rates",
+        json=[{"census_record_id": other_census_id, "existing_annual_rate": 1000}],
+    )
+    assert resp.status_code == 404
+
+
+def test_member_rates_404s_for_missing_case(client):
+    resp = client.get("/cases/999999/member-rates")
+    assert resp.status_code == 404

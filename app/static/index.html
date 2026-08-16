@@ -1348,6 +1348,7 @@ const TABS = [
   { id: 'census', label: 'Census' },
   { id: 'benefits', label: 'Benefits' },
   { id: 'claims', label: 'Claims' },
+  { id: 'member-rates', label: 'Member Rates' },
   { id: 'scorecard', label: 'Scorecard' },
   { id: 'new-business', label: 'New Business Quote' },
 ];
@@ -1516,6 +1517,11 @@ function renderCaseWorkspace() {
       <div id="renewal-benchmark-area"></div>
     </div>
 
+    <div class="tab-panel" data-tab="member-rates">
+      <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('member-rates', 'Existing vs. New Rates by Member')">Print / Save as PDF</button></div>
+      <div id="member-rates-area"></div>
+    </div>
+
     <div class="tab-panel" data-tab="new-business">
       <div id="new-business-rating-area"></div>
     </div>
@@ -1566,6 +1572,7 @@ function renderCaseWorkspace() {
   loadRenewalRating();
   loadRenewalBenchmark();
   loadNewBusinessRating();
+  loadMemberRates();
 }
 
 function _completenessPillHtml(label, done, required, extra, missingText) {
@@ -1629,6 +1636,73 @@ async function saveCaseDetails() {
   }
 }
 
+async function loadMemberRates() {
+  const area = document.getElementById('member-rates-area');
+  if (!area || !currentCase) return;
+  try {
+    const data = await api(`/cases/${currentCase.id}/member-rates`);
+    if (!data.members.length) {
+      area.innerHTML = '<div class="hint">No census uploaded yet - upload one on the Census tab first.</div>';
+      return;
+    }
+    const increaseNote = data.case_renewal_increase_pct != null
+      ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills each member's new rate below once their existing rate is saved. Enter a value in "New rate override" only to set that one member's new rate manually instead.`
+      : `No case-level renewal increase computed yet (needs a claims ledger and current premium set on this case) - enter each member's new rate manually below via "New rate override", or come back once the renewal rating is available.`;
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>Existing vs. New Rates by Member</h3>
+        <div class="hint">${increaseNote}</div>
+        <table>
+          <tr>
+            <th>Member</th><th>Category</th><th>Age</th><th>Gender</th><th>Relation</th>
+            <th>Existing rate (AED)</th><th>New rate override (AED, optional)</th><th>Effective new rate</th><th>Change</th>
+          </tr>
+          ${data.members.map(m => `
+            <tr>
+              <td>${escapeHtml(m.employee_ref || ('#' + m.census_record_id))}</td>
+              <td>${escapeHtml(m.category || '-')}</td>
+              <td>${m.age ?? '-'}</td>
+              <td>${escapeHtml(m.gender || '-')}</td>
+              <td>${escapeHtml(m.relation || '-')}</td>
+              <td><input type="number" step="0.01" data-mr-existing="${m.census_record_id}" value="${m.existing_annual_rate ?? ''}" style="width:110px;"></td>
+              <td><input type="number" step="0.01" data-mr-override="${m.census_record_id}" value="${m.new_annual_rate_override ?? ''}" placeholder="${m.computed_new_rate != null ? m.computed_new_rate.toLocaleString() : 'auto'}" style="width:110px;"></td>
+              <td>${m.effective_new_rate != null ? 'AED ' + m.effective_new_rate.toLocaleString() : '-'}</td>
+              <td>${m.rate_change_pct != null ? (m.rate_change_pct > 0 ? '+' : '') + m.rate_change_pct + '%' : '-'}</td>
+            </tr>
+          `).join('')}
+        </table>
+        <div style="margin-top:12px;"><button class="primary" onclick="saveMemberRates()">Save rates</button></div>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function saveMemberRates() {
+  const rates = Array.from(document.querySelectorAll('[data-mr-existing]')).map(el => {
+    const id = Number(el.dataset.mrExisting);
+    const overrideEl = document.querySelector(`[data-mr-override="${id}"]`);
+    return {
+      census_record_id: id,
+      existing_annual_rate: el.value !== '' ? Number(el.value) : null,
+      new_annual_rate_override: overrideEl && overrideEl.value !== '' ? Number(overrideEl.value) : null,
+    };
+  });
+  try {
+    await api(`/cases/${currentCase.id}/member-rates`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(rates),
+    });
+    toast('Member rates saved');
+    loadMemberRates();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 async function uploadFile(kind) {
   const input = document.getElementById(`file-${kind}`);
   const statusEl = document.getElementById(`status-${kind}`);
@@ -1668,7 +1742,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -1679,7 +1753,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -1877,7 +1951,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -1888,7 +1962,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   if (uploadedKinds.size) toast('Quick upload complete');

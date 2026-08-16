@@ -79,6 +79,17 @@ def test_parse_census_classifies_relation_labels():
     assert records[2]["relation"] == "child"
 
 
+def test_parse_census_classifies_principle_as_employee():
+    # Some broker templates spell the primary member's relation label
+    # "Principle" rather than "Principal" - both mean the same thing.
+    df = pd.DataFrame(
+        [{"Gender": "M", "DOB": "1985-01-01", "Marital Status": "Married", "Relation": "Principle", "Nationality": "UAE"}]
+    )
+    records = parse_census(_xlsx(df), "census.xlsx")
+
+    assert records[0]["relation"] == "employee"
+
+
 def test_parse_census_derives_age_from_dob_when_age_missing():
     df = pd.DataFrame([{"Gender": "M", "DOB": "1990-01-01", "Marital Status": "Single", "Relation": "Employee", "Nationality": "Indian"}])
     records = parse_census(_xlsx(df), "census.xlsx")

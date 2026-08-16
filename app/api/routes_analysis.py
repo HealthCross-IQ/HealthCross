@@ -1015,3 +1015,97 @@ def get_renewal_client_summary(case_id: int, db: Session = Depends(get_db)):
         "census_summary": census_summary,
         "top_diagnoses": top_diagnoses,
     }
+
+
+def _member_rate_row(member: models.CensusRecord, renewal_increase_pct: Optional[float]) -> dict:
+    existing = member.existing_annual_rate
+    computed_new_rate = None
+    if existing is not None and renewal_increase_pct is not None:
+        computed_new_rate = round(existing * (1 + renewal_increase_pct / 100), 2)
+
+    override = member.new_annual_rate_override
+    effective_new_rate = override if override is not None else computed_new_rate
+    rate_change_pct = None
+    if existing not in (None, 0) and effective_new_rate is not None:
+        rate_change_pct = round((effective_new_rate / existing - 1) * 100, 2)
+
+    return {
+        "census_record_id": member.id,
+        "employee_ref": member.employee_ref,
+        "category": member.category,
+        "age": member.age,
+        "gender": member.gender,
+        "relation": member.relation,
+        "existing_annual_rate": existing,
+        "computed_new_rate": computed_new_rate,
+        "new_annual_rate_override": override,
+        "effective_new_rate": effective_new_rate,
+        "rate_change_pct": rate_change_pct,
+    }
+
+
+@router.get("/{case_id}/member-rates")
+def get_member_rates(case_id: int, db: Session = Depends(get_db)):
+    """Existing vs. new individual rate, per census member - "new" is
+    whatever the member's own new_annual_rate_override says if set,
+    otherwise existing_annual_rate grossed up by the case's own
+    renewal_increase_pct (see _member_rate_row), so the per-member table
+    stays in sync with the case-level renewal rating without duplicating
+    that calculation. case_renewal_increase_pct is None (no auto-computed
+    column, override-only) whenever the case doesn't have enough claims
+    history for a renewal rating yet - same eligibility as
+    /renewal-rating.
+    """
+    case = _get_case_or_404(db, case_id)
+
+    renewal_increase_pct = None
+    if case.claims_ledger_entries and case.current_annual_premium:
+        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
+        renewal = _case_renewal_rating(case, loading_pct=loading)
+        if renewal is not None:
+            renewal_increase_pct = renewal["renewal_increase_pct"]
+
+    members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
+    return {
+        "case_renewal_increase_pct": renewal_increase_pct,
+        "members": members,
+    }
+
+
+@router.patch("/{case_id}/member-rates")
+def update_member_rates(case_id: int, rates: List[schemas.MemberRateIn], db: Session = Depends(get_db)):
+    """Bulk-saves existing_annual_rate/new_annual_rate_override for a
+    batch of this case's own census members in one call, so the
+    per-member rate table can save every edited row at once. 404s if any
+    census_record_id isn't a member of this case (typo/wrong case
+    guard), leaving nothing partially saved.
+    """
+    case = _get_case_or_404(db, case_id)
+    members_by_id = {m.id: m for m in case.census_records}
+
+    for rate in rates:
+        if rate.census_record_id not in members_by_id:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Census record {rate.census_record_id} does not belong to case {case_id}",
+            )
+
+    for rate in rates:
+        member = members_by_id[rate.census_record_id]
+        member.existing_annual_rate = rate.existing_annual_rate
+        member.new_annual_rate_override = rate.new_annual_rate_override
+
+    db.commit()
+
+    renewal_increase_pct = None
+    if case.claims_ledger_entries and case.current_annual_premium:
+        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
+        renewal = _case_renewal_rating(case, loading_pct=loading)
+        if renewal is not None:
+            renewal_increase_pct = renewal["renewal_increase_pct"]
+
+    members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
+    return {
+        "case_renewal_increase_pct": renewal_increase_pct,
+        "members": members,
+    }

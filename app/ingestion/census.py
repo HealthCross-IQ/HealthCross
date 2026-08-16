@@ -32,7 +32,7 @@ CENSUS_ALIASES: Dict[str, List[str]] = {
     "member_end_date": ["endodate (member end date)", "member end date"],
 }
 
-_EMPLOYEE_RELATIONS = {"employee", "principal", "main member", "member", "self"}
+_EMPLOYEE_RELATIONS = {"employee", "principal", "principle", "main member", "member", "self"}
 _SPOUSE_RELATIONS = {"wife", "husband", "spouse"}
 _CHILD_RELATIONS = {"son", "daughter", "child", "children"}
 

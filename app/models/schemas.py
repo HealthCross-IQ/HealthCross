@@ -64,6 +64,14 @@ class CensusRecordOut(BaseModel):
     policy_end_date: Optional[date] = None
     member_start_date: Optional[date] = None
     member_end_date: Optional[date] = None
+    existing_annual_rate: Optional[float] = None
+    new_annual_rate_override: Optional[float] = None
+
+
+class MemberRateIn(BaseModel):
+    census_record_id: int
+    existing_annual_rate: Optional[float] = None
+    new_annual_rate_override: Optional[float] = None
 
 
 class BenefitPlanOut(BaseModel):
