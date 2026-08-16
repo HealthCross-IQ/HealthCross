@@ -58,6 +58,18 @@ class Case(Base):
     # distinct from target_premium (a broker's target for a NEW quote).
     current_annual_premium = Column(Float, nullable=True)
 
+    # The renewal premium's own component breakdown - what the loading %
+    # in app/scoring/rules/renewal_rating.py actually consists of, broken
+    # into its real named pieces rather than one blended number. Nullable:
+    # falls back to DEFAULT_TPA_FEE_PCT/DEFAULT_COMMISSION_PCT/
+    # DEFAULT_HC_FEE_PCT (which sum to DEFAULT_LOADING_PCT) when unset, so
+    # existing cases don't need to be touched. Risk Premium (the carrier's
+    # own share, e.g. QIC) isn't stored separately - it's always
+    # whatever's left over (see premium_component_breakdown).
+    tpa_fee_pct = Column(Float, nullable=True)
+    commission_pct = Column(Float, nullable=True)
+    hc_fee_pct = Column(Float, nullable=True)
+
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")

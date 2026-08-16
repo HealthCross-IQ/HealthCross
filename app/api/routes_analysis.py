@@ -25,6 +25,7 @@ from app.scoring.rules.renewal_rating import (
     RenewalRatingAssumptions,
     benchmark_case_against_book,
     calculate_renewal_rating,
+    premium_component_breakdown,
 )
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -941,4 +942,73 @@ def get_renewal_benchmark(case_id: int, db: Session = Depends(get_db)):
     return {
         "case": this_result,
         "book": benchmark_case_against_book(this_result, other_results),
+    }
+
+
+@router.get("/{case_id}/renewal-client-summary")
+def get_renewal_client_summary(case_id: int, db: Session = Depends(get_db)):
+    """Everything the "Renewal Client Summary" export (Internal and
+    External versions, printed from the case overview) needs in one call:
+    case identity, this case's renewal rating and book benchmark (see
+    get_renewal_rating/get_renewal_benchmark), its premium split into
+    Risk Premium/TPA Fee/Commission/HC Fee (see
+    premium_component_breakdown - uses the case's own
+    tpa_fee_pct/commission_pct/hc_fee_pct if set, the usual defaults
+    otherwise), a census demographic summary, and the top claims
+    diagnoses by cost. Same eligibility rules as /renewal-rating for the
+    renewal-rating/benchmark/premium-breakdown pieces; census and
+    diagnoses are included whenever they're available regardless, since
+    the census/claims tabs don't require a renewal rating to exist.
+    """
+    case = _get_case_or_404(db, case_id)
+
+    renewal = None
+    benchmark = None
+    premium_breakdown = None
+    if case.claims_ledger_entries and case.current_annual_premium:
+        renewal = _case_renewal_rating(case)
+        if renewal is not None:
+            other_results = []
+            for other in db.query(models.Case).filter(models.Case.id != case_id).all():
+                other_result = _case_renewal_rating(other)
+                if other_result is not None:
+                    other_results.append(other_result)
+            benchmark = benchmark_case_against_book(renewal, other_results)
+            premium_breakdown = premium_component_breakdown(
+                renewal, case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct
+            )
+
+    census_summary = None
+    if case.census_records:
+        census = [
+            {
+                "age": c.age,
+                "gender": c.gender,
+                "marital_status": c.marital_status,
+                "relation": c.relation,
+                "nationality_zone": c.nationality_zone,
+                "nationality": c.nationality,
+            }
+            for c in case.census_records
+        ]
+        census_summary = census_demographic_summary(census)
+
+    top_diagnoses = None
+    if case.claims_ledger_entries:
+        top_diagnoses = top_diagnoses_by_final_amount(_ledger_entry_dicts(case.claims_ledger_entries), top_n=5)
+
+    return {
+        "case": {
+            "id": case.id,
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "existing_insurer": case.existing_insurer,
+            "policy_start_date": case.policy_start_date,
+            "renewal_date": case.renewal_date,
+        },
+        "renewal": renewal,
+        "benchmark": benchmark,
+        "premium_breakdown": premium_breakdown,
+        "census_summary": census_summary,
+        "top_diagnoses": top_diagnoses,
     }

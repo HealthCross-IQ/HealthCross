@@ -1017,6 +1017,245 @@ function printTabAsPdf(tabId, title) {
   win.document.close();
 }
 
+// Renewal Client Summary - a 3-page printed export (Executive Summary,
+// Census Analysis, Benefits & Premium Comparison) combining case info,
+// the renewal rating, the book-wide benchmark, and the premium's
+// component breakdown into one document - see
+// GET /cases/{id}/renewal-client-summary. Two variants share this same
+// builder: "internal" (sales team, includes the book-wide Renewal
+// Benchmark) and "external" (broker/client-ready, benchmark omitted -
+// see app/api/routes_analysis.py's docstring on why no external
+// market-rate comparison exists to show instead).
+async function printRenewalClientSummary(variant) {
+  if (!currentCase) return;
+  let data;
+  try {
+    data = await api(`/cases/${currentCase.id}/renewal-client-summary`);
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+  if (!data.renewal) {
+    toast('No renewal rating available yet - upload a claims ledger and set the current annual premium first', true);
+    return;
+  }
+
+  const c = data.case;
+  const r = data.renewal;
+  const bench = data.benchmark;
+  const pb = data.premium_breakdown;
+  const census = data.census_summary;
+  const diagnoses = data.top_diagnoses || [];
+  const isInternal = variant === 'internal';
+
+  const lossRatioPct = r.actual_loss_ratio * 100;
+  const gaugeMax = Math.max(250, Math.ceil(lossRatioPct / 50) * 50);
+  const arcLen = Math.PI * 80;
+  const gaugeDash = (arcLen * Math.min(lossRatioPct / gaugeMax, 1)).toFixed(1);
+
+  const buildupMax = Math.max(r.annualized_incurred_claims, r.trended_claims, r.current_annual_premium, r.required_premium);
+  const buildupPct = v => (v / buildupMax * 100).toFixed(1);
+
+  const topDiagnosis = diagnoses[0];
+  const topDiagnosisShare = topDiagnosis ? (topDiagnosis.value / r.annualized_incurred_claims * 100) : 0;
+  const diagnosisNote = (topDiagnosis && topDiagnosisShare >= 8)
+    ? `${escapeHtml(topDiagnosis.diagnosis_description || 'One diagnosis')} accounts for AED ${topDiagnosis.value.toLocaleString()} of claims on its own - about ${topDiagnosisShare.toFixed(0)}% of the annualized total.`
+    : null;
+
+  let benchmarkHtml = '';
+  if (isInternal) {
+    if (bench && bench.comparable_case_count > 0) {
+      const allPct = [...bench.other_loss_ratios.map(v => v * 100), lossRatioPct];
+      const minV = Math.min(...allPct), maxV = Math.max(...allPct);
+      const pad = (maxV - minV) * 0.15 || 5;
+      const domainMin = Math.max(0, minV - pad), domainMax = maxV + pad;
+      const xScale = v => 20 + (v - domainMin) / (domainMax - domainMin || 1) * 800;
+      const dots = bench.other_loss_ratios.map(v => `<circle cx="${xScale(v * 100)}" cy="40" r="5" fill="#898781" opacity="0.55"></circle>`).join('');
+      benchmarkHtml = `
+        <div class="rcs-section">
+          <h3>Renewal Benchmark <span class="rcs-muted-label">(internal only)</span></h3>
+          <p class="rcs-desc">This case's loss ratio against ${bench.comparable_case_count} other HealthCross renewal case${bench.comparable_case_count === 1 ? '' : 's'} with a computed rating - case-to-case, no external market rate available yet.</p>
+          <svg viewBox="0 0 840 70" class="rcs-bench-svg">
+            <line x1="20" y1="40" x2="820" y2="40" stroke="#e1e0d9" stroke-width="2" stroke-linecap="round"></line>
+            ${dots}
+            <circle cx="${xScale(lossRatioPct)}" cy="40" r="7" fill="#d03b3b" stroke="#fcfcfb" stroke-width="2"></circle>
+            <text x="${xScale(lossRatioPct)}" y="24" text-anchor="middle" class="rcs-bench-label">this case &middot; ${lossRatioPct.toFixed(0)}%</text>
+          </svg>
+          ${bench.percentile != null ? `<p class="rcs-desc">${bench.percentile}th percentile${bench.low_credibility ? ' - small sample, treat as directional' : ''}.</p>` : ''}
+        </div>`;
+    } else {
+      benchmarkHtml = `
+        <div class="rcs-section">
+          <h3>Renewal Benchmark <span class="rcs-muted-label">(internal only)</span></h3>
+          <div class="rcs-redacted">No other case has a computed renewal rating yet to benchmark against.</div>
+        </div>`;
+    }
+  }
+
+  const ageBandRows = census ? Object.keys(census.age_band_counts).filter(b => census.age_band_counts[b] > 0).map(band => `
+    <div class="rcs-bar-row"><span>${escapeHtml(band)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.age_band_pct[band] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.age_band_counts[band]}</span></div>
+  `).join('') : '';
+  const genderRows = census ? ['M', 'F'].map(g => `
+    <div class="rcs-bar-row"><span>${g === 'M' ? 'Male' : 'Female'}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.gender_pct[g] * 100).toFixed(1)}%; ${g === 'F' ? 'background:#0ca30c;' : ''}"></div></div><span class="rcs-count">${census.gender_counts[g]}</span></div>
+  `).join('') : '';
+
+  const diagnosisRows = diagnoses.slice(0, 4).map(d => `<tr><th>${escapeHtml(d.diagnosis_description || d.diagnosis_code || 'Unknown')}</th><td class="rcs-num">AED ${d.value.toLocaleString()}</td></tr>`).join('');
+
+  const notesText = isInternal
+    ? (diagnosisNote || 'No single diagnosis stands out as a disproportionate cost driver this period.')
+    : `This renewal reflects this year's claims experience.${diagnosisNote ? ' ' + diagnosisNote : ''} We're happy to walk through the details and discuss options for managing next year's cost, including plan design adjustments.`;
+
+  const title = `Renewal Client Summary${isInternal ? ' - Internal' : ''} - ${c.company_name}`;
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f9f9f7; color: #0b0b0b; font-variant-numeric: tabular-nums; padding: 30px 16px; }
+  .rcs-paper { max-width: 860px; margin: 0 auto 24px; }
+  .rcs-page-tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #898781; margin-bottom: 6px; }
+  .rcs-doc { background: #fcfcfb; border: 1px solid rgba(11,11,11,0.10); border-radius: 10px; padding: 34px 38px; page-break-after: always; }
+  .rcs-doc-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0b0b0b; padding-bottom: 14px; margin-bottom: 20px; }
+  .rcs-brand { font-size: 16px; font-weight: 800; }
+  .rcs-brand span { color: #898781; font-weight: 500; font-size: 11.5px; display: block; margin-top: 2px; }
+  .rcs-meta { text-align: right; font-size: 10.5px; color: #898781; line-height: 1.6; }
+  .rcs-client-block { margin-bottom: 20px; }
+  .rcs-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #2a78d6; margin-bottom: 5px; }
+  .rcs-client-block h1 { font-size: 21px; margin: 0 0 4px; font-weight: 800; }
+  .rcs-client-block .rcs-sub { font-size: 12px; color: #52514e; }
+  .rcs-status-pill { display: inline-flex; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #fab2191a; color: #8a5a00; margin-left: 8px; }
+  .rcs-hero-row { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .rcs-hero-label { font-size: 10px; color: #898781; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
+  .rcs-hero-value { font-size: 30px; font-weight: 800; line-height: 1; }
+  .rcs-hero-value.rcs-muted { color: #52514e; }
+  .rcs-hero-delta { font-size: 13px; font-weight: 800; color: #d03b3b; background: #d03b3b1a; padding: 3px 11px; border-radius: 999px; }
+  .rcs-viz-split { display: grid; grid-template-columns: 170px 1fr; gap: 24px; align-items: center; margin-bottom: 22px; }
+  .rcs-gauge-num { font-size: 22px; font-weight: 800; text-align: center; margin-top: -44px; }
+  .rcs-gauge-caption { font-size: 10px; color: #898781; text-align: center; }
+  .rcs-buildup-row { display: grid; grid-template-columns: 122px 1fr 92px; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 8px; }
+  .rcs-buildup-track { height: 14px; background: #f0efec; border-radius: 4px; overflow: hidden; position: relative; }
+  .rcs-buildup-fill { height: 100%; border-radius: 4px; }
+  .rcs-buildup-value { text-align: right; font-weight: 700; }
+  section.rcs-section { margin-bottom: 22px; }
+  section.rcs-section h3 { font-size: 13px; font-weight: 800; margin: 0 0 3px; }
+  .rcs-desc { font-size: 11px; color: #898781; margin: 0 0 10px; line-height: 1.5; }
+  table.rcs-data { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.rcs-data th { text-align: left; font-size: 9.5px; text-transform: uppercase; color: #898781; font-weight: 700; padding: 0 8px 6px 0; border-bottom: 1px solid #0b0b0b; }
+  table.rcs-data td { padding: 6px 8px 6px 0; border-bottom: 1px solid rgba(11,11,11,0.10); }
+  table.rcs-data tr.rcs-total td, table.rcs-data tr.rcs-total th { font-weight: 700; border-top: 1.5px solid #0b0b0b; border-bottom: none; }
+  .rcs-num { text-align: right; }
+  table.rcs-compare { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.rcs-compare th { text-align: right; font-size: 9.5px; text-transform: uppercase; color: #898781; font-weight: 700; padding: 0 10px 8px; border-bottom: 1px solid #0b0b0b; }
+  table.rcs-compare th:first-child, table.rcs-compare td:first-child { text-align: left; padding-left: 0; }
+  table.rcs-compare td { text-align: right; padding: 9px 10px; border-bottom: 1px solid rgba(11,11,11,0.10); }
+  table.rcs-compare tr.rcs-total td { font-weight: 800; font-size: 12px; border-top: 1.5px solid #0b0b0b; border-bottom: none; }
+  .rcs-change-up { color: #d03b3b; font-weight: 700; }
+  .rcs-pct-pill { font-size: 9.5px; color: #2a78d6; background: #2a78d61a; padding: 2px 7px; border-radius: 999px; font-weight: 700; margin-left: 5px; }
+  .rcs-bars { display: flex; flex-direction: column; gap: 6px; }
+  .rcs-bar-row { display: grid; grid-template-columns: 80px 1fr 40px; align-items: center; gap: 8px; font-size: 11px; }
+  .rcs-bar-track { height: 8px; background: #f0efec; border-radius: 4px; overflow: hidden; }
+  .rcs-bar-fill { height: 100%; background: #2a78d6; border-radius: 4px; }
+  .rcs-count { text-align: right; color: #52514e; font-size: 10.5px; }
+  .rcs-split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+  .rcs-notes-box { border: 1px solid rgba(11,11,11,0.10); background: #f0efec; border-radius: 8px; padding: 13px 15px; font-size: 11.5px; line-height: 1.55; }
+  .rcs-redacted { background: repeating-linear-gradient(135deg, #f0efec, #f0efec 4px, rgba(11,11,11,0.10) 4px, rgba(11,11,11,0.10) 8px); border-radius: 6px; padding: 12px 14px; font-size: 10.5px; color: #898781; text-align: center; font-style: italic; }
+  .rcs-muted-label { font-weight: 400; color: #898781; font-size: 10px; }
+  .rcs-bench-svg { width: 100%; display: block; overflow: visible; }
+  .rcs-bench-label { font-size: 11px; font-weight: 700; fill: #d03b3b; }
+  .rcs-doc-footer { border-top: 1px solid rgba(11,11,11,0.10); padding-top: 10px; margin-top: 24px; font-size: 9.5px; color: #898781; display: flex; justify-content: space-between; }
+  @media print { .rcs-doc { border: none; } body { background: #fff; padding: 0; } }
+</style></head><body>
+
+<div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 3 &middot; Executive Summary</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Renewal Client Summary${isInternal ? ' - Internal' : ''}<br>Generated ${new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'})}</div></div>
+  <div class="rcs-client-block">
+    <div class="rcs-eyebrow">Renewal &middot; Existing Business</div>
+    <h1>${escapeHtml(c.company_name)}<span class="rcs-status-pill">Renewal in progress</span></h1>
+    <div class="rcs-sub">Broker: ${escapeHtml(c.broker_name)}${c.existing_insurer ? ' &middot; Existing insurer: ' + escapeHtml(c.existing_insurer) : ''}${c.policy_start_date ? ' &middot; Policy start: ' + escapeHtml(c.policy_start_date) : ''}</div>
+  </div>
+  <div class="rcs-hero-row">
+    <div><div class="rcs-hero-label">Current Premium</div><div class="rcs-hero-value rcs-muted">AED ${(r.current_annual_premium / 1e6).toFixed(2)}M</div></div>
+    <div><div class="rcs-hero-label">Proposed Renewal Premium</div><div class="rcs-hero-value">AED ${(r.required_premium / 1e6).toFixed(2)}M</div></div>
+    <span class="rcs-hero-delta">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</span>
+  </div>
+  <div class="rcs-viz-split">
+    <div>
+      <svg viewBox="0 0 190 100" style="width:100%;">
+        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#f0efec" stroke-width="16" stroke-linecap="round"></path>
+        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#d03b3b" stroke-width="16" stroke-linecap="round" stroke-dasharray="${gaugeDash} 999"></path>
+      </svg>
+      <div class="rcs-gauge-num">${lossRatioPct.toFixed(1)}%</div>
+      <div class="rcs-gauge-caption">Actual Loss Ratio</div>
+    </div>
+    <div>
+      <div class="rcs-buildup-row"><span>Annualized Claims</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.annualized_incurred_claims)}%; background:#898781;"></div></div><span class="rcs-buildup-value">${r.annualized_incurred_claims.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.trended_claims)}%; background:#52514e;"></div></div><span class="rcs-buildup-value">${r.trended_claims.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span>Current Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.current_annual_premium)}%; border:1.5px dashed #898781; background:none;"></div></div><span class="rcs-buildup-value">${r.current_annual_premium.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span style="font-weight:800; color:#d03b3b;">Required Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.required_premium)}%; background:#d03b3b;"></div></div><span class="rcs-buildup-value" style="color:#d03b3b;">${r.required_premium.toLocaleString()}</span></div>
+    </div>
+  </div>
+  ${benchmarkHtml}
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
+</div></div>
+
+<div class="rcs-paper"><div class="rcs-page-tag">Page 2 of 3 &middot; Census Analysis</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Census Analysis${isInternal ? ' - Internal' : ''}<br>${escapeHtml(c.company_name)}</div></div>
+  ${census ? `
+  <section class="rcs-section">
+    <h3>Population Snapshot</h3>
+    <table class="rcs-data"><tr><th>Total Lives</th><td class="rcs-num">${census.total_members}</td></tr><tr><th>Employees</th><td class="rcs-num">${census.employee_count}</td></tr><tr><th>Avg. Age</th><td class="rcs-num">${census.avg_age ?? '-'}</td></tr></table>
+  </section>
+  <section class="rcs-section"><div class="rcs-split">
+    <div><h3>Age Band</h3><div class="rcs-bars">${ageBandRows}</div></div>
+    <div><h3>Gender Split</h3><div class="rcs-bars">${genderRows}</div></div>
+  </div></section>
+  ` : '<div class="rcs-redacted">No census uploaded for this case yet.</div>'}
+  <section class="rcs-section">
+    <h3>Claims &amp; Loss Experience</h3>
+    <p class="rcs-desc">Months used: ${r.months_used.join(', ')}</p>
+    <table class="rcs-data">
+      <tr><th>Annualized incurred claims</th><td class="rcs-num">AED ${r.annualized_incurred_claims.toLocaleString()}</td></tr>
+      <tr><th>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</th><td class="rcs-num">AED ${r.trended_claims.toLocaleString()}</td></tr>
+      <tr class="rcs-total"><th>Required annual premium</th><td class="rcs-num">AED ${r.required_premium.toLocaleString()}</td></tr>
+    </table>
+  </section>
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
+</div></div>
+
+<div class="rcs-paper"><div class="rcs-page-tag">Page 3 of 3 &middot; Benefits &amp; Premium Comparison</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Benefits &amp; Premium Comparison${isInternal ? ' - Internal' : ''}<br>${escapeHtml(c.company_name)}</div></div>
+  <section class="rcs-section">
+    <h3>Existing Premium vs. Proposed Renewal Terms</h3>
+    <p class="rcs-desc">Every component below is this case's own set %, applied to both columns for a fair comparison.</p>
+    <table class="rcs-compare">
+      <tr><th></th><th>Existing</th><th>Proposed Renewal</th><th>Change</th></tr>
+      <tr><td>Risk Premium${c.existing_insurer ? ' (' + escapeHtml(c.existing_insurer) + ')' : ''}<span class="rcs-pct-pill">${(pb.risk_premium_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.risk_premium.toLocaleString()}</td><td>AED ${pb.proposed.risk_premium.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr><td>TPA Fee<span class="rcs-pct-pill">${(pb.tpa_fee_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.tpa_fee.toLocaleString()}</td><td>AED ${pb.proposed.tpa_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr><td>Commission<span class="rcs-pct-pill">${(pb.commission_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.commission.toLocaleString()}</td><td>AED ${pb.proposed.commission.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr><td>HC Fee<span class="rcs-pct-pill">${(pb.hc_fee_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.hc_fee.toLocaleString()}</td><td>AED ${pb.proposed.hc_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr class="rcs-total"><td>Total Annual Premium</td><td>AED ${pb.existing.total.toLocaleString()}</td><td>AED ${pb.proposed.total.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+    </table>
+  </section>
+  ${diagnoses.length ? `
+  <section class="rcs-section">
+    <h3>Top Diagnosis by Cost</h3>
+    <table class="rcs-data">${diagnosisRows}</table>
+  </section>` : ''}
+  <section class="rcs-section">
+    <h3>Notes for Broker &amp; Client</h3>
+    <div class="rcs-notes-box">${notesText}</div>
+  </section>
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
+</div></div>
+
+<script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
 function _comparisonRowsFlat(result) {
   const rows = [];
   result.sections.forEach(section => {
@@ -1152,6 +1391,24 @@ function renderCaseWorkspace() {
         </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
+      ${c.business_type === 'existing' ? `
+      <div class="row" style="margin-top:12px; align-items:flex-end;">
+        <div>
+          <label>TPA Fee % (of renewal premium)</label>
+          <input type="number" step="0.1" id="case-tpa-fee-pct" value="${c.tpa_fee_pct != null ? (c.tpa_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 8">
+        </div>
+        <div>
+          <label>Commission % (of renewal premium)</label>
+          <input type="number" step="0.1" id="case-commission-pct" value="${c.commission_pct != null ? (c.commission_pct * 100).toFixed(1) : ''}" placeholder="e.g. 10">
+        </div>
+        <div>
+          <label>HC Fee % (of renewal premium)</label>
+          <input type="number" step="0.1" id="case-hc-fee-pct" value="${c.hc_fee_pct != null ? (c.hc_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 10">
+        </div>
+        <button onclick="saveCaseDetails()">Save</button>
+      </div>
+      <div class="hint" style="margin-top:8px;">Breaks the renewal premium's loading (default 28%, set above the Renewal rating card) into its real named components - Risk Premium (the carrier's own share) is whatever's left over, not set here. Leave blank to use the defaults (TPA 8% / Commission 10% / HC 10%). Only their relative proportions matter, not their sum - drives the Renewal Client Summary's premium breakdown.</div>
+      ` : ''}
       <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column. Target premium is the broker's ask for a new-business case - compared against HealthCross's own rated price in the New Business Rating tab.</div>
     </div>
 
@@ -1244,7 +1501,11 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="tab-panel" data-tab="claims">
-      <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('claims', 'Claims Analysis')">Print / Save as PDF</button></div>
+      <div style="text-align:right; margin-bottom:8px;">
+        <button onclick="printTabAsPdf('claims', 'Claims Analysis')">Print / Save as PDF</button>
+        <button onclick="printRenewalClientSummary('internal')">Renewal Summary (Internal)</button>
+        <button onclick="printRenewalClientSummary('external')">Renewal Summary (External)</button>
+      </div>
       <div id="claims-report-year-area"></div>
       <div id="claims-report-comparison-area"></div>
       <div id="claims-projection-area"></div>
@@ -1343,6 +1604,9 @@ async function saveCaseDetails() {
   const businessType = document.getElementById('case-business-type').value;
   const existingInsurer = document.getElementById('case-existing-insurer').value;
   const policyStartDate = document.getElementById('case-policy-start-date').value;
+  const tpaFeeEl = document.getElementById('case-tpa-fee-pct');
+  const commissionEl = document.getElementById('case-commission-pct');
+  const hcFeeEl = document.getElementById('case-hc-fee-pct');
   try {
     currentCase = await api(`/cases/${currentCase.id}`, {
       method: 'PATCH',
@@ -1353,6 +1617,9 @@ async function saveCaseDetails() {
         current_annual_premium: premiumValue ? Number(premiumValue) : null,
         target_premium: targetPremiumValue ? Number(targetPremiumValue) : null,
         policy_start_date: policyStartDate || null,
+        tpa_fee_pct: tpaFeeEl && tpaFeeEl.value !== '' ? Number(tpaFeeEl.value) / 100 : null,
+        commission_pct: commissionEl && commissionEl.value !== '' ? Number(commissionEl.value) / 100 : null,
+        hc_fee_pct: hcFeeEl && hcFeeEl.value !== '' ? Number(hcFeeEl.value) / 100 : null,
       }),
     });
     toast('Case details saved');

@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.models import db_models as models
 
 
@@ -399,3 +401,82 @@ def test_renewal_benchmark_400s_without_own_current_premium(client):
     _insert_ledger_entries(client, case_id, {(2025, 10): 1000, (2025, 11): 2000, (2025, 12): 1500})
     resp = client.get(f"/cases/{case_id}/renewal-benchmark")
     assert resp.status_code == 400
+
+
+def test_renewal_client_summary_full_case(client):
+    case_id = _create_case(client, company_name="ServicePlan", broker_name="NASCO")
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
+
+    db = client.db_session_local()
+    db.add_all(
+        [
+            models.CensusRecord(case_id=case_id, age=30, gender="M", marital_status="single", relation="employee"),
+            models.CensusRecord(case_id=case_id, age=28, gender="F", marital_status="married", relation="spouse"),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/renewal-client-summary")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["case"]["company_name"] == "ServicePlan"
+    assert body["case"]["broker_name"] == "NASCO"
+
+    assert body["renewal"] is not None
+    assert body["renewal"]["current_annual_premium"] == 1_000_000.0
+
+    assert body["benchmark"] is not None
+    assert body["benchmark"]["comparable_case_count"] == 0  # only case in the book
+
+    assert body["premium_breakdown"] is not None
+    proposed = body["premium_breakdown"]["proposed"]
+    reconstructed = proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"] + proposed["hc_fee"]
+    assert reconstructed == pytest.approx(body["renewal"]["required_premium"], abs=0.5)
+
+    assert body["census_summary"] is not None
+    assert body["census_summary"]["total_members"] == 2
+
+    assert body["top_diagnoses"] is not None
+    assert body["top_diagnoses"][0]["diagnosis_description"] == "Acute bronchitis"
+
+
+def test_renewal_client_summary_without_renewal_data_still_returns_case_and_census(client):
+    case_id = _create_case(client, company_name="No Claims Yet")
+    db = client.db_session_local()
+    db.add(models.CensusRecord(case_id=case_id, age=40, gender="M", marital_status="single", relation="employee"))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/renewal-client-summary")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["case"]["company_name"] == "No Claims Yet"
+    assert body["renewal"] is None
+    assert body["benchmark"] is None
+    assert body["premium_breakdown"] is None
+    assert body["top_diagnoses"] is None
+    assert body["census_summary"]["total_members"] == 1
+
+
+def test_renewal_client_summary_404s_for_missing_case(client):
+    resp = client.get("/cases/999999/renewal-client-summary")
+    assert resp.status_code == 404
+
+
+def test_renewal_client_summary_uses_the_case_own_fee_split(client):
+    case_id = _create_case(client)
+    client.patch(
+        f"/cases/{case_id}",
+        json={"current_annual_premium": 1_000_000, "tpa_fee_pct": 0.5, "commission_pct": 0.3, "hc_fee_pct": 0.2},
+    )
+    _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-client-summary")
+    assert resp.status_code == 200
+    breakdown = resp.json()["premium_breakdown"]
+    loading_amount = breakdown["proposed"]["total"] - breakdown["proposed"]["risk_premium"]
+    assert breakdown["proposed"]["tpa_fee"] == pytest.approx(loading_amount * 0.5, abs=0.5)

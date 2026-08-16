@@ -17,6 +17,16 @@ from typing import List, Optional
 DEFAULT_INFLATION_PCT = 0.075
 DEFAULT_LOADING_PCT = 0.28
 
+# The renewal loading (28%) isn't one fee - it's TPA administration,
+# broker commission, and HealthCross's own margin bundled together. These
+# three sum to exactly DEFAULT_LOADING_PCT, so a case that hasn't set its
+# own tpa_fee_pct/commission_pct/hc_fee_pct still reproduces the same
+# required_premium calculate_renewal_rating always has, just broken into
+# its real named pieces for display - see premium_component_breakdown.
+DEFAULT_TPA_FEE_PCT = 0.08
+DEFAULT_COMMISSION_PCT = 0.10
+DEFAULT_HC_FEE_PCT = 0.10
+
 # Below this many other cases with their own computed renewal rating, a
 # percentile/median isn't credible - same "don't trust a rate built on
 # too few data points" principle as
@@ -59,6 +69,61 @@ def calculate_renewal_rating(
             "inflation_pct": a.inflation_pct,
             "loading_pct": a.loading_pct,
         },
+    }
+
+
+def premium_component_breakdown(
+    renewal_result: dict,
+    tpa_fee_pct: Optional[float] = None,
+    commission_pct: Optional[float] = None,
+    hc_fee_pct: Optional[float] = None,
+) -> dict:
+    """Splits a renewal_result (from calculate_renewal_rating) into its
+    real named pieces - Risk Premium (the carrier's own share, e.g. QIC),
+    TPA Fee, Commission, HC Fee - instead of one blended loading %,
+    applied to both the existing and the proposed premium so they're
+    directly comparable side by side.
+
+    Risk Premium is always exactly trended_claims, whatever loading_pct
+    the renewal_result was actually computed with - not a fixed 72%, so
+    this stays correct even if a case overrides the default loading. The
+    remaining loading amount (required_premium - trended_claims) is then
+    split across TPA Fee/Commission/HC Fee by their RELATIVE weights, not
+    their absolute values - they don't need to sum to the loading_pct
+    actually used, only to each other, so the three components always
+    reconstruct the exact required_premium regardless of what's set.
+    """
+    tpa = DEFAULT_TPA_FEE_PCT if tpa_fee_pct is None else tpa_fee_pct
+    commission = DEFAULT_COMMISSION_PCT if commission_pct is None else commission_pct
+    hc = DEFAULT_HC_FEE_PCT if hc_fee_pct is None else hc_fee_pct
+    total_weight = tpa + commission + hc
+    if total_weight <= 0:
+        raise ValueError("tpa_fee_pct + commission_pct + hc_fee_pct must sum to a positive value.")
+
+    current_premium = renewal_result["current_annual_premium"]
+    required_premium = renewal_result["required_premium"]
+    trended_claims = renewal_result["trended_claims"]
+
+    risk_premium_share = trended_claims / required_premium if required_premium else 0.0
+    loading_share = 1 - risk_premium_share
+
+    def _split(total: float) -> dict:
+        loading_amount = total * loading_share
+        return {
+            "total": round(total, 2),
+            "risk_premium": round(total * risk_premium_share, 2),
+            "tpa_fee": round(loading_amount * tpa / total_weight, 2),
+            "commission": round(loading_amount * commission / total_weight, 2),
+            "hc_fee": round(loading_amount * hc / total_weight, 2),
+        }
+
+    return {
+        "risk_premium_pct": round(risk_premium_share, 4),
+        "tpa_fee_pct": round(tpa / total_weight * loading_share, 4),
+        "commission_pct": round(commission / total_weight * loading_share, 4),
+        "hc_fee_pct": round(hc / total_weight * loading_share, 4),
+        "existing": _split(current_premium),
+        "proposed": _split(required_premium),
     }
 
 
