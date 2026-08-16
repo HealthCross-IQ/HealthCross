@@ -17,7 +17,7 @@ def test_worked_example_matches_hand_calculation():
     assert result["actual_loss_ratio"] == pytest.approx(0.9889, abs=0.001)
     trended = 2_966_593 * 1.075
     assert result["trended_claims"] == pytest.approx(trended, abs=1)
-    required = trended / (1 - 0.28)
+    required = trended / (1 - 0.33)
     assert result["required_premium"] == pytest.approx(required, abs=1)
     expected_increase = (required / 3_000_000 - 1) * 100
     assert result["renewal_increase_pct"] == pytest.approx(expected_increase, abs=0.01)
@@ -90,79 +90,96 @@ def test_benchmark_case_against_book_handles_no_comparable_cases():
     assert benchmark["low_credibility"] is True
 
 
-def test_premium_component_breakdown_defaults_reproduce_the_72_8_10_10_split():
+def test_premium_component_breakdown_defaults_reproduce_the_67_6_5_15_6_5_5_split():
     result = calculate_renewal_rating(3_995_650.67, 1_869_572)
     breakdown = premium_component_breakdown(result)
 
-    assert breakdown["risk_premium_pct"] == pytest.approx(0.72, abs=0.001)
-    assert breakdown["tpa_fee_pct"] == pytest.approx(0.08, abs=0.001)
-    assert breakdown["commission_pct"] == pytest.approx(0.10, abs=0.001)
-    assert breakdown["hc_fee_pct"] == pytest.approx(0.10, abs=0.001)
+    assert breakdown["risk_premium_pct"] == pytest.approx(0.67, abs=0.001)
+    assert breakdown["tpa_fee_pct"] == pytest.approx(0.065, abs=0.001)
+    assert breakdown["commission_pct"] == pytest.approx(0.15, abs=0.001)
+    assert breakdown["hc_fee_pct"] == pytest.approx(0.065, abs=0.001)
+    assert breakdown["qic_fee_pct"] == pytest.approx(0.05, abs=0.001)
 
     proposed = breakdown["proposed"]
     assert proposed["total"] == result["required_premium"]
     assert proposed["risk_premium"] == result["trended_claims"]
-    reconstructed = proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"] + proposed["hc_fee"]
+    reconstructed = (
+        proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"]
+        + proposed["hc_fee"] + proposed["qic_fee"]
+    )
     assert reconstructed == pytest.approx(result["required_premium"], abs=0.5)
 
     existing = breakdown["existing"]
     assert existing["total"] == result["current_annual_premium"]
-    reconstructed_existing = existing["risk_premium"] + existing["tpa_fee"] + existing["commission"] + existing["hc_fee"]
+    reconstructed_existing = (
+        existing["risk_premium"] + existing["tpa_fee"] + existing["commission"]
+        + existing["hc_fee"] + existing["qic_fee"]
+    )
     assert reconstructed_existing == pytest.approx(result["current_annual_premium"], abs=0.5)
 
 
 def test_premium_component_breakdown_stays_consistent_with_a_custom_loading():
-    # A case that overrides loading_pct away from the 28% default, but
-    # leaves tpa/commission/hc at their defaults (which only sum to 28%) -
-    # the components must still reconstruct the ACTUAL required_premium,
-    # not silently assume a 72% risk premium share that's no longer true.
+    # A case that overrides loading_pct away from the 33% default, but
+    # leaves the fee split at its defaults (which only sum to 33%) - the
+    # components must still reconstruct the ACTUAL required_premium, not
+    # silently assume a 67% risk premium share that's no longer true.
     result = calculate_renewal_rating(1_000_000, 1_000_000, assumptions=RenewalRatingAssumptions(loading_pct=0.40))
     breakdown = premium_component_breakdown(result)
 
-    assert breakdown["risk_premium_pct"] == pytest.approx(0.60, abs=0.001)  # 1 - 0.40, not 0.72
+    assert breakdown["risk_premium_pct"] == pytest.approx(0.60, abs=0.001)  # 1 - 0.40, not 0.67
     proposed = breakdown["proposed"]
-    reconstructed = proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"] + proposed["hc_fee"]
+    reconstructed = (
+        proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"]
+        + proposed["hc_fee"] + proposed["qic_fee"]
+    )
     assert reconstructed == pytest.approx(result["required_premium"], abs=0.5)
 
 
 def test_premium_component_breakdown_respects_custom_fee_weights():
     result = calculate_renewal_rating(1_000_000, 1_000_000)
-    # Custom weights not summing to 0.28 - only their relative proportions matter.
-    breakdown = premium_component_breakdown(result, tpa_fee_pct=0.5, commission_pct=0.3, hc_fee_pct=0.2)
+    # Custom weights not summing to 0.33 - only their relative proportions matter.
+    breakdown = premium_component_breakdown(
+        result, tpa_fee_pct=0.4, commission_pct=0.3, hc_fee_pct=0.2, qic_fee_pct=0.1
+    )
 
     proposed = breakdown["proposed"]
-    reconstructed = proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"] + proposed["hc_fee"]
+    reconstructed = (
+        proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"]
+        + proposed["hc_fee"] + proposed["qic_fee"]
+    )
     assert reconstructed == pytest.approx(result["required_premium"], abs=0.5)
-    # TPA's weight (0.5 of 1.0 total) should be exactly half the loading amount.
+    # TPA's weight (0.4 of 1.0 total) should be exactly 40% of the loading amount.
     loading_amount = proposed["total"] - proposed["risk_premium"]
-    assert proposed["tpa_fee"] == pytest.approx(loading_amount * 0.5, abs=0.5)
+    assert proposed["tpa_fee"] == pytest.approx(loading_amount * 0.4, abs=0.5)
 
 
 def test_premium_component_breakdown_rejects_all_zero_weights():
     result = calculate_renewal_rating(1_000_000, 1_000_000)
     with pytest.raises(ValueError):
-        premium_component_breakdown(result, tpa_fee_pct=0, commission_pct=0, hc_fee_pct=0)
+        premium_component_breakdown(result, tpa_fee_pct=0, commission_pct=0, hc_fee_pct=0, qic_fee_pct=0)
 
 
-def test_case_loading_pct_defaults_to_28_percent():
-    assert case_loading_pct(None, None, None) == pytest.approx(0.28)
+def test_case_loading_pct_defaults_to_33_percent():
+    assert case_loading_pct(None, None, None, None) == pytest.approx(0.33)
 
 
 def test_case_loading_pct_sums_the_cases_own_fee_split():
-    # Matches a real acquisition-cost breakdown: brokerage 15% + TPA 6.5% + HC 6.5% = 28%.
-    assert case_loading_pct(tpa_fee_pct=0.065, commission_pct=0.15, hc_fee_pct=0.065) == pytest.approx(0.28)
+    # Matches a real acquisition-cost breakdown: brokerage 15% + TPA 6.5% + HC 6.5% + QIC 5% = 33%.
+    assert case_loading_pct(
+        tpa_fee_pct=0.065, commission_pct=0.15, hc_fee_pct=0.065, qic_fee_pct=0.05
+    ) == pytest.approx(0.33)
 
 
 def test_case_loading_pct_feeds_calculate_renewal_rating_so_fees_move_the_bottom_line():
-    default_loading = case_loading_pct(None, None, None)
+    default_loading = case_loading_pct(None, None, None, None)
     default_result = calculate_renewal_rating(
         1_000_000, 1_000_000, RenewalRatingAssumptions(loading_pct=default_loading)
     )
 
-    custom_loading = case_loading_pct(tpa_fee_pct=0.15, commission_pct=0.10, hc_fee_pct=0.08)
+    custom_loading = case_loading_pct(tpa_fee_pct=0.15, commission_pct=0.10, hc_fee_pct=0.08, qic_fee_pct=0.05)
     custom_result = calculate_renewal_rating(
         1_000_000, 1_000_000, RenewalRatingAssumptions(loading_pct=custom_loading)
     )
 
-    assert custom_loading == pytest.approx(0.33)
+    assert custom_loading == pytest.approx(0.38)
     assert custom_result["required_premium"] != pytest.approx(default_result["required_premium"])

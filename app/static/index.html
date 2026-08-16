@@ -1229,10 +1229,11 @@ async function printRenewalClientSummary(variant) {
     <p class="rcs-desc">Every component below is this case's own set %, applied to both columns for a fair comparison.</p>
     <table class="rcs-compare">
       <tr><th></th><th>Existing</th><th>Proposed Renewal</th><th>Change</th></tr>
-      <tr><td>Risk Premium${c.existing_insurer ? ' (' + escapeHtml(c.existing_insurer) + ')' : ''}<span class="rcs-pct-pill">${(pb.risk_premium_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.risk_premium.toLocaleString()}</td><td>AED ${pb.proposed.risk_premium.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr><td>Risk Premium<span class="rcs-pct-pill">${(pb.risk_premium_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.risk_premium.toLocaleString()}</td><td>AED ${pb.proposed.risk_premium.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
       <tr><td>TPA Fee<span class="rcs-pct-pill">${(pb.tpa_fee_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.tpa_fee.toLocaleString()}</td><td>AED ${pb.proposed.tpa_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
       <tr><td>Commission<span class="rcs-pct-pill">${(pb.commission_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.commission.toLocaleString()}</td><td>AED ${pb.proposed.commission.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
       <tr><td>HC Fee<span class="rcs-pct-pill">${(pb.hc_fee_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.hc_fee.toLocaleString()}</td><td>AED ${pb.proposed.hc_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
+      <tr><td>QIC Fee${c.existing_insurer ? ' (' + escapeHtml(c.existing_insurer) + ')' : ''}<span class="rcs-pct-pill">${(pb.qic_fee_pct * 100).toFixed(0)}%</span></td><td>AED ${pb.existing.qic_fee.toLocaleString()}</td><td>AED ${pb.proposed.qic_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
       <tr class="rcs-total"><td>Total Annual Premium</td><td>AED ${pb.existing.total.toLocaleString()}</td><td>AED ${pb.proposed.total.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
     </table>
   </section>
@@ -1404,11 +1405,15 @@ function renderCaseWorkspace() {
         </div>
         <div>
           <label>HC Fee % (of renewal premium)</label>
-          <input type="number" step="0.1" id="case-hc-fee-pct" value="${c.hc_fee_pct != null ? (c.hc_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 10">
+          <input type="number" step="0.1" id="case-hc-fee-pct" value="${c.hc_fee_pct != null ? (c.hc_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 6.5">
+        </div>
+        <div>
+          <label>QIC Fee % (of renewal premium)</label>
+          <input type="number" step="0.1" id="case-qic-fee-pct" value="${c.qic_fee_pct != null ? (c.qic_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 5">
         </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
-      <div class="hint" style="margin-top:8px;">Breaks the renewal premium's loading (default 28%, set above the Renewal rating card) into its real named components - Risk Premium (the carrier's own share) is whatever's left over, not set here. Leave blank to use the defaults (TPA 8% / Commission 10% / HC 10%). Only their relative proportions matter, not their sum - drives the Renewal Client Summary's premium breakdown.</div>
+      <div class="hint" style="margin-top:8px;">Sets the renewal premium's actual loading (these four sum to the real gross-up %, default 33%) into its real named components - Risk Premium (the pure claims-funding cost) is whatever's left over, not set here. Leave blank to use the defaults (TPA 6.5% / Commission 15% / HC 6.5% / QIC 5%). Drives both the required premium itself and the Renewal Client Summary's premium breakdown.</div>
       ` : ''}
       <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column. Target premium is the broker's ask for a new-business case - compared against HealthCross's own rated price in the New Business Rating tab.</div>
     </div>
@@ -1614,6 +1619,7 @@ async function saveCaseDetails() {
   const tpaFeeEl = document.getElementById('case-tpa-fee-pct');
   const commissionEl = document.getElementById('case-commission-pct');
   const hcFeeEl = document.getElementById('case-hc-fee-pct');
+  const qicFeeEl = document.getElementById('case-qic-fee-pct');
   try {
     currentCase = await api(`/cases/${currentCase.id}`, {
       method: 'PATCH',
@@ -1627,6 +1633,7 @@ async function saveCaseDetails() {
         tpa_fee_pct: tpaFeeEl && tpaFeeEl.value !== '' ? Number(tpaFeeEl.value) / 100 : null,
         commission_pct: commissionEl && commissionEl.value !== '' ? Number(commissionEl.value) / 100 : null,
         hc_fee_pct: hcFeeEl && hcFeeEl.value !== '' ? Number(hcFeeEl.value) / 100 : null,
+        qic_fee_pct: qicFeeEl && qicFeeEl.value !== '' ? Number(qicFeeEl.value) / 100 : null,
       }),
     });
     toast('Case details saved');

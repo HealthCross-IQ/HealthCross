@@ -863,6 +863,15 @@ def _case_renewal_rating(
     current_annual_premium, or no full months of claims yet), so a
     book-wide scan can skip ineligible cases instead of every one
     becoming a 404/400 to catch.
+
+    loading_pct defaults to the CASE'S OWN tpa_fee_pct/commission_pct/
+    hc_fee_pct/qic_fee_pct split (via case_loading_pct), not the flat
+    DEFAULT_LOADING_PCT, so every caller - the renewal rating card, the
+    book benchmark, the client summary, the member-rate table - agrees
+    on the same required_premium for a given case without each one
+    having to remember to look up the case's own fees itself. An
+    explicit loading_pct (e.g. a what-if query param on
+    /renewal-rating) still overrides it.
     """
     entries = case.claims_ledger_entries
     if not entries or not case.current_annual_premium:
@@ -875,9 +884,14 @@ def _case_renewal_rating(
     annualized = avg_month * 12
 
     defaults = RenewalRatingAssumptions()
+    effective_loading_pct = (
+        loading_pct
+        if loading_pct is not None
+        else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
+    )
     assumptions = RenewalRatingAssumptions(
         inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
-        loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+        loading_pct=effective_loading_pct,
     )
     result = calculate_renewal_rating(annualized, case.current_annual_premium, assumptions=assumptions)
     result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
@@ -967,18 +981,16 @@ def get_renewal_client_summary(case_id: int, db: Session = Depends(get_db)):
     benchmark = None
     premium_breakdown = None
     if case.claims_ledger_entries and case.current_annual_premium:
-        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
-        renewal = _case_renewal_rating(case, loading_pct=loading)
+        renewal = _case_renewal_rating(case)
         if renewal is not None:
             other_results = []
             for other in db.query(models.Case).filter(models.Case.id != case_id).all():
-                other_loading = case_loading_pct(other.tpa_fee_pct, other.commission_pct, other.hc_fee_pct)
-                other_result = _case_renewal_rating(other, loading_pct=other_loading)
+                other_result = _case_renewal_rating(other)
                 if other_result is not None:
                     other_results.append(other_result)
             benchmark = benchmark_case_against_book(renewal, other_results)
             premium_breakdown = premium_component_breakdown(
-                renewal, case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct
+                renewal, case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct
             )
 
     census_summary = None
@@ -1060,8 +1072,7 @@ def get_member_rates(case_id: int, db: Session = Depends(get_db)):
 
     renewal_increase_pct = None
     if case.claims_ledger_entries and case.current_annual_premium:
-        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
-        renewal = _case_renewal_rating(case, loading_pct=loading)
+        renewal = _case_renewal_rating(case)
         if renewal is not None:
             renewal_increase_pct = renewal["renewal_increase_pct"]
 
@@ -1099,8 +1110,7 @@ def update_member_rates(case_id: int, rates: List[schemas.MemberRateIn], db: Ses
 
     renewal_increase_pct = None
     if case.claims_ledger_entries and case.current_annual_premium:
-        loading = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct)
-        renewal = _case_renewal_rating(case, loading_pct=loading)
+        renewal = _case_renewal_rating(case)
         if renewal is not None:
             renewal_increase_pct = renewal["renewal_increase_pct"]
 

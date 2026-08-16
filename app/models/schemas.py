@@ -18,6 +18,7 @@ class CaseCreate(BaseModel):
     tpa_fee_pct: Optional[float] = None
     commission_pct: Optional[float] = None
     hc_fee_pct: Optional[float] = None
+    qic_fee_pct: Optional[float] = None
 
 
 class CaseOut(BaseModel):
@@ -42,6 +43,7 @@ class CaseOut(BaseModel):
     tpa_fee_pct: Optional[float] = None
     commission_pct: Optional[float] = None
     hc_fee_pct: Optional[float] = None
+    qic_fee_pct: Optional[float] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -209,6 +211,7 @@ class CaseUpdate(BaseModel):
     tpa_fee_pct: Optional[float] = None
     commission_pct: Optional[float] = None
     hc_fee_pct: Optional[float] = None
+    qic_fee_pct: Optional[float] = None
 
 
 class ClaimsReportOut(BaseModel):

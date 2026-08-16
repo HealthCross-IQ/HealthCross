@@ -62,13 +62,16 @@ class Case(Base):
     # in app/scoring/rules/renewal_rating.py actually consists of, broken
     # into its real named pieces rather than one blended number. Nullable:
     # falls back to DEFAULT_TPA_FEE_PCT/DEFAULT_COMMISSION_PCT/
-    # DEFAULT_HC_FEE_PCT (which sum to DEFAULT_LOADING_PCT) when unset, so
-    # existing cases don't need to be touched. Risk Premium (the carrier's
-    # own share, e.g. QIC) isn't stored separately - it's always
-    # whatever's left over (see premium_component_breakdown).
+    # DEFAULT_HC_FEE_PCT/DEFAULT_QIC_FEE_PCT (which sum to
+    # DEFAULT_LOADING_PCT) when unset, so existing cases don't need to be
+    # touched. Risk Premium (the pure claims-funding cost) isn't stored
+    # separately - it's always whatever's left over (see
+    # premium_component_breakdown). qic_fee_pct is QIC's own margin on
+    # top of funding claims, distinct from Risk Premium.
     tpa_fee_pct = Column(Float, nullable=True)
     commission_pct = Column(Float, nullable=True)
     hc_fee_pct = Column(Float, nullable=True)
+    qic_fee_pct = Column(Float, nullable=True)
 
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")

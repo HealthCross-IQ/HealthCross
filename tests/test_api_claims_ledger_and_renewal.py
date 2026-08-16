@@ -433,7 +433,10 @@ def test_renewal_client_summary_full_case(client):
 
     assert body["premium_breakdown"] is not None
     proposed = body["premium_breakdown"]["proposed"]
-    reconstructed = proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"] + proposed["hc_fee"]
+    reconstructed = (
+        proposed["risk_premium"] + proposed["tpa_fee"] + proposed["commission"]
+        + proposed["hc_fee"] + proposed["qic_fee"]
+    )
     assert reconstructed == pytest.approx(body["renewal"]["required_premium"], abs=0.5)
 
     assert body["census_summary"] is not None
@@ -471,7 +474,13 @@ def test_renewal_client_summary_uses_the_case_own_fee_split(client):
     case_id = _create_case(client)
     client.patch(
         f"/cases/{case_id}",
-        json={"current_annual_premium": 1_000_000, "tpa_fee_pct": 0.15, "commission_pct": 0.10, "hc_fee_pct": 0.08},
+        json={
+            "current_annual_premium": 1_000_000,
+            "tpa_fee_pct": 0.15,
+            "commission_pct": 0.10,
+            "hc_fee_pct": 0.08,
+            "qic_fee_pct": 0.05,
+        },
     )
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
 
@@ -479,14 +488,14 @@ def test_renewal_client_summary_uses_the_case_own_fee_split(client):
     assert resp.status_code == 200
     breakdown = resp.json()["premium_breakdown"]
     loading_amount = breakdown["proposed"]["total"] - breakdown["proposed"]["risk_premium"]
-    assert breakdown["proposed"]["tpa_fee"] == pytest.approx(loading_amount * 0.15 / 0.33, abs=0.5)
+    assert breakdown["proposed"]["tpa_fee"] == pytest.approx(loading_amount * 0.15 / 0.38, abs=0.5)
 
 
 def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client):
     """Regression test for the "loading breakdown isn't dynamic" bug: a
-    case's own TPA Fee/Commission/HC Fee % must feed into the actual
-    required_premium/renewal_increase_pct, not just relabel a number
-    still computed off the fixed 28% default."""
+    case's own TPA Fee/Commission/HC Fee/QIC Fee % must feed into the
+    actual required_premium/renewal_increase_pct, not just relabel a
+    number still computed off the fixed default loading."""
     case_id = _create_case(client)
     client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
@@ -496,7 +505,7 @@ def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client
 
     client.patch(
         f"/cases/{case_id}",
-        json={"tpa_fee_pct": 0.15, "commission_pct": 0.10, "hc_fee_pct": 0.08},
+        json={"tpa_fee_pct": 0.15, "commission_pct": 0.10, "hc_fee_pct": 0.08, "qic_fee_pct": 0.05},
     )
     custom_resp = client.get(f"/cases/{case_id}/renewal-client-summary")
     custom_body = custom_resp.json()
@@ -504,7 +513,7 @@ def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client
 
     assert custom_required_premium != pytest.approx(default_required_premium)
     trended_claims = custom_body["renewal"]["trended_claims"]
-    assert custom_required_premium == pytest.approx(trended_claims / (1 - 0.33), abs=0.5)
+    assert custom_required_premium == pytest.approx(trended_claims / (1 - 0.38), abs=0.5)
 
 
 def _insert_census(client, case_id, members):

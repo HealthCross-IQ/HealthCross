@@ -15,17 +15,20 @@ from dataclasses import dataclass
 from typing import List, Optional
 
 DEFAULT_INFLATION_PCT = 0.075
-DEFAULT_LOADING_PCT = 0.28
+DEFAULT_LOADING_PCT = 0.33
 
-# The renewal loading (28%) isn't one fee - it's TPA administration,
-# broker commission, and HealthCross's own margin bundled together. These
-# three sum to exactly DEFAULT_LOADING_PCT, so a case that hasn't set its
-# own tpa_fee_pct/commission_pct/hc_fee_pct still reproduces the same
-# required_premium calculate_renewal_rating always has, just broken into
-# its real named pieces for display - see premium_component_breakdown.
-DEFAULT_TPA_FEE_PCT = 0.08
-DEFAULT_COMMISSION_PCT = 0.10
-DEFAULT_HC_FEE_PCT = 0.10
+# The renewal loading (33%) isn't one fee - it's broker commission, TPA
+# administration, HealthCross's own margin, and QIC's (the carrier's) own
+# margin bundled together - matching a real acquisition-cost breakdown
+# (Brokerage 15% + TPA 6.5% + HC 6.5% + QIC Margin 5%). These four sum to
+# exactly DEFAULT_LOADING_PCT, so a case that hasn't set its own
+# tpa_fee_pct/commission_pct/hc_fee_pct/qic_fee_pct still reproduces the
+# same required_premium calculate_renewal_rating always has, just broken
+# into its real named pieces for display - see premium_component_breakdown.
+DEFAULT_TPA_FEE_PCT = 0.065
+DEFAULT_COMMISSION_PCT = 0.15
+DEFAULT_HC_FEE_PCT = 0.065
+DEFAULT_QIC_FEE_PCT = 0.05
 
 # Below this many other cases with their own computed renewal rating, a
 # percentile/median isn't credible - same "don't trust a rate built on
@@ -76,6 +79,7 @@ def resolve_fee_pcts(
     tpa_fee_pct: Optional[float] = None,
     commission_pct: Optional[float] = None,
     hc_fee_pct: Optional[float] = None,
+    qic_fee_pct: Optional[float] = None,
 ) -> tuple:
     """Fills in any unset fee % with its DEFAULT_*_PCT counterpart, so a
     case that hasn't set its own fee split still reproduces
@@ -86,6 +90,7 @@ def resolve_fee_pcts(
         DEFAULT_TPA_FEE_PCT if tpa_fee_pct is None else tpa_fee_pct,
         DEFAULT_COMMISSION_PCT if commission_pct is None else commission_pct,
         DEFAULT_HC_FEE_PCT if hc_fee_pct is None else hc_fee_pct,
+        DEFAULT_QIC_FEE_PCT if qic_fee_pct is None else qic_fee_pct,
     )
 
 
@@ -93,15 +98,17 @@ def case_loading_pct(
     tpa_fee_pct: Optional[float] = None,
     commission_pct: Optional[float] = None,
     hc_fee_pct: Optional[float] = None,
+    qic_fee_pct: Optional[float] = None,
 ) -> float:
     """The actual total renewal loading implied by a case's own TPA
-    Fee/Commission/HC Fee split. Pass this as calculate_renewal_rating's
-    loading_pct so required_premium/renewal_increase_pct reflect the
-    case's own fee structure instead of always the 28% default -
-    otherwise the fee fields only relabel an already-fixed number (see
-    premium_component_breakdown) rather than actually changing it."""
-    tpa, commission, hc = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct)
-    return tpa + commission + hc
+    Fee/Commission/HC Fee/QIC Fee split. Pass this as
+    calculate_renewal_rating's loading_pct so required_premium/
+    renewal_increase_pct reflect the case's own fee structure instead of
+    always the 33% default - otherwise the fee fields only relabel an
+    already-fixed number (see premium_component_breakdown) rather than
+    actually changing it."""
+    tpa, commission, hc, qic = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct, qic_fee_pct)
+    return tpa + commission + hc + qic
 
 
 def premium_component_breakdown(
@@ -109,26 +116,29 @@ def premium_component_breakdown(
     tpa_fee_pct: Optional[float] = None,
     commission_pct: Optional[float] = None,
     hc_fee_pct: Optional[float] = None,
+    qic_fee_pct: Optional[float] = None,
 ) -> dict:
     """Splits a renewal_result (from calculate_renewal_rating) into its
-    real named pieces - Risk Premium (the carrier's own share, e.g. QIC),
-    TPA Fee, Commission, HC Fee - instead of one blended loading %,
-    applied to both the existing and the proposed premium so they're
-    directly comparable side by side.
+    real named pieces - Risk Premium (the pure claims-funding cost), TPA
+    Fee, Commission, HC Fee, and QIC Fee (the carrier's own margin on top
+    of funding claims) - instead of one blended loading %, applied to
+    both the existing and the proposed premium so they're directly
+    comparable side by side.
 
     Risk Premium is always exactly trended_claims, whatever loading_pct
-    the renewal_result was actually computed with - not a fixed 72%, so
+    the renewal_result was actually computed with - not a fixed %, so
     this stays correct even if a case overrides the default loading. The
     remaining loading amount (required_premium - trended_claims) is then
-    split across TPA Fee/Commission/HC Fee by their RELATIVE weights, not
-    their absolute values - they don't need to sum to the loading_pct
-    actually used, only to each other, so the three components always
-    reconstruct the exact required_premium regardless of what's set.
+    split across TPA Fee/Commission/HC Fee/QIC Fee by their RELATIVE
+    weights, not their absolute values - they don't need to sum to the
+    loading_pct actually used, only to each other, so the four
+    components always reconstruct the exact required_premium regardless
+    of what's set.
     """
-    tpa, commission, hc = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct)
-    total_weight = tpa + commission + hc
+    tpa, commission, hc, qic = resolve_fee_pcts(tpa_fee_pct, commission_pct, hc_fee_pct, qic_fee_pct)
+    total_weight = tpa + commission + hc + qic
     if total_weight <= 0:
-        raise ValueError("tpa_fee_pct + commission_pct + hc_fee_pct must sum to a positive value.")
+        raise ValueError("tpa_fee_pct + commission_pct + hc_fee_pct + qic_fee_pct must sum to a positive value.")
 
     current_premium = renewal_result["current_annual_premium"]
     required_premium = renewal_result["required_premium"]
@@ -145,6 +155,7 @@ def premium_component_breakdown(
             "tpa_fee": round(loading_amount * tpa / total_weight, 2),
             "commission": round(loading_amount * commission / total_weight, 2),
             "hc_fee": round(loading_amount * hc / total_weight, 2),
+            "qic_fee": round(loading_amount * qic / total_weight, 2),
         }
 
     return {
@@ -152,6 +163,7 @@ def premium_component_breakdown(
         "tpa_fee_pct": round(tpa / total_weight * loading_share, 4),
         "commission_pct": round(commission / total_weight * loading_share, 4),
         "hc_fee_pct": round(hc / total_weight * loading_share, 4),
+        "qic_fee_pct": round(qic / total_weight * loading_share, 4),
         "existing": _split(current_premium),
         "proposed": _split(required_premium),
     }
