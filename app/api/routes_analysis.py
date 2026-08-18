@@ -114,6 +114,24 @@ def list_claims_reports(case_id: int, db: Session = Depends(get_db)):
     )
 
 
+@router.delete("/{case_id}/claims-reports/{report_id}", status_code=204)
+def delete_claims_report(case_id: int, report_id: int, db: Session = Depends(get_db)):
+    """Removes one uploaded claims report. Mainly for a stale duplicate
+    left behind when an earlier upload's report period couldn't be
+    parsed (POST /cases/{id}/claims only replaces a same-period report
+    on re-upload - it can't match one whose own period is unknown,
+    so re-uploading a corrected file adds a second row instead of
+    replacing the first) - or a report uploaded to the wrong case/year
+    by mistake.
+    """
+    _get_case_or_404(db, case_id)
+    report = db.query(models.ClaimsReport).filter_by(id=report_id, case_id=case_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Claims report not found for this case")
+    db.delete(report)
+    db.commit()
+
+
 @router.get("/{case_id}/claims-report-comparison")
 def get_claims_report_comparison(case_id: int, db: Session = Depends(get_db)):
     """Year-over-year comparison across every claims report uploaded for

@@ -723,14 +723,27 @@ def upload_claims(case_id: int, file: UploadFile = File(...), db: Session = Depe
         # because a new one came in. Re-uploading a correction for the
         # SAME report period (e.g. a re-issued version of this year's
         # report) still replaces just that one row rather than piling up
-        # near-duplicates. A report whose own period couldn't be parsed
-        # can't be matched this way, so it's simply added rather than
-        # risking a delete that removes a different, unrelated year.
+        # near-duplicates.
         new_period_start = report_fields.get("report_period_start")
         if new_period_start is not None:
             db.query(models.ClaimsReport).filter_by(
                 case_id=case.id, report_period_start=new_period_start
             ).delete()
+            # A report whose own period couldn't be parsed on an earlier
+            # upload (e.g. a date format the parser didn't yet recognize)
+            # can't be matched by period - but it's almost certainly a
+            # stale duplicate of THIS one now that a re-upload parsed
+            # successfully, so replace it too, UNLESS this case already
+            # has multiple real report-years on file: with 2+ existing
+            # reports a null-period row could legitimately be one of
+            # those years' own report that just failed to parse, and
+            # deleting it then would lose real history rather than a
+            # duplicate.
+            existing_report_count = db.query(models.ClaimsReport).filter_by(case_id=case.id).count()
+            if existing_report_count < 2:
+                db.query(models.ClaimsReport).filter_by(
+                    case_id=case.id, report_period_start=None
+                ).delete()
         report = models.ClaimsReport(case_id=case.id, **report_fields)
         db.add(report)
         db.commit()

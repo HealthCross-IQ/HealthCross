@@ -376,6 +376,27 @@ def _upload_fake_claims_report(client, monkeypatch, case_id, period_start, perio
     )
 
 
+def _fake_parsed_report_no_period(total_paid: float) -> dict:
+    # Simulates a report whose date format the parser didn't recognize -
+    # every other field still parses fine, but report_period_start stays
+    # None, same as a real parsing gap would leave it.
+    report = _fake_parsed_report("2025-08-29", "2026-08-28", total_paid)
+    report["report_period_start"] = None
+    report["report_period_end"] = None
+    return report
+
+
+def _upload_fake_claims_report_no_period(client, monkeypatch, case_id, total_paid, filename="report.pdf"):
+    monkeypatch.setattr(
+        routes_cases, "parse_claims_report",
+        lambda file, name: _fake_parsed_report_no_period(total_paid),
+    )
+    return client.post(
+        f"/cases/{case_id}/claims",
+        files={"file": (filename, b"%PDF-1.4 fake", "application/pdf")},
+    )
+
+
 def test_uploading_a_new_report_period_keeps_the_previous_year(client, monkeypatch):
     case_id = _create_case_with_census(client)
     resp = _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
@@ -402,6 +423,40 @@ def test_reuploading_the_same_report_period_replaces_only_that_year(client, monk
     assert len(reports) == 2
     totals = {r["total_paid"] for r in reports}
     assert totals == {992_049.0, 1_400_000.0}
+
+
+def test_reuploading_after_a_failed_period_parse_replaces_the_null_period_report(client, monkeypatch):
+    # First upload's date format wasn't recognized yet (report_period_start
+    # stayed None); a later re-upload of the SAME report, once the parser
+    # is fixed, should replace that stale unparsed row rather than
+    # piling up next to it.
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report_no_period(client, monkeypatch, case_id, 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 992_049.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-reports")
+    reports = resp.json()
+    assert len(reports) == 1
+    assert reports[0]["report_period_start"] == "2025-08-29"
+    assert reports[0]["total_paid"] == 992_049.0
+
+
+def test_reuploading_after_a_failed_period_parse_keeps_the_null_report_when_two_years_already_exist(client, monkeypatch):
+    # With 2+ real report-years already on file, a null-period row could
+    # legitimately be one of THOSE years' own report that just failed to
+    # parse - deleting it on an unrelated new upload would lose real
+    # history, so it's left alone instead.
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2023-08-29", "2024-08-28", 800_000.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report_no_period(client, monkeypatch, case_id, 500_000.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+
+    resp = client.get(f"/cases/{case_id}/claims-reports")
+    reports = resp.json()
+    assert len(reports) == 4
+    totals = {r["total_paid"] for r in reports}
+    assert totals == {800_000.0, 992_049.0, 500_000.0, 1_315_830.0}
 
 
 def test_list_claims_reports_sorted_oldest_to_newest(client, monkeypatch):
@@ -510,4 +565,35 @@ def test_claims_report_id_404s_when_it_belongs_to_a_different_case(client, monke
     report_id = client.get(f"/cases/{case_id_a}/claims-reports").json()[0]["id"]
 
     resp = client.get(f"/cases/{case_id_b}/claims-report", params={"report_id": report_id})
+    assert resp.status_code == 404
+
+
+def test_delete_claims_report_removes_it(client, monkeypatch):
+    case_id = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2024-08-29", "2025-08-28", 992_049.0)
+    _upload_fake_claims_report(client, monkeypatch, case_id, "2025-08-29", "2026-08-28", 1_315_830.0)
+    reports = client.get(f"/cases/{case_id}/claims-reports").json()
+    stale_id = next(r["id"] for r in reports if r["total_paid"] == 992_049.0)
+
+    resp = client.delete(f"/cases/{case_id}/claims-reports/{stale_id}")
+    assert resp.status_code == 204
+
+    reports = client.get(f"/cases/{case_id}/claims-reports").json()
+    assert len(reports) == 1
+    assert reports[0]["total_paid"] == 1_315_830.0
+
+
+def test_delete_claims_report_404s_for_a_report_belonging_to_a_different_case(client, monkeypatch):
+    case_id_a = _create_case_with_census(client)
+    case_id_b = _create_case_with_census(client)
+    _upload_fake_claims_report(client, monkeypatch, case_id_a, "2025-08-29", "2026-08-28", 1_315_830.0)
+    report_id = client.get(f"/cases/{case_id_a}/claims-reports").json()[0]["id"]
+
+    resp = client.delete(f"/cases/{case_id_b}/claims-reports/{report_id}")
+    assert resp.status_code == 404
+
+
+def test_delete_claims_report_404s_for_missing_report(client):
+    case_id = _create_case_with_census(client)
+    resp = client.delete(f"/cases/{case_id}/claims-reports/999999")
     assert resp.status_code == 404
