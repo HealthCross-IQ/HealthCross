@@ -306,6 +306,8 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
 
 
 _FORMAT3_DATE_RE = re.compile(r"(\d{2}/\d{2}/\d{4})")
+# A second real date shape ("15-Aug-2025" rather than "15/08/2025").
+_FORMAT3_DATE_DASH_RE = re.compile(r"(\d{1,2}-[A-Za-z]{3}-\d{4})")
 _FORMAT3_MONTHLY_ROW_RE = re.compile(r"^([A-Za-z]+)\s+\d{1,2}\s+(\d{4})\s+([\d,]+)\s*$")
 # A second real export shape for item 17 (seen on a real Arabia Insurance/
 # Maxtube report): each row keeps its own month-ending date spelled out in
@@ -313,6 +315,11 @@ _FORMAT3_MONTHLY_ROW_RE = re.compile(r"^([A-Za-z]+)\s+\d{1,2}\s+(\d{4})\s+([\d,]
 # "17a October 31/10/2025 2025 4,219.80" - rather than the bare
 # "October 15 2025 4,219" shape _FORMAT3_MONTHLY_ROW_RE expects.
 _FORMAT3_MONTHLY_ROW_ALT_RE = re.compile(r"^([A-Za-z]+)\s+\d{2}/\d{2}/\d{4}\s+(\d{4})\s+([\d,]+\.\d{2})\s*$")
+# A third real export shape: no day-of-month at all, just "Aug 2025
+# 54,977" - a future month still blank in the report (e.g. "Jun 2026"
+# with nothing after the year) correctly fails to match and is skipped
+# rather than recorded as a zero.
+_FORMAT3_MONTHLY_ROW_NO_DAY_RE = re.compile(r"^([A-Za-z]+)\s+(\d{4})\s+([\d,]+\.?\d*)\s*$")
 # Real row numbers only go up to 18, always followed by whitespace or
 # end-of-line before any letter/rest - unlike the generic _ROW_PREFIX_RE,
 # this deliberately does NOT match e.g. "607836-001 / 607836-004 / ..." (a
@@ -324,13 +331,20 @@ _FORMAT3_ROW_RE = re.compile(r"^(\d{1,2})([a-z]?)(?:\s+(.*))?$")
 
 
 def _format3_parse_date(text: str) -> Optional[date]:
-    match = _FORMAT3_DATE_RE.search(text or "")
-    if not match:
-        return None
-    try:
-        return datetime.strptime(match.group(1), "%d/%m/%Y").date()
-    except ValueError:
-        return None
+    text = text or ""
+    match = _FORMAT3_DATE_RE.search(text)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%d/%m/%Y").date()
+        except ValueError:
+            return None
+    match = _FORMAT3_DATE_DASH_RE.search(text)
+    if match:
+        try:
+            return datetime.strptime(match.group(1), "%d-%b-%Y").date()
+        except ValueError:
+            return None
+    return None
 
 
 def _format3_last_number(rest: str) -> Optional[float]:
@@ -557,6 +571,17 @@ def _parse_format3_text(raw_text: str) -> Dict[str, Any]:
                     "year": int(alt_match.group(2)),
                     "month": alt_match.group(1)[:3].title(),
                     "paid": _parse_number(alt_match.group(3)),
+                    "partial": False,
+                }
+            )
+            continue
+        no_day_match = _FORMAT3_MONTHLY_ROW_NO_DAY_RE.match(rest)
+        if no_day_match and no_day_match.group(1).lower()[:3] in _MONTH_NAMES:
+            monthly.append(
+                {
+                    "year": int(no_day_match.group(2)),
+                    "month": no_day_match.group(1)[:3].title(),
+                    "paid": _parse_number(no_day_match.group(3)),
                     "partial": False,
                 }
             )

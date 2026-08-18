@@ -190,3 +190,34 @@ def test_monthly_paid_parses_the_full_ending_date_row_shape():
         {"year": 2025, "month": "Nov", "paid": 16405.40, "partial": False},
         {"year": 2025, "month": "Dec", "paid": 36150.21, "partial": False},
     ]
+
+
+# A third real export shape for item 17 (seen on a real DHA-labeled
+# "Health insurance claims record" that lacks the literal "DHA Mandated
+# Format" marker format 1 keys off of): no day-of-month at all, just
+# "Aug 2025 54,977" - the row-number prefix stays attached to the same
+# line rather than the month/year/value shape ALT_MONTHLY_REPORT_TEXT
+# and SAMPLE_REPORT_TEXT both use.
+NO_DAY_MONTHLY_REPORT_TEXT = """
+Health insurance claims record
+2 Policy number
+627803, 627804
+3a Policy effective date 15-Aug-2025
+3b Policy expiry date 14-Aug-2026
+17 Total claims Processed per service month (by AED value) Month ending date Year Value
+17a Aug 2025 54,977
+17b Sep 2025 135,530
+17c Oct 2025 92,917
+17k Jun 2026
+17l Jul 2026
+17m Aug 2026
+"""
+
+
+def test_monthly_paid_parses_the_no_day_of_month_row_shape():
+    result = parse_claims_report_text(NO_DAY_MONTHLY_REPORT_TEXT)
+    assert result["monthly_paid"] == [
+        {"year": 2025, "month": "Aug", "paid": 54977.0, "partial": True},
+        {"year": 2025, "month": "Sep", "paid": 135530.0, "partial": False},
+        {"year": 2025, "month": "Oct", "paid": 92917.0, "partial": False},
+    ]
