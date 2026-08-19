@@ -7,7 +7,7 @@ breakdown tables extract too unreliably to trust (a "Power BI Desktop"
 watermark is interleaved character-by-character into nearby headings,
 and find_tables() returns badly malformed rows for the denser tables).
 """
-from app.ingestion.claims_report import _parse_ppr_text
+from app.ingestion.claims_report import _AED_PER_USD, _parse_ppr_text
 
 # Synthetic but structurally faithful to the real document's extracted
 # text (a two-column "Paid Claims by Month" / "Paid Claims by Subgroup"
@@ -52,7 +52,9 @@ def test_parses_policy_number_and_review_period():
 
 def test_parses_total_paid_and_average_lives():
     result = _parse_ppr_text(SAMPLE_TEXT)
-    assert result["total_paid"] == 543_155.0
+    # The document's own $543,155 converted to AED (this document states
+    # its amounts are in US Dollars, unlike every other format here).
+    assert result["total_paid"] == round(543_155.0 * _AED_PER_USD, 2)
     # No separate opening/closing figure in this document - the single
     # average-lives KPI stands in for both.
     assert result["opening_members"] == 172
@@ -62,9 +64,26 @@ def test_parses_total_paid_and_average_lives():
 def test_parses_monthly_paid_and_flags_the_partial_inception_month():
     result = _parse_ppr_text(SAMPLE_TEXT)
     assert len(result["monthly_paid"]) == 10
-    assert result["monthly_paid"][0] == {"year": 2025, "month": "Oct", "paid": 10772.0, "partial": True}
-    assert result["monthly_paid"][1] == {"year": 2025, "month": "Nov", "paid": 43220.0, "partial": False}
-    assert result["monthly_paid"][-1] == {"year": 2026, "month": "Jul", "paid": 13941.0, "partial": False}
+    assert result["monthly_paid"][0] == {
+        "year": 2025, "month": "Oct", "paid": round(10772.0 * _AED_PER_USD, 2), "partial": True,
+    }
+    assert result["monthly_paid"][1] == {
+        "year": 2025, "month": "Nov", "paid": round(43220.0 * _AED_PER_USD, 2), "partial": False,
+    }
+    assert result["monthly_paid"][-1] == {
+        "year": 2026, "month": "Jul", "paid": round(13941.0 * _AED_PER_USD, 2), "partial": False,
+    }
+
+
+def test_converts_us_dollars_to_aed_at_the_fixed_peg():
+    # This document's own notes page states its amounts are in US
+    # Dollars - without converting, they'd combine with a case's AED
+    # premium (and every other AED-based figure in the app) as if they
+    # were AED too, understating actual claims by a factor of ~3.67x.
+    result = _parse_ppr_text(SAMPLE_TEXT)
+    assert _AED_PER_USD == 3.6725
+    assert result["total_paid"] == 1_994_736.74  # 543,155 * 3.6725
+    assert result["monthly_paid"][0]["paid"] == 39_560.17  # 10,772 * 3.6725
 
 
 def test_does_not_attempt_the_unreliable_detail_breakdowns():

@@ -1019,6 +1019,15 @@ _PPR_PERIOD_RE = re.compile(r"Review Period:\s*([A-Za-z]+ \d{1,2} \d{4})\s+to\s+
 _PPR_KPI_RE = re.compile(r"Paid Claims\s+Average Lives\s+No\. of Claimants\s*\n([\d,]+)\s+(\d+)\s+(\d+)")
 _PPR_MONTH_ROW_RE = re.compile(r"(20\d{2})\s+([A-Za-z]{3})\s+([\d,]+)")
 
+# The UAE Dirham's fixed peg to the US Dollar, unchanged since 1997 (not
+# a floating rate needing a live lookup) - this document's own notes
+# page states its amounts are in US Dollars, unlike every other claims-
+# report format here (and the rest of the app), which are AED. Without
+# converting, this report's figures would combine with a case's AED
+# premium and every other AED-based calculation as if they were AED
+# too, silently understating actual claims by a factor of ~3.67x.
+_AED_PER_USD = 3.6725
+
 
 def _ppr_parse_date(text: str) -> Optional[date]:
     try:
@@ -1035,7 +1044,9 @@ def _parse_ppr_text(full_text: str) -> Dict[str, Any]:
     paid, and the monthly paid-claims figures (all first_full_months/
     project_annual_claims needs) - not diagnosis/provider/benefit
     breakdowns, whose tables extract too unreliably here to trust (see
-    parse_claims_report's dispatch comment).
+    parse_claims_report's dispatch comment). All monetary figures are
+    converted from this document's own US Dollars to AED (see
+    _AED_PER_USD) so they combine correctly with the rest of the app.
     """
     result: Dict[str, Any] = {
         "policy_number": None,
@@ -1068,7 +1079,7 @@ def _parse_ppr_text(full_text: str) -> Dict[str, Any]:
 
     kpi_match = _PPR_KPI_RE.search(full_text)
     if kpi_match:
-        result["total_paid"] = _parse_number(kpi_match.group(1))
+        result["total_paid"] = round(_parse_number(kpi_match.group(1)) * _AED_PER_USD, 2)
         # No separate opening/closing count in this document - only a
         # single average-lives figure for the whole review period, used
         # for both ends so the per-member normalization degenerates to
@@ -1087,7 +1098,12 @@ def _parse_ppr_text(full_text: str) -> Dict[str, Any]:
             if month_abbr.lower() not in _MONTH_NAMES:
                 continue
             monthly.append(
-                {"year": int(year), "month": month_abbr.title(), "paid": _parse_number(value), "partial": False}
+                {
+                    "year": int(year),
+                    "month": month_abbr.title(),
+                    "paid": round(_parse_number(value) * _AED_PER_USD, 2),
+                    "partial": False,
+                }
             )
 
         if monthly and result["report_period_start"]:
