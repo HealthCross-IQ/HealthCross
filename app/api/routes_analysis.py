@@ -10,6 +10,7 @@ from app.ingestion.premium_summary_rate_card import lookup_rate, parse_premium_s
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.diagnosis_classification import classify_diagnosis_group, flag_diagnosis_group
+from app.reference.emirate_regions import region_for_emirate
 from app.scoring.rules.benefits_comparison import compare_benefit_summaries, compare_benefit_value
 from app.scoring.rules.benefits_summary import NOT_SPECIFIED, build_standard_benefit_summary
 from app.scoring.rules.census_summary import census_demographic_summary
@@ -1189,6 +1190,7 @@ def _member_rate_row(member: models.CensusRecord, renewal_increase_pct: Optional
         "age": member.age,
         "gender": member.gender,
         "relation": member.relation,
+        "region": region_for_emirate(member.emirates),
         "existing_annual_rate": existing,
         "computed_new_rate": computed_new_rate,
         "new_annual_rate_override": override,

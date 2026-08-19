@@ -1802,7 +1802,137 @@ async function saveCaseDetails() {
   }
 }
 
+// Cached so saveCategoryRates() can look up which members belong to a
+// grid cell, and each member's own CURRENT new_annual_rate_override -
+// PATCH /member-rates replaces both existing_annual_rate and
+// new_annual_rate_override per member wholesale, so applying a cell's
+// existing rate must still resend each member's own untouched override
+// value rather than wiping it out.
+let _lastMemberRatesData = null;
+
+// Mirrors the insurer's own rate-card grid shape (Category x Age Band x
+// Gender x Region - see app/ingestion/premium_summary_rate_card.py and
+// app/reference/emirate_regions.py) rather than one flat rate per
+// category, since that's genuinely how these are priced: the same
+// Category A can cost a different amount in Dubai vs. the Northern
+// Emirates, and a different amount again for a 55-year-old vs. a 25-year-old.
+const RATE_AGE_BANDS = [[0, 17, '0-17'], [18, 40, '18-40'], [41, 59, '41-59'], [60, 999, '60-99']];
+const RATE_GENDER_ORDER = ['Male', 'Female', 'Unspecified'];
+const RATE_REGION_ORDER = ['Dubai', 'Northern Emirates', 'Abu Dhabi'];
+
+function _ageBandLabel(age) {
+  if (age == null) return 'Unspecified';
+  const band = RATE_AGE_BANDS.find(([lo, hi]) => age >= lo && age <= hi);
+  return band ? band[2] : 'Unspecified';
+}
+
+function _genderLabel(gender) {
+  return gender === 'M' ? 'Male' : gender === 'F' ? 'Female' : 'Unspecified';
+}
+
+function _regionSort(a, b) {
+  const ia = RATE_REGION_ORDER.indexOf(a), ib = RATE_REGION_ORDER.indexOf(b);
+  return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib) || a.localeCompare(b);
+}
+
+// region -> category -> gender -> age band -> [members] - a member's own
+// region comes from the census's emirates field (see routes_analysis.py's
+// _member_rate_row, which defaults an unmapped/missing emirate to Dubai -
+// the common case by far - so this rarely needs its own "Unspecified"
+// region section in practice).
+function _groupMembersForRateGrid(members) {
+  const tree = {};
+  members.forEach(m => {
+    const region = m.region || 'Unspecified';
+    const category = m.category || 'Uncategorized';
+    const gender = _genderLabel(m.gender);
+    const ageBand = _ageBandLabel(m.age);
+    tree[region] = tree[region] || {};
+    tree[region][category] = tree[region][category] || {};
+    tree[region][category][gender] = tree[region][category][gender] || {};
+    (tree[region][category][gender][ageBand] = tree[region][category][gender][ageBand] || []).push(m);
+  });
+  return tree;
+}
+
+function _rateGridHtml(regionTree, caseRenewalIncreasePct) {
+  return Object.keys(regionTree).sort(_regionSort).map(region => {
+    const catTree = regionTree[region];
+    const rows = [];
+    Object.keys(catTree).sort((a, b) => (a === 'Uncategorized') - (b === 'Uncategorized') || a.localeCompare(b)).forEach(category => {
+      RATE_GENDER_ORDER.forEach(gender => {
+        const ageTree = catTree[category][gender];
+        if (!ageTree) return;
+        RATE_AGE_BANDS.map(b => b[2]).concat('Unspecified').forEach(ageBand => {
+          const members = ageTree[ageBand];
+          if (!members || !members.length) return;
+          const existingValues = [...new Set(members.map(m => m.existing_annual_rate).filter(v => v != null))];
+          const uniform = existingValues.length === 1 ? existingValues[0] : null;
+          const mixed = existingValues.length > 1;
+          const computedNewRate = (uniform != null && caseRenewalIncreasePct != null)
+            ? Math.round(uniform * (1 + caseRenewalIncreasePct / 100) * 100) / 100
+            : null;
+          const gridKey = `${region}||${category}||${gender}||${ageBand}`;
+          rows.push(`
+            <tr>
+              <td>${escapeHtml(category)}</td>
+              <td>${escapeHtml(gender)}</td>
+              <td>${escapeHtml(ageBand)}</td>
+              <td>${members.length}</td>
+              <td><input type="number" step="0.01" data-grid-key="${escapeHtml(gridKey)}" value="${uniform ?? ''}" placeholder="${mixed ? 'mixed' : 'e.g. 3,500'}" style="width:110px;"></td>
+              <td>${computedNewRate != null ? 'AED ' + computedNewRate.toLocaleString() : (mixed ? 'mixed' : '-')}</td>
+            </tr>
+          `);
+        });
+      });
+    });
+    return `
+      <h4>${escapeHtml(region)}</h4>
+      <table>
+        <tr><th>Category</th><th>Gender</th><th>Age Band</th><th>Members</th><th>Existing rate (AED)</th><th>Effective new rate</th></tr>
+        ${rows.join('')}
+      </table>
+    `;
+  }).join('');
+}
+
+async function saveCategoryRates() {
+  if (!_lastMemberRatesData) return;
+  const updates = [];
+  document.querySelectorAll('[data-grid-key]').forEach(el => {
+    if (el.value === '') return;
+    const [region, category, gender, ageBand] = el.dataset.gridKey.split('||');
+    const value = Number(el.value);
+    const members = _lastMemberRatesData.members.filter(m =>
+      (m.region || 'Unspecified') === region
+      && (m.category || 'Uncategorized') === category
+      && _genderLabel(m.gender) === gender
+      && _ageBandLabel(m.age) === ageBand
+    );
+    members.forEach(m => {
+      updates.push({
+        census_record_id: m.census_record_id,
+        existing_annual_rate: value,
+        new_annual_rate_override: m.new_annual_rate_override,
+      });
+    });
+  });
+  if (!updates.length) { toast('Enter a rate for at least one row first', true); return; }
+  try {
+    await api(`/cases/${currentCase.id}/member-rates`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(updates),
+    });
+    toast(`Applied rates to ${updates.length} member(s)`);
+    loadMemberRates();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 function renderMemberRatesTable(data) {
+  _lastMemberRatesData = data;
   const area = document.getElementById('member-rates-area');
   if (!area) return;
   if (!data.members.length) {
@@ -1810,33 +1940,45 @@ function renderMemberRatesTable(data) {
     return;
   }
   const increaseNote = data.case_renewal_increase_pct != null
-    ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills each member's new rate below once their existing rate is saved. Enter a value in "New rate override" only to set that one member's new rate manually instead.`
-    : `No case-level renewal increase computed yet (needs a claims ledger and current premium set on this case) - enter each member's new rate manually below via "New rate override", or come back once the renewal rating is available.`;
+    ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills every member's new rate once a cell's existing rate is applied below.`
+    : `No case-level renewal increase computed yet (needs a claims ledger and current premium set on this case) - come back once the renewal rating is available, or set rates individually below in the meantime.`;
+
+  const regionTree = _groupMembersForRateGrid(data.members);
+
+  const memberRows = data.members.map(m => `
+    <tr>
+      <td>${escapeHtml(m.employee_ref || ('#' + m.census_record_id))}</td>
+      <td>${escapeHtml(m.category || '-')}</td>
+      <td>${m.age ?? '-'}</td>
+      <td>${escapeHtml(m.gender || '-')}</td>
+      <td>${escapeHtml(m.relation || '-')}</td>
+      <td><input type="number" step="0.01" data-mr-existing="${m.census_record_id}" value="${m.existing_annual_rate ?? ''}" style="width:110px;"></td>
+      <td><input type="number" step="0.01" data-mr-override="${m.census_record_id}" value="${m.new_annual_rate_override ?? ''}" placeholder="${m.computed_new_rate != null ? m.computed_new_rate.toLocaleString() : 'auto'}" style="width:110px;"></td>
+      <td>${m.effective_new_rate != null ? 'AED ' + m.effective_new_rate.toLocaleString() : '-'}</td>
+      <td>${m.rate_change_pct != null ? (m.rate_change_pct > 0 ? '+' : '') + m.rate_change_pct + '%' : '-'}</td>
+    </tr>
+  `).join('');
 
   area.innerHTML = `
     <div class="card">
-      <h3>Existing vs. New Rates by Member</h3>
-      <div class="hint">${increaseNote}</div>
-      <table>
-        <tr>
-          <th>Member</th><th>Category</th><th>Age</th><th>Gender</th><th>Relation</th>
-          <th>Existing rate (AED)</th><th>New rate override (AED, optional)</th><th>Effective new rate</th><th>Change</th>
-        </tr>
-        ${data.members.map(m => `
+      <h3>Existing vs. New Rates by Category, Age Band &amp; Gender</h3>
+      <div class="hint">${increaseNote} One rate applies to every member in that region/category/gender/age-band cell at once - matching how the insurer's own rate card is priced. Only cells with at least one member are shown.</div>
+      ${_rateGridHtml(regionTree, data.case_renewal_increase_pct)}
+      <div style="margin-top:12px;"><button class="primary" onclick="saveCategoryRates()">Apply rates</button></div>
+    </div>
+    <div class="card">
+      <details>
+        <summary style="cursor:pointer; font-weight:700; font-size:14.5px;">Per-member rates (individual exceptions)</summary>
+        <div class="hint" style="margin-top:10px;">Only needed when one member's rate genuinely differs from the rest of their region/category/gender/age-band cell - saving here overrides whatever the grid above set for that one member.</div>
+        <table>
           <tr>
-            <td>${escapeHtml(m.employee_ref || ('#' + m.census_record_id))}</td>
-            <td>${escapeHtml(m.category || '-')}</td>
-            <td>${m.age ?? '-'}</td>
-            <td>${escapeHtml(m.gender || '-')}</td>
-            <td>${escapeHtml(m.relation || '-')}</td>
-            <td><input type="number" step="0.01" data-mr-existing="${m.census_record_id}" value="${m.existing_annual_rate ?? ''}" style="width:110px;"></td>
-            <td><input type="number" step="0.01" data-mr-override="${m.census_record_id}" value="${m.new_annual_rate_override ?? ''}" placeholder="${m.computed_new_rate != null ? m.computed_new_rate.toLocaleString() : 'auto'}" style="width:110px;"></td>
-            <td>${m.effective_new_rate != null ? 'AED ' + m.effective_new_rate.toLocaleString() : '-'}</td>
-            <td>${m.rate_change_pct != null ? (m.rate_change_pct > 0 ? '+' : '') + m.rate_change_pct + '%' : '-'}</td>
+            <th>Member</th><th>Category</th><th>Age</th><th>Gender</th><th>Relation</th>
+            <th>Existing rate (AED)</th><th>New rate override (AED, optional)</th><th>Effective new rate</th><th>Change</th>
           </tr>
-        `).join('')}
-      </table>
-      <div style="margin-top:12px;"><button class="primary" onclick="saveMemberRates()">Save rates</button></div>
+          ${memberRows}
+        </table>
+        <div style="margin-top:12px;"><button onclick="saveMemberRates()">Save individual rates</button></div>
+      </details>
     </div>
   `;
 }
