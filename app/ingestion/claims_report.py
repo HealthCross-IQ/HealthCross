@@ -79,6 +79,18 @@ def parse_claims_report(file: BinaryIO, filename: str) -> Dict[str, Any]:
         upper_text = full_text.upper()
 
         if "HEALTH INSURANCE CLAIMS RECORD" in upper_text and "DHA Mandated Format" not in full_text:
+            if "DHA CLAIMS REPORT" in upper_text:
+                # A fourth real-world variant (a MetLife-issued DHA Claims
+                # Report) that also lacks "DHA Mandated Format" and shares
+                # format 3's 6-age-band population census, but - unlike
+                # format 3 - renders with real, reliably-detected bordered
+                # tables (format 3's own file is the one whose plain text
+                # extraction is unreadable; this one's isn't), a 6th
+                # "Others" claims category alongside IP/OP/Pharmacy/Dental/
+                # Optical throughout, and row 17's month given as a bare
+                # "01".."12" rather than a name, with row-letters recycled
+                # (17a-17g) once the report spans a second calendar year.
+                return _parse_format4_from_rows(extract_format2_rows(pdf))
             if "POPULATION CENSUS" in upper_text and "OVER 65" in upper_text:
                 # A third real-world variant (seen on a real DAL Group
                 # report) that also lacks "DHA Mandated Format" but doesn't
@@ -793,6 +805,187 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
                 "partial": False,
             }
         )
+
+    if monthly and result["policy_effective_date"]:
+        first = monthly[0]
+        month_num = _MONTH_NAMES.get(first["month"].lower())
+        if (
+            month_num == result["policy_effective_date"].month
+            and first["year"] == result["policy_effective_date"].year
+            and result["policy_effective_date"].day > 1
+        ):
+            first["partial"] = True
+
+    result["monthly_paid"] = monthly
+    return result
+
+
+def _parse_format4_from_rows(rows: List[list]) -> Dict[str, Any]:
+    """A fourth real-world "Health insurance claims record" layout (seen
+    on a real MetLife-issued DHA Claims Report). Row numbering matches
+    format 1's (dates at 3a/3b/4a/4b/4c, totals at 5a/5c) rather than
+    format 2's, but like format 2 it renders with real, reliably-
+    detected bordered tables - unlike format 1's plain-text rows or
+    format 3's (a different file whose text extraction badly scrambles
+    this same kind of table). Every member-type/diagnosis/provider/
+    network table carries an extra 6th "Others" category alongside IP/
+    OP/Pharmacy/Dental/Optical - mapped into the existing
+    not_yet_classified slot so every format's dict shares the same
+    shape, even though "Others" isn't quite the same thing.
+    """
+    result: Dict[str, Any] = {
+        "policy_number": None,
+        "policy_effective_date": None,
+        "policy_expiry_date": None,
+        "report_period_start": None,
+        "report_period_end": None,
+        "report_production_date": None,
+        "total_paid": None,
+        "incurred_not_reported": None,
+        "opening_members": None,
+        "closing_members": None,
+        "diagnosis_breakdown": [],
+        "provider_breakdown": [],
+        "claims_by_type": [],
+        "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
+        "monthly_paid": [],
+    }
+
+    row_2 = _find_row(rows, "2")
+    if row_2 and len(row_2) > 2:
+        result["policy_number"] = _cell(row_2[2]) or None
+
+    date_fields = {
+        "3a": "policy_effective_date",
+        "3b": "policy_expiry_date",
+        "4a": "report_period_start",
+        "4b": "report_period_end",
+        "4c": "report_production_date",
+    }
+    for key, field in date_fields.items():
+        row = _find_row(rows, key)
+        if row and len(row) > 2:
+            result[field] = _format2_parse_date(_cell(row[2]))
+
+    row_5a = _find_row(rows, "5a")
+    if row_5a and len(row_5a) > 2:
+        result["total_paid"] = _cell_number(row_5a[2])
+    row_5c = _find_row(rows, "5c")
+    if row_5c and len(row_5c) > 2:
+        result["incurred_not_reported"] = _cell_number(row_5c[2])
+
+    def _population_total(keys: List[str]) -> Optional[int]:
+        total = 0.0
+        found = False
+        for key in keys:
+            row = _find_row(rows, key)
+            if row and len(row) > 8 and _cell(row[8]):
+                total += _cell_number(row[8])
+                found = True
+        return int(total) if found else None
+
+    result["opening_members"] = _population_total(["6a", "6b", "6c"])
+    result["closing_members"] = _population_total(["7a", "7b", "7c"])
+
+    def _member_type_rows(row_num: int, cast):
+        member_rows = []
+        for letter in "abc":
+            row = _find_row(rows, f"{row_num}{letter}")
+            if not row or len(row) < 9:
+                continue
+            member_rows.append(
+                {
+                    "relation": _cell(row[1]),
+                    "in_patient": cast(_cell_number(row[2])),
+                    "out_patient": cast(_cell_number(row[3])),
+                    "pharmacy": cast(_cell_number(row[4])),
+                    "dental": cast(_cell_number(row[5])),
+                    "optical": cast(_cell_number(row[6])),
+                    "not_yet_classified": cast(_cell_number(row[7])),
+                    "total": cast(_cell_number(row[8])),
+                }
+            )
+        return member_rows
+
+    result["claims_by_member_type_value"] = _member_type_rows(8, float)
+    result["claims_by_member_type_count"] = _member_type_rows(9, int)
+
+    row_8d = _find_row(rows, "8d")
+    if row_8d and len(row_8d) >= 9:
+        result["treatment_type_breakdown"] = [
+            {"type": "In-Patient", "value": _cell_number(row_8d[2])},
+            {"type": "Out-Patient", "value": _cell_number(row_8d[3])},
+            {"type": "Pharmacy", "value": _cell_number(row_8d[4])},
+            {"type": "Dental", "value": _cell_number(row_8d[5])},
+            {"type": "Optical", "value": _cell_number(row_8d[6])},
+            {"type": "Not Yet Classified", "value": _cell_number(row_8d[7])},
+        ]
+
+    counts_by_letter: Dict[str, dict] = {}
+    for letter in "abcdefghij":
+        row = _find_row(rows, f"11{letter}")
+        if row and len(row) >= 9:
+            counts_by_letter[letter] = {
+                "count": int(_cell_number(row[8])),
+                "ip_count": int(_cell_number(row[2])),
+            }
+
+    for letter in "abcdefghij":
+        row = _find_row(rows, f"10{letter}")
+        if not row or len(row) < 9:
+            continue
+        counts = counts_by_letter.get(letter, {})
+        result["diagnosis_breakdown"].append(
+            {
+                "label": _cell(row[1]),
+                "value": _cell_number(row[8]),
+                "count": counts.get("count", 0),
+                "ip_value": _cell_number(row[2]),
+                "ip_count": counts.get("ip_count", 0),
+            }
+        )
+
+    for letter in "abcdefghij":
+        row = _find_row(rows, f"12{letter}")
+        if row and len(row) >= 9:
+            result["provider_breakdown"].append({"provider": _cell(row[1]), "value": _cell_number(row[8])})
+
+    for key, label in (("14a", "In Network"), ("14b", "Out of Network")):
+        row = _find_row(rows, key)
+        if row and len(row) >= 9:
+            result["claims_by_type"].append({"type": label, "value": _cell_number(row[8])})
+
+    # Row 17's own row-letter labels (17a-17g) recycle once the report
+    # spans a second calendar year (a 9+ month period almost always
+    # does), so this can't be looked up by unique key like every other
+    # section here - it walks every row between the "17" and "18"
+    # section headers in table order instead.
+    monthly: List[dict] = []
+    start = _find_row_index(rows, "17")
+    end = _find_row_index(rows, "18")
+    if start is not None:
+        for row in rows[start + 1 : end if end is not None else len(rows)]:
+            if not row or len(row) < 6:
+                continue
+            month_cell = _cell(row[2])
+            year_cell = _cell(row[4])
+            value_cell = _cell(row[5])
+            if not (month_cell.isdigit() and year_cell.isdigit() and value_cell):
+                continue
+            month_num = int(month_cell)
+            if not 1 <= month_num <= 12:
+                continue
+            month_name = [k for k, v in _MONTH_NAMES.items() if v == month_num][0].capitalize()
+            monthly.append(
+                {
+                    "year": int(year_cell),
+                    "month": month_name,
+                    "paid": _cell_number(value_cell),
+                    "partial": False,
+                }
+            )
 
     if monthly and result["policy_effective_date"]:
         first = monthly[0]
