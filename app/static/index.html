@@ -3493,6 +3493,25 @@ async function loadNewBusinessRating() {
   nbCensusUncategorized = censusCategories.uncategorized_member_count;
   await Promise.all(nbCategories.map((cat, idx) => cat.network ? nbFetchVariantOptions(idx) : Promise.resolve()));
   await nbRenderArea();
+
+  // Every category already has a Product/Network (prefilled above from the
+  // Benefits tab's own nb_product/nb_network, or from the prior quote) -
+  // generate the quote straight away rather than making the underwriter
+  // click "Compute quote" on data that's already complete. Only on first
+  // load without an existing quote - nbComputeQuote() itself is what keeps
+  // it fresh after that (see nbSetNetwork/nbSetVariantSelection/
+  // nbSetCommission below), so this isn't needed on every tab switch.
+  if (!nbLastQuote && _nbReadyToAutoCompute()) {
+    await nbComputeQuote();
+  }
+}
+
+// True once every priced category (i.e. every category the census actually
+// has members in) has both a Product and a Network picked - the only two
+// fields nbComputeQuote() strictly requires - so a quote can be generated
+// with zero clicks the moment there's nothing left unset.
+function _nbReadyToAutoCompute() {
+  return nbCategories.length > 0 && nbCategories.every(c => c.product && c.network);
 }
 
 let nbCensusUncategorized = 0;
@@ -3634,7 +3653,12 @@ async function nbSetNetwork(idx, value) {
   nbCategories[idx].network = network;
   nbCategories[idx].tpa = tpa;
   await nbFetchVariantOptions(idx);
-  nbRenderArea();
+  await nbRenderArea();
+  // The Network picker is normally the last thing an underwriter sets per
+  // category (Product comes first) - so this is usually the exact moment
+  // every category becomes ready, and the quote should appear without a
+  // separate "Compute quote" click.
+  if (_nbReadyToAutoCompute()) await nbComputeQuote();
 }
 
 async function nbSetPreviewRegion(idx, region) {
@@ -3653,16 +3677,18 @@ async function nbFetchVariantOptions(idx) {
   }
 }
 
-function nbSetVariantSelection(idx, variantName, value) {
+async function nbSetVariantSelection(idx, variantName, value) {
   if (value) {
     nbCategories[idx].variant_selections[variantName] = value;
   } else {
     delete nbCategories[idx].variant_selections[variantName];
   }
+  if (_nbReadyToAutoCompute()) await nbComputeQuote();
 }
 
-function nbSetCommission(idx, value) {
+async function nbSetCommission(idx, value) {
   nbCategories[idx].commission_pct = value;
+  if (_nbReadyToAutoCompute()) await nbComputeQuote();
 }
 
 async function nbUploadFile(kind) {
