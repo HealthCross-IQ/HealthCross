@@ -1040,6 +1040,14 @@ async function printRenewalClientSummary(variant) {
     return;
   }
 
+  // Best-effort - a case with only one year of claims reports on file (or
+  // none at all, since the renewal rating itself can run off the claims
+  // LEDGER instead) simply has nothing to trend, not an error.
+  let reportComparison = null;
+  try {
+    reportComparison = await api(`/cases/${currentCase.id}/claims-report-comparison`);
+  } catch (err) { /* no claims reports uploaded - trend section omitted */ }
+
   const c = data.case;
   const r = data.renewal;
   const bench = data.benchmark;
@@ -1070,15 +1078,15 @@ async function printRenewalClientSummary(variant) {
       const pad = (maxV - minV) * 0.15 || 5;
       const domainMin = Math.max(0, minV - pad), domainMax = maxV + pad;
       const xScale = v => 20 + (v - domainMin) / (domainMax - domainMin || 1) * 800;
-      const dots = bench.other_loss_ratios.map(v => `<circle cx="${xScale(v * 100)}" cy="40" r="5" fill="#898781" opacity="0.55"></circle>`).join('');
+      const dots = bench.other_loss_ratios.map(v => `<circle cx="${xScale(v * 100)}" cy="40" r="5" fill="#837e6d" opacity="0.55"></circle>`).join('');
       benchmarkHtml = `
         <div class="rcs-section">
           <h3>Renewal Benchmark <span class="rcs-muted-label">(internal only)</span></h3>
           <p class="rcs-desc">This case's loss ratio against ${bench.comparable_case_count} other HealthCross renewal case${bench.comparable_case_count === 1 ? '' : 's'} with a computed rating - case-to-case, no external market rate available yet.</p>
           <svg viewBox="0 0 840 70" class="rcs-bench-svg">
-            <line x1="20" y1="40" x2="820" y2="40" stroke="#e1e0d9" stroke-width="2" stroke-linecap="round"></line>
+            <line x1="20" y1="40" x2="820" y2="40" stroke="#e7e3d6" stroke-width="2" stroke-linecap="round"></line>
             ${dots}
-            <circle cx="${xScale(lossRatioPct)}" cy="40" r="7" fill="#d03b3b" stroke="#fcfcfb" stroke-width="2"></circle>
+            <circle cx="${xScale(lossRatioPct)}" cy="40" r="7" fill="#a83232" stroke="#fdfcf9" stroke-width="2"></circle>
             <text x="${xScale(lossRatioPct)}" y="24" text-anchor="middle" class="rcs-bench-label">this case &middot; ${lossRatioPct.toFixed(0)}%</text>
           </svg>
           ${bench.percentile != null ? `<p class="rcs-desc">${bench.percentile}th percentile${bench.low_credibility ? ' - small sample, treat as directional' : ''}.</p>` : ''}
@@ -1096,13 +1104,72 @@ async function printRenewalClientSummary(variant) {
     <div class="rcs-bar-row"><span>${escapeHtml(band)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.age_band_pct[band] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.age_band_counts[band]}</span></div>
   `).join('') : '';
   const genderRows = census ? ['M', 'F'].map(g => `
-    <div class="rcs-bar-row"><span>${g === 'M' ? 'Male' : 'Female'}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.gender_pct[g] * 100).toFixed(1)}%; ${g === 'F' ? 'background:#0ca30c;' : ''}"></div></div><span class="rcs-count">${census.gender_counts[g]}</span></div>
+    <div class="rcs-bar-row"><span>${g === 'M' ? 'Male' : 'Female'}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.gender_pct[g] * 100).toFixed(1)}%; ${g === 'F' ? 'background:#b3752c;' : ''}"></div></div><span class="rcs-count">${census.gender_counts[g]}</span></div>
   `).join('') : '';
   const relationRows = census ? Object.keys(census.relation_counts).filter(rel => census.relation_counts[rel] > 0).map(rel => `
     <div class="rcs-bar-row"><span>${escapeHtml(rel)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.relation_pct[rel] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.relation_counts[rel]}</span></div>
   `).join('') : '';
 
-  const diagnosisRows = diagnoses.slice(0, 4).map(d => `<tr><th>${escapeHtml(d.diagnosis_description || d.diagnosis_code || 'Unknown')}</th><td class="rcs-num">AED ${d.value.toLocaleString()}</td></tr>`).join('');
+  const diagnosisRows = diagnoses.slice(0, 4).map(d => `<tr><th>${escapeHtml(d.diagnosis_description || d.diagnosis_code || 'Unknown')}${d.high_exposure ? '<span class="rcs-flag-pill">high exposure</span>' : ''}</th><td class="rcs-num">AED ${d.value.toLocaleString()}</td></tr>`).join('');
+
+  // Year-over-year burning cost, when a second policy year's claims report
+  // is on file - same figures as the on-screen "Year-over-year claims
+  // comparison" card (see /claims-report-comparison), just carried into
+  // the printed export too.
+  const trendReports = reportComparison && reportComparison.reports.length >= 2 ? reportComparison.reports : [];
+  const trendMaxBurningCost = trendReports.length ? Math.max(...trendReports.map(tr => tr.burning_cost_per_member || 0)) : 0;
+  const burningCostTrendBarsHtml = trendReports.map(tr => `
+    <div class="rcs-bar-row">
+      <span>${tr.year ?? '-'}</span>
+      <div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${trendMaxBurningCost ? (tr.burning_cost_per_member / trendMaxBurningCost * 100).toFixed(1) : 0}%; ${tr.burning_cost_pct_change > 0 ? 'background:#a83232;' : tr.burning_cost_pct_change < 0 ? 'background:#2f6b4f;' : ''}"></div></div>
+      <span class="rcs-count">${tr.burning_cost_per_member != null ? 'AED ' + tr.burning_cost_per_member.toLocaleString() : '-'}</span>
+    </div>
+  `).join('');
+  const burningCostTrendHtml = trendReports.length ? `
+    <section class="rcs-section">
+      <h3>Burning Cost Trend</h3>
+      <p class="rcs-desc">Total paid claims and burning cost per member (annualized, IBNR-adjusted) across every policy year uploaded for this case.</p>
+      <div class="rcs-bars" style="margin-bottom:12px;">${burningCostTrendBarsHtml}</div>
+      <table class="rcs-data">
+        <tr><th>Year</th><th class="rcs-num">Total Paid</th><th class="rcs-num">Burning Cost / Member</th><th class="rcs-num">Change</th></tr>
+        ${trendReports.map(tr => `
+          <tr>
+            <td>${tr.year ?? '-'}</td>
+            <td class="rcs-num">${tr.total_paid != null ? 'AED ' + tr.total_paid.toLocaleString() : '-'}</td>
+            <td class="rcs-num">${tr.burning_cost_per_member != null ? 'AED ' + tr.burning_cost_per_member.toLocaleString() : '-'}</td>
+            <td class="rcs-num">${tr.burning_cost_pct_change != null ? `<span class="${tr.burning_cost_pct_change > 0 ? 'rcs-change-up' : 'rcs-change-down'}">${tr.burning_cost_pct_change > 0 ? '+' : ''}${tr.burning_cost_pct_change}%</span>` : '-'}</td>
+          </tr>
+        `).join('')}
+      </table>
+    </section>
+  ` : '';
+
+  // Plain-language read of the numbers above, leading Page 1 right after
+  // the headline premium figures - so the "what does this mean" narrative
+  // comes before the gauge/buildup detail, not only after it in the Notes
+  // section at the very end of the document.
+  const latestBurningCostChangePct = trendReports.length ? trendReports[trendReports.length - 1].burning_cost_pct_change : null;
+  const keyFindings = [];
+  if (lossRatioPct >= 100) {
+    keyFindings.push(`Claims are currently running <strong>above</strong> premium income this period - an actual loss ratio of <strong>${lossRatioPct.toFixed(1)}%</strong> is the primary driver of this renewal.`);
+  } else if (lossRatioPct <= 65) {
+    keyFindings.push(`Claims experience is favorable this period, at an actual loss ratio of <strong>${lossRatioPct.toFixed(1)}%</strong>.`);
+  } else {
+    keyFindings.push(`Actual loss ratio for the period is <strong>${lossRatioPct.toFixed(1)}%</strong>.`);
+  }
+  keyFindings.push(`Required renewal premium is <strong>AED ${r.required_premium.toLocaleString()}</strong>, a <strong>${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</strong> change from the current AED ${r.current_annual_premium.toLocaleString()}.`);
+  if (latestBurningCostChangePct != null) {
+    keyFindings.push(`Burning cost per member has ${latestBurningCostChangePct > 0 ? 'risen' : 'fallen'} <strong>${latestBurningCostChangePct > 0 ? '+' : ''}${latestBurningCostChangePct}%</strong> year-over-year (see Burning Cost Trend, page 2).`);
+  }
+  if (diagnosisNote) keyFindings.push(diagnosisNote);
+  if (isInternal && bench && bench.comparable_case_count > 0 && bench.percentile != null) {
+    keyFindings.push(`This case sits at the <strong>${bench.percentile}th percentile</strong> of loss ratio among ${bench.comparable_case_count} comparable HealthCross case${bench.comparable_case_count === 1 ? '' : 's'}${bench.low_credibility ? ' (small sample, treat as directional)' : ''}.`);
+  }
+  const keyFindingsHtml = `
+    <div class="rcs-findings-box">
+      <div class="rcs-findings-title">Key Findings</div>
+      <ul class="rcs-findings-list">${keyFindings.map(f => `<li>${f}</li>`).join('')}</ul>
+    </div>`;
 
   const notesText = isInternal
     ? (diagnosisNote || 'No single diagnosis stands out as a disproportionate cost driver this period.')
@@ -1112,61 +1179,73 @@ async function printRenewalClientSummary(variant) {
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   * { box-sizing: border-box; }
-  body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f9f9f7; color: #0b0b0b; font-variant-numeric: tabular-nums; padding: 30px 16px; }
+  body { font-family: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f8f7f4; color: #14213d; font-variant-numeric: tabular-nums; padding: 30px 16px; }
   .rcs-paper { max-width: 860px; margin: 0 auto 24px; }
-  .rcs-page-tag { font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #898781; margin-bottom: 6px; }
-  .rcs-doc { background: #fcfcfb; border: 1px solid rgba(11,11,11,0.10); border-radius: 10px; padding: 34px 38px; page-break-after: always; }
-  .rcs-doc-header { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #0b0b0b; padding-bottom: 14px; margin-bottom: 20px; }
-  .rcs-brand { font-size: 16px; font-weight: 800; }
-  .rcs-brand span { color: #898781; font-weight: 500; font-size: 11.5px; display: block; margin-top: 2px; }
-  .rcs-meta { text-align: right; font-size: 10.5px; color: #898781; line-height: 1.6; }
+  .rcs-page-tag { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #837e6d; margin-bottom: 6px; }
+  .rcs-doc { background: #fdfcf9; border: 1px solid rgba(20,33,61,0.10); border-radius: 2px; box-shadow: 0 1px 3px rgba(20,33,61,0.06); padding: 40px 44px; page-break-after: always; }
+  .rcs-doc-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #14213d; padding-bottom: 14px; margin-bottom: 22px; }
+  .rcs-brand { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+  .rcs-brand span { color: #837e6d; font-family: 'IBM Plex Mono', monospace; font-weight: 400; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-top: 3px; }
+  .rcs-meta { text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #837e6d; line-height: 1.7; }
   .rcs-client-block { margin-bottom: 20px; }
-  .rcs-eyebrow { font-size: 10px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #2a78d6; margin-bottom: 5px; }
-  .rcs-client-block h1 { font-size: 21px; margin: 0 0 4px; font-weight: 800; }
-  .rcs-client-block .rcs-sub { font-size: 12px; color: #52514e; }
-  .rcs-status-pill { display: inline-flex; font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 999px; background: #fab2191a; color: #8a5a00; margin-left: 8px; }
-  .rcs-hero-row { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
-  .rcs-hero-label { font-size: 10px; color: #898781; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
-  .rcs-hero-value { font-size: 30px; font-weight: 800; line-height: 1; }
-  .rcs-hero-value.rcs-muted { color: #52514e; }
-  .rcs-hero-delta { font-size: 13px; font-weight: 800; color: #d03b3b; background: #d03b3b1a; padding: 3px 11px; border-radius: 999px; }
-  .rcs-viz-split { display: grid; grid-template-columns: 170px 1fr; gap: 24px; align-items: center; margin-bottom: 22px; }
-  .rcs-gauge-num { font-size: 22px; font-weight: 800; text-align: center; margin-top: -44px; }
-  .rcs-gauge-caption { font-size: 10px; color: #898781; text-align: center; }
-  .rcs-buildup-row { display: grid; grid-template-columns: 122px 1fr 92px; align-items: center; gap: 8px; font-size: 11px; margin-bottom: 8px; }
-  .rcs-buildup-track { height: 14px; background: #f0efec; border-radius: 4px; overflow: hidden; position: relative; }
-  .rcs-buildup-fill { height: 100%; border-radius: 4px; }
-  .rcs-buildup-value { text-align: right; font-weight: 700; }
-  section.rcs-section { margin-bottom: 22px; }
-  section.rcs-section h3 { font-size: 13px; font-weight: 800; margin: 0 0 3px; }
-  .rcs-desc { font-size: 11px; color: #898781; margin: 0 0 10px; line-height: 1.5; }
+  .rcs-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #b3752c; margin-bottom: 7px; }
+  .rcs-client-block h1 { font-family: 'Fraunces', serif; font-size: 24px; margin: 0 0 5px; font-weight: 600; letter-spacing: -0.01em; }
+  .rcs-client-block .rcs-sub { font-size: 12px; color: #4a4738; }
+  .rcs-status-pill { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; border: 1px solid #b3752c66; color: #b3752c; border-radius: 2px; margin-left: 9px; vertical-align: middle; }
+  .rcs-hero-row { display: flex; align-items: flex-end; gap: 26px; margin-bottom: 22px; flex-wrap: wrap; }
+  .rcs-hero-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #837e6d; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .rcs-hero-value { font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
+  .rcs-hero-value.rcs-muted { color: #837e6d; font-weight: 400; }
+  .rcs-hero-delta { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 600; color: #a83232; border-bottom: 2px solid #a83232; padding-bottom: 2px; }
+  .rcs-findings-box { border-left: 2px solid #b3752c; padding: 2px 0 2px 18px; margin-bottom: 24px; }
+  .rcs-findings-title { font-family: 'Fraunces', serif; font-style: italic; font-weight: 500; font-size: 14px; color: #14213d; margin-bottom: 9px; }
+  .rcs-findings-list { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.6; color: #33301f; }
+  .rcs-findings-list li { padding: 7px 0; border-top: 1px solid #e7e3d6; }
+  .rcs-findings-list li:first-child { border-top: none; padding-top: 0; }
+  .rcs-findings-list strong { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: #14213d; }
+  .rcs-viz-split { display: grid; grid-template-columns: 170px 1fr; gap: 26px; align-items: center; margin-bottom: 22px; }
+  .rcs-gauge-num { font-family: 'IBM Plex Mono', monospace; font-size: 21px; font-weight: 600; text-align: center; margin-top: -44px; }
+  .rcs-gauge-caption { font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #837e6d; text-align: center; margin-top: 2px; }
+  .rcs-buildup-row { display: grid; grid-template-columns: 128px 1fr 92px; align-items: center; gap: 9px; font-size: 11px; margin-bottom: 9px; color: #4a4738; }
+  .rcs-buildup-track { height: 3px; background: #e7e3d6; position: relative; }
+  .rcs-buildup-fill { height: 100%; }
+  .rcs-buildup-value { font-family: 'IBM Plex Mono', monospace; text-align: right; }
+  section.rcs-section { margin-bottom: 24px; }
+  section.rcs-section h3 { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .rcs-desc { font-size: 11px; color: #837e6d; margin: 0 0 11px; line-height: 1.5; }
   table.rcs-data { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  table.rcs-data th { text-align: left; font-size: 9.5px; text-transform: uppercase; color: #898781; font-weight: 700; padding: 0 8px 6px 0; border-bottom: 1px solid #0b0b0b; }
-  table.rcs-data td { padding: 6px 8px 6px 0; border-bottom: 1px solid rgba(11,11,11,0.10); }
-  table.rcs-data tr.rcs-total td, table.rcs-data tr.rcs-total th { font-weight: 700; border-top: 1.5px solid #0b0b0b; border-bottom: none; }
+  table.rcs-data th { text-align: left; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #837e6d; font-weight: 500; padding: 0 9px 7px 0; border-bottom: 1.5px solid #14213d; }
+  table.rcs-data td { padding: 8px 9px 8px 0; border-bottom: 1px solid #e7e3d6; font-family: 'IBM Plex Mono', monospace; }
+  table.rcs-data td:first-child { font-family: 'IBM Plex Sans', sans-serif; }
+  table.rcs-data tr.rcs-total td, table.rcs-data tr.rcs-total th { font-weight: 700; border-top: 1.5px solid #14213d; border-bottom: none; padding-top: 11px; }
   .rcs-num { text-align: right; }
   table.rcs-compare { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  table.rcs-compare th { text-align: right; font-size: 9.5px; text-transform: uppercase; color: #898781; font-weight: 700; padding: 0 10px 8px; border-bottom: 1px solid #0b0b0b; }
-  table.rcs-compare th:first-child, table.rcs-compare td:first-child { text-align: left; padding-left: 0; }
-  table.rcs-compare td { text-align: right; padding: 9px 10px; border-bottom: 1px solid rgba(11,11,11,0.10); }
-  table.rcs-compare tr.rcs-total td { font-weight: 800; font-size: 12px; border-top: 1.5px solid #0b0b0b; border-bottom: none; }
-  .rcs-change-up { color: #d03b3b; font-weight: 700; }
-  .rcs-pct-pill { font-size: 9.5px; color: #2a78d6; background: #2a78d61a; padding: 2px 7px; border-radius: 999px; font-weight: 700; margin-left: 5px; }
-  .rcs-bars { display: flex; flex-direction: column; gap: 6px; }
-  .rcs-bar-row { display: grid; grid-template-columns: 80px 1fr 40px; align-items: center; gap: 8px; font-size: 11px; }
-  .rcs-bar-track { height: 8px; background: #f0efec; border-radius: 4px; overflow: hidden; }
-  .rcs-bar-fill { height: 100%; background: #2a78d6; border-radius: 4px; }
-  .rcs-count { text-align: right; color: #52514e; font-size: 10.5px; }
-  .rcs-split { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
-  .rcs-notes-box { border: 1px solid rgba(11,11,11,0.10); background: #f0efec; border-radius: 8px; padding: 13px 15px; font-size: 11.5px; line-height: 1.55; }
-  .rcs-redacted { background: repeating-linear-gradient(135deg, #f0efec, #f0efec 4px, rgba(11,11,11,0.10) 4px, rgba(11,11,11,0.10) 8px); border-radius: 6px; padding: 12px 14px; font-size: 10.5px; color: #898781; text-align: center; font-style: italic; }
-  .rcs-muted-label { font-weight: 400; color: #898781; font-size: 10px; }
+  table.rcs-compare th { text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #837e6d; font-weight: 500; padding: 0 10px 8px; border-bottom: 1.5px solid #14213d; }
+  table.rcs-compare th:first-child, table.rcs-compare td:first-child { text-align: left; padding-left: 0; font-family: 'IBM Plex Sans', sans-serif; }
+  table.rcs-compare td { text-align: right; font-family: 'IBM Plex Mono', monospace; padding: 9px 10px; border-bottom: 1px solid #e7e3d6; }
+  table.rcs-compare tr.rcs-total td { font-weight: 700; font-size: 12.5px; border-top: 1.5px solid #14213d; border-bottom: none; padding-top: 12px; }
+  .rcs-change-up { color: #a83232; font-weight: 600; }
+  .rcs-change-down { color: #2f6b4f; font-weight: 600; }
+  .rcs-pct-pill { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #b3752c; padding: 0; font-weight: 500; margin-left: 6px; }
+  .rcs-flag-pill { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #a83232; border-bottom: 1px solid #a83232; margin-left: 7px; padding-bottom: 1px; }
+  .rcs-bars { display: flex; flex-direction: column; gap: 9px; }
+  .rcs-bar-row { display: grid; grid-template-columns: 66px 1fr 90px; align-items: center; gap: 9px; font-size: 11px; }
+  .rcs-bar-track { height: 5px; background: #e7e3d6; }
+  .rcs-bar-fill { height: 100%; background: #14213d; }
+  .rcs-count { text-align: right; font-family: 'IBM Plex Mono', monospace; color: #4a4738; font-size: 10.5px; }
+  .rcs-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .rcs-notes-box { border-left: 2px solid #14213d; background: #f4f2ea; padding: 13px 16px; font-size: 11.5px; line-height: 1.55; color: #33301f; }
+  .rcs-redacted { background: repeating-linear-gradient(135deg, #f4f2ea, #f4f2ea 4px, #e7e3d6 4px, #e7e3d6 8px); border-radius: 2px; padding: 12px 14px; font-size: 10.5px; color: #837e6d; text-align: center; font-style: italic; }
+  .rcs-muted-label { font-weight: 400; color: #837e6d; font-size: 9.5px; }
   .rcs-bench-svg { width: 100%; display: block; overflow: visible; }
-  .rcs-bench-label { font-size: 11px; font-weight: 700; fill: #d03b3b; }
-  .rcs-doc-footer { border-top: 1px solid rgba(11,11,11,0.10); padding-top: 10px; margin-top: 24px; font-size: 9.5px; color: #898781; display: flex; justify-content: space-between; }
-  @media print { .rcs-doc { border: none; } body { background: #fff; padding: 0; } }
+  .rcs-bench-label { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 600; fill: #a83232; }
+  .rcs-doc-footer { border-top: 1px solid #e7e3d6; padding-top: 12px; margin-top: 26px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #837e6d; display: flex; justify-content: space-between; }
+  @media print { .rcs-doc { border: none; box-shadow: none; } body { background: #fff; padding: 0; } }
 </style></head><body>
 
 <div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 3 &middot; Executive Summary</div><div class="rcs-doc">
@@ -1181,20 +1260,21 @@ async function printRenewalClientSummary(variant) {
     <div><div class="rcs-hero-label">Proposed Renewal Premium</div><div class="rcs-hero-value">AED ${(r.required_premium / 1e6).toFixed(2)}M</div></div>
     <span class="rcs-hero-delta">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</span>
   </div>
+  ${keyFindingsHtml}
   <div class="rcs-viz-split">
     <div>
       <svg viewBox="0 0 190 100" style="width:100%;">
-        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#f0efec" stroke-width="16" stroke-linecap="round"></path>
-        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#d03b3b" stroke-width="16" stroke-linecap="round" stroke-dasharray="${gaugeDash} 999"></path>
+        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#e7e3d6" stroke-width="10" stroke-linecap="round"></path>
+        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#a83232" stroke-width="10" stroke-linecap="round" stroke-dasharray="${gaugeDash} 999"></path>
       </svg>
       <div class="rcs-gauge-num">${lossRatioPct.toFixed(1)}%</div>
       <div class="rcs-gauge-caption">Actual Loss Ratio</div>
     </div>
     <div>
-      <div class="rcs-buildup-row"><span>Annualized Claims</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.annualized_incurred_claims)}%; background:#898781;"></div></div><span class="rcs-buildup-value">${r.annualized_incurred_claims.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.trended_claims)}%; background:#52514e;"></div></div><span class="rcs-buildup-value">${r.trended_claims.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span>Current Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.current_annual_premium)}%; border:1.5px dashed #898781; background:none;"></div></div><span class="rcs-buildup-value">${r.current_annual_premium.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span style="font-weight:800; color:#d03b3b;">Required Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.required_premium)}%; background:#d03b3b;"></div></div><span class="rcs-buildup-value" style="color:#d03b3b;">${r.required_premium.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span>Annualized Claims</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.annualized_incurred_claims)}%; background:#837e6d;"></div></div><span class="rcs-buildup-value">${r.annualized_incurred_claims.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.trended_claims)}%; background:#4a4738;"></div></div><span class="rcs-buildup-value">${r.trended_claims.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span>Current Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.current_annual_premium)}%; border:1.5px dashed #837e6d; background:none;"></div></div><span class="rcs-buildup-value">${r.current_annual_premium.toLocaleString()}</span></div>
+      <div class="rcs-buildup-row"><span style="font-weight:600; color:#a83232;">Required Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.required_premium)}%; background:#a83232;"></div></div><span class="rcs-buildup-value" style="color:#a83232;">${r.required_premium.toLocaleString()}</span></div>
     </div>
   </div>
   ${benchmarkHtml}
@@ -1226,6 +1306,7 @@ async function printRenewalClientSummary(variant) {
       <tr class="rcs-total"><th>Required annual premium</th><td class="rcs-num">AED ${r.required_premium.toLocaleString()}</td></tr>
     </table>
   </section>
+  ${burningCostTrendHtml}
   <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
 </div></div>
 
@@ -2925,18 +3006,23 @@ async function loadRenewalRating(inflationOverride, loadingOverride) {
     if (loadingOverride != null) params.set('loading_pct', loadingOverride);
     const qs = params.toString() ? `?${params.toString()}` : '';
     const r = await api(`/cases/${currentCase.id}/renewal-rating${qs}`);
+    const buildupItems = [
+      { label: 'Annualized claims', value: r.annualized_incurred_claims },
+      { label: `+ Inflation (${(r.assumptions_used.inflation_pct*100).toFixed(1)}%)`, value: r.trended_claims },
+      { label: 'Current premium', value: r.current_annual_premium },
+      { label: 'Required premium', value: r.required_premium },
+    ];
     area.innerHTML = `
       <div class="card">
         <h3>Renewal rating</h3>
         <div class="hint">Months used: ${r.months_used.join(', ')}</div>
-        <table>
-          <tr><th>Annualized incurred claims</th><td>${r.annualized_incurred_claims.toLocaleString()}</td></tr>
-          <tr><th>Current annual premium</th><td>${r.current_annual_premium.toLocaleString()}</td></tr>
-          <tr><th>Actual loss ratio</th><td>${(r.actual_loss_ratio*100).toFixed(1)}%</td></tr>
-          <tr><th>+ Inflation (${(r.assumptions_used.inflation_pct*100).toFixed(1)}%)</th><td>${r.trended_claims.toLocaleString()}</td></tr>
-          <tr><th>Required premium (÷ loading)</th><td>${r.required_premium.toLocaleString()}</td></tr>
-          <tr><th><b>Renewal increase</b></th><td><b>${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</b></td></tr>
-        </table>
+        <div class="row" style="flex-wrap:wrap; gap:12px; margin-bottom:16px;">
+          ${_statTileHtml('Actual loss ratio', `${(r.actual_loss_ratio*100).toFixed(1)}%`, 'annualized claims &divide; current premium')}
+          ${_statTileHtml('Required premium', `AED ${r.required_premium.toLocaleString()}`, `+${(r.assumptions_used.inflation_pct*100).toFixed(1)}% inflation, &divide; ${(100-r.assumptions_used.loading_pct*100).toFixed(1)}% (${(r.assumptions_used.loading_pct*100).toFixed(1)}% loading)`)}
+          ${_statTileHtml('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
+        </div>
+        <h4>Premium build-up</h4>
+        <div class="chart-wrap">${svgBarChart(buildupItems, { labelWidth: 150, color: 'var(--series-1)' })}</div>
         <div class="row" style="margin-top:12px; align-items:flex-end;">
           <div><label>Inflation %</label><input type="number" id="renewal-inflation-override" step="0.1" value="${(r.assumptions_used.inflation_pct*100).toFixed(1)}"></div>
           <div><label>Loading %</label><input type="number" id="renewal-loading-override" step="0.1" value="${(r.assumptions_used.loading_pct*100).toFixed(1)}"></div>
@@ -2944,6 +3030,7 @@ async function loadRenewalRating(inflationOverride, loadingOverride) {
         </div>
       </div>
     `;
+    bindChartTooltips(area);
   } catch (err) {
     area.innerHTML = '';
   }
