@@ -78,6 +78,19 @@ def parse_claims_report(file: BinaryIO, filename: str) -> Dict[str, Any]:
         full_text = "\n".join(page.extract_text() or "" for page in pdf.pages)
         upper_text = full_text.upper()
 
+        if "POLICY PERFORMANCE REVIEW" in upper_text:
+            # Not a DHA-mandated claims record at all - an insurer-issued
+            # analytics dashboard (a Power BI export), covering the same
+            # ground at a policy-summary level rather than DHA's regulatory
+            # line-item detail. Its per-benefit/diagnosis/age breakdown
+            # tables extract unreliably (Power BI's own "Power BI Desktop"
+            # watermark text is interleaved character-by-character into
+            # nearby headings, and find_tables() returns badly malformed
+            # rows for the denser tables) - only the monthly paid-claims
+            # figures, review period, and average lives extract cleanly as
+            # plain text, so that's all this parser attempts.
+            return _parse_ppr_text(full_text)
+
         if "HEALTH INSURANCE CLAIMS RECORD" in upper_text and "DHA Mandated Format" not in full_text:
             if "DHA CLAIMS REPORT" in upper_text:
                 # A fourth real-world variant (a MetLife-issued DHA Claims
@@ -998,6 +1011,97 @@ def _parse_format4_from_rows(rows: List[list]) -> Dict[str, Any]:
             first["partial"] = True
 
     result["monthly_paid"] = monthly
+    return result
+
+
+_PPR_TITLE_RE = re.compile(r"^(\d+)\s+(.+)$", re.MULTILINE)
+_PPR_PERIOD_RE = re.compile(r"Review Period:\s*([A-Za-z]+ \d{1,2} \d{4})\s+to\s+([A-Za-z]+ \d{1,2} \d{4})")
+_PPR_KPI_RE = re.compile(r"Paid Claims\s+Average Lives\s+No\. of Claimants\s*\n([\d,]+)\s+(\d+)\s+(\d+)")
+_PPR_MONTH_ROW_RE = re.compile(r"(20\d{2})\s+([A-Za-z]{3})\s+([\d,]+)")
+
+
+def _ppr_parse_date(text: str) -> Optional[date]:
+    try:
+        return datetime.strptime(text.strip(), "%B %d %Y").date()
+    except ValueError:
+        return None
+
+
+def _parse_ppr_text(full_text: str) -> Dict[str, Any]:
+    """An insurer-issued "Policy Performance Review" dashboard (a Power BI
+    export) - a policy-summary-level analytics document, not a DHA-
+    mandated claims record. Deliberately extracts only what its own text
+    layer gives back cleanly: the review period, average lives, total
+    paid, and the monthly paid-claims figures (all first_full_months/
+    project_annual_claims needs) - not diagnosis/provider/benefit
+    breakdowns, whose tables extract too unreliably here to trust (see
+    parse_claims_report's dispatch comment).
+    """
+    result: Dict[str, Any] = {
+        "policy_number": None,
+        "policy_effective_date": None,
+        "policy_expiry_date": None,
+        "report_period_start": None,
+        "report_period_end": None,
+        "report_production_date": None,
+        "total_paid": None,
+        "incurred_not_reported": None,
+        "opening_members": None,
+        "closing_members": None,
+        "diagnosis_breakdown": [],
+        "provider_breakdown": [],
+        "claims_by_type": [],
+        "treatment_type_breakdown": [],
+        "claims_by_member_type_value": [],
+        "claims_by_member_type_count": [],
+        "monthly_paid": [],
+    }
+
+    title_match = _PPR_TITLE_RE.search(full_text)
+    if title_match:
+        result["policy_number"] = title_match.group(1)
+
+    period_match = _PPR_PERIOD_RE.search(full_text)
+    if period_match:
+        result["report_period_start"] = _ppr_parse_date(period_match.group(1))
+        result["report_period_end"] = _ppr_parse_date(period_match.group(2))
+
+    kpi_match = _PPR_KPI_RE.search(full_text)
+    if kpi_match:
+        result["total_paid"] = _parse_number(kpi_match.group(1))
+        # No separate opening/closing count in this document - only a
+        # single average-lives figure for the whole review period, used
+        # for both ends so the per-member normalization degenerates to
+        # dividing by that same average either way.
+        average_lives = int(kpi_match.group(2))
+        result["opening_members"] = average_lives
+        result["closing_members"] = average_lives
+
+    month_section_start = full_text.find("Paid Claims by Month")
+    month_section_end = full_text.find("* Paid Claims", month_section_start) if month_section_start != -1 else -1
+    if month_section_start != -1:
+        month_text = full_text[month_section_start : month_section_end if month_section_end != -1 else None]
+        monthly = []
+        for match in _PPR_MONTH_ROW_RE.finditer(month_text):
+            year, month_abbr, value = match.groups()
+            if month_abbr.lower() not in _MONTH_NAMES:
+                continue
+            monthly.append(
+                {"year": int(year), "month": month_abbr.title(), "paid": _parse_number(value), "partial": False}
+            )
+
+        if monthly and result["report_period_start"]:
+            first = monthly[0]
+            month_num = _MONTH_NAMES.get(first["month"].lower())
+            if (
+                month_num == result["report_period_start"].month
+                and first["year"] == result["report_period_start"].year
+                and result["report_period_start"].day > 1
+            ):
+                first["partial"] = True
+
+        result["monthly_paid"] = monthly
+
     return result
 
 
