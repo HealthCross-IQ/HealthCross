@@ -24,7 +24,9 @@ from app.scoring.rules.claims_ledger_analysis import (
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
 from app.scoring.rules.renewal_rating import (
+    MIN_CREDIBLE_CASE_COUNT,
     RenewalRatingAssumptions,
+    _median,
     benchmark_case_against_book,
     calculate_renewal_rating,
     case_loading_pct,
@@ -977,6 +979,125 @@ def get_renewal_benchmark(case_id: int, db: Session = Depends(get_db)):
     return {
         "case": this_result,
         "book": benchmark_case_against_book(this_result, other_results),
+    }
+
+
+@router.get("/{case_id}/executive-summary")
+def get_executive_summary(case_id: int, db: Session = Depends(get_db)):
+    """One consolidated top-of-page snapshot for EVERY case, new business
+    or renewal alike, so an underwriter sees the account's overall
+    standing without clicking through the individual tabs. Reuses the
+    same computations those tabs already use (renewal rating/benchmark,
+    burning cost, census demographics) so nothing here can drift from
+    what they show.
+
+    A renewal case (claims ledger + current_annual_premium on file) gets
+    loss-ratio/renewal-increase/book-benchmark fields plus a burning-cost
+    trend (latest claims report vs. the prior one, if a second year is on
+    file). A new-business case (no claims history yet) instead gets its
+    quoted target_premium benchmarked per-member against every other
+    case in the book that has both a census and a premium on file. Either
+    kind always gets the plain census/premium facts.
+    """
+    case = _get_case_or_404(db, case_id)
+
+    census_count = len(case.census_records)
+    census_summary = None
+    if census_count:
+        census = [
+            {
+                "age": c.age,
+                "gender": c.gender,
+                "marital_status": c.marital_status,
+                "relation": c.relation,
+                "nationality_zone": c.nationality_zone,
+                "nationality": c.nationality,
+            }
+            for c in case.census_records
+        ]
+        census_summary = census_demographic_summary(census)
+
+    is_renewal = bool(case.claims_ledger_entries and case.current_annual_premium)
+
+    renewal = None
+    benchmark = None
+    if is_renewal:
+        renewal = _case_renewal_rating(case)
+        if renewal is not None:
+            other_results = []
+            for other in db.query(models.Case).filter(models.Case.id != case_id).all():
+                other_result = _case_renewal_rating(other)
+                if other_result is not None:
+                    other_results.append(other_result)
+            benchmark = benchmark_case_against_book(renewal, other_results)
+
+    reports = (
+        db.query(models.ClaimsReport)
+        .filter_by(case_id=case_id)
+        .order_by(models.ClaimsReport.report_period_start.asc(), models.ClaimsReport.created_at.asc())
+        .all()
+    )
+    burning_cost = None
+    if reports:
+        latest_bc = _standard_burning_cost_per_member(reports[-1])
+        prior_bc = _standard_burning_cost_per_member(reports[-2]) if len(reports) > 1 else None
+        if latest_bc is not None:
+            burning_cost = {
+                "latest_per_member": latest_bc,
+                "latest_report_period": (
+                    f"{reports[-1].report_period_start} to {reports[-1].report_period_end}"
+                    if reports[-1].report_period_start
+                    else None
+                ),
+                "prior_per_member": prior_bc,
+                "change_pct": round((latest_bc / prior_bc - 1) * 100, 1) if prior_bc else None,
+            }
+
+    new_business_benchmark = None
+    if not is_renewal and case.target_premium and census_count:
+        this_ppm = round(case.target_premium / census_count, 2)
+        other_ppms = []
+        for other in db.query(models.Case).filter(models.Case.id != case_id).all():
+            other_premium = other.current_annual_premium or other.target_premium
+            other_count = len(other.census_records)
+            if other_premium and other_count:
+                other_ppms.append(other_premium / other_count)
+        if other_ppms:
+            below = sum(1 for p in other_ppms if p < this_ppm)
+            equal = sum(1 for p in other_ppms if p == this_ppm)
+            new_business_benchmark = {
+                "premium_per_member": this_ppm,
+                "book_median_premium_per_member": round(_median(other_ppms), 2),
+                "comparable_case_count": len(other_ppms),
+                "percentile": round(100 * (below + 0.5 * equal) / len(other_ppms), 1),
+                "low_credibility": len(other_ppms) < MIN_CREDIBLE_CASE_COUNT,
+            }
+
+    reference_premium = case.current_annual_premium or case.target_premium
+    premium_per_member = round(reference_premium / census_count, 2) if census_count and reference_premium else None
+
+    return {
+        "case": {
+            "id": case.id,
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "industry": case.industry,
+            "existing_insurer": case.existing_insurer,
+            "policy_start_date": case.policy_start_date,
+            "renewal_date": case.renewal_date,
+            "business_type": case.business_type,
+        },
+        "account_type": "renewal" if is_renewal else "new_business",
+        "census_summary": census_summary,
+        "premium": {
+            "current_annual_premium": case.current_annual_premium,
+            "target_premium": case.target_premium,
+            "premium_per_member": premium_per_member,
+        },
+        "renewal": renewal,
+        "benchmark": benchmark,
+        "burning_cost": burning_cost,
+        "new_business_benchmark": new_business_benchmark,
     }
 
 
