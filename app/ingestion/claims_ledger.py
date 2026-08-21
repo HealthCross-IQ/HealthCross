@@ -34,8 +34,13 @@ CLAIMS_LEDGER_ALIASES: Dict[str, List[str]] = {
     "provider_name": ["provider_name", "provider name", "provider", "hospital/clinic", "hospital name", "facility name"],
     "diagnosis_code": ["diagnosis_code", "diagnosis code", "icd code", "icd10"],
     "diagnosis_description": ["diagnosis_description", "diagnosis description", "diagnosis_short_description", "diagnosis short description"],
-    "claimed_amount": ["claimed amount aed", "claimed_amount_aed", "claimed amount"],
-    "final_amount": ["final amount in aed", "final_amount_in_aed", "final amount", "amount paid"],
+    # "... Contract" is a newer HealthCross book-wide export's own wording
+    # for the same AED figure (its own CONTRACT_CURRENCY column confirms
+    # AED throughout - this isn't a different currency, just a renamed
+    # header) - without this alias, claimed_amount/final_amount silently
+    # came back None for every row instead of erroring.
+    "claimed_amount": ["claimed amount aed", "claimed_amount_aed", "claimed amount", "claimed amount contract"],
+    "final_amount": ["final amount in aed", "final_amount_in_aed", "final amount", "amount paid", "final amount contract"],
 }
 
 

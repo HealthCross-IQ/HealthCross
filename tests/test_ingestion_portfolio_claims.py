@@ -114,3 +114,30 @@ def test_skips_a_leading_blank_sheet_to_find_the_real_data(claims_xlsx_with_lead
         rows = parse_portfolio_claims(f, "claims.xlsx")
     assert len(rows) == 1
     assert rows[0]["patient_id"] == "ACM0001"
+
+
+def test_recognizes_the_contract_wording_for_amount_columns(tmp_path):
+    # A newer HealthCross export renamed "Claimed Amount AED"/"Final Amount
+    # in AED" to "Claimed Amount Contract"/"Final Amount Contract" (still
+    # AED throughout - its own CONTRACT_CURRENCY column confirms that) -
+    # without this alias claimed_amount/final_amount silently came back
+    # None for every single row instead of erroring.
+    header = [h if h not in ("Claimed Amount AED", "Final Amount in AED") else
+               {"Claimed Amount AED": "Claimed Amount Contract", "Final Amount in AED": "Final Amount Contract"}[h]
+               for h in HEADER]
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(header)
+    ws.append([
+        "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+        "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "J309", "Allergic rhinitis", 100.0, 90.0,
+    ])
+    path = tmp_path / "claims_contract_wording.xlsx"
+    wb.save(path)
+
+    with open(path, "rb") as f:
+        rows = parse_portfolio_claims(f, "claims.xlsx")
+    assert rows[0]["claimed_amount"] == 100.0
+    assert rows[0]["final_amount"] == 90.0
