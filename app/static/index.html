@@ -4181,11 +4181,13 @@ function paComputeTotals(rows) {
     acc.actual_claims += r.actual_claims;
     acc.actual_claims_paid += r.actual_claims_paid || 0;
     acc.actual_claims_outstanding += r.actual_claims_outstanding || 0;
+    acc.ibnr += r.ibnr || 0;
     acc.earned_member_years += r.earned_member_years;
     return acc;
-  }, { member_count: 0, priced_member_count: 0, standard_premium: 0, actual_premium: 0, actual_claims: 0, actual_claims_paid: 0, actual_claims_outstanding: 0, earned_member_years: 0 });
+  }, { member_count: 0, priced_member_count: 0, standard_premium: 0, actual_premium: 0, actual_claims: 0, actual_claims_paid: 0, actual_claims_outstanding: 0, ibnr: 0, earned_member_years: 0 });
   totals.loss_ratio_vs_standard = totals.standard_premium ? totals.actual_claims / totals.standard_premium : null;
   totals.loss_ratio_vs_actual = totals.actual_premium ? totals.actual_claims / totals.actual_premium : null;
+  totals.loss_ratio_incl_ibnr = totals.actual_premium ? (totals.actual_claims + totals.ibnr) / totals.actual_premium : null;
   totals.actual_vs_standard_pct = totals.standard_premium ? (totals.actual_premium - totals.standard_premium) / totals.standard_premium * 100 : null;
   totals.burning_cost = totals.earned_member_years ? totals.actual_claims / totals.earned_member_years : null;
   return totals;
@@ -4205,10 +4207,12 @@ function paSummaryRowHtml(groupByField, r) {
       <td>${r.actual_premium.toLocaleString()}</td>
       <td>${(r.actual_claims_paid || 0).toLocaleString()}</td>
       <td>${(r.actual_claims_outstanding || 0).toLocaleString()}</td>
+      <td>${(r.ibnr || 0).toLocaleString()}</td>
       <td>${r.actual_claims.toLocaleString()}</td>
       <td>${r.actual_vs_standard_pct != null ? (r.actual_vs_standard_pct > 0 ? '+' : '') + r.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
       <td>${r.loss_ratio_vs_standard != null ? (r.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
       <td>${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+      <td><b>${r.loss_ratio_incl_ibnr != null ? (r.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
       <td>${r.earned_member_years.toLocaleString()}</td>
       <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
     </tr>
@@ -4241,8 +4245,8 @@ function paSummaryHtml(summary) {
         <table>
           <tr>
             <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
-            <th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>Actual claims</th>
-            <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th>
+            <th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>IBNR</th><th>Actual claims</th>
+            <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th><th>Loss ratio (incl. IBNR)</th>
             <th>Exposed (member-years)</th><th>Burning cost</th>
           </tr>
           ${visibleRows.map(r => paSummaryRowHtml(summary.group_by, r)).join('')}
@@ -4253,16 +4257,18 @@ function paSummaryHtml(summary) {
             <td>${totals.actual_premium.toLocaleString()}</td>
             <td>${totals.actual_claims_paid.toLocaleString()}</td>
             <td>${totals.actual_claims_outstanding.toLocaleString()}</td>
+            <td>${totals.ibnr.toLocaleString()}</td>
             <td>${totals.actual_claims.toLocaleString()}</td>
             <td>${totals.actual_vs_standard_pct != null ? (totals.actual_vs_standard_pct > 0 ? '+' : '') + totals.actual_vs_standard_pct.toFixed(2) + '%' : '-'}</td>
             <td>${totals.loss_ratio_vs_standard != null ? (totals.loss_ratio_vs_standard * 100).toFixed(1) + '%' : '-'}</td>
             <td>${totals.loss_ratio_vs_actual != null ? (totals.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+            <td><b>${totals.loss_ratio_incl_ibnr != null ? (totals.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
             <td>${totals.earned_member_years.toLocaleString()}</td>
             <td>${totals.burning_cost != null ? totals.burning_cost.toLocaleString() : '-'}</td>
           </tr>
         </table>
       </div>
-      <div class="hint">Standard premium is hidden for now (not yet meaningful until Product mapping is fully uploaded) - "Loss ratio (standard)"/"Actual vs. standard" will populate once it's back. "Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet. "Claims (Paid)" + "Claims (Outstanding)" always add up to "Actual claims" - Outstanding covers anything not explicitly a "Paid" status (reserved/reported but not yet settled). "Burning cost" is actual claims per earned member-year (AED per member per annum) - the technical claims-cost rate underwriting uses to set required premium, independent of what was actually charged. Actual premium is earned (prorated by each member's elapsed policy term), not the full annual amount, so a group 3 months into its policy year is compared fairly rather than looking artificially cheap against claims. The Total row reflects whatever rows the search box currently shows.</div>
+      <div class="hint">Standard premium is hidden for now (not yet meaningful until Product mapping is fully uploaded) - "Loss ratio (standard)"/"Actual vs. standard" will populate once it's back. "Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet. "Claims (Paid)" + "Claims (Outstanding)" always add up to "Actual claims" - Outstanding covers anything not explicitly a "Paid" status (reserved/reported but not yet settled). "IBNR" estimates the claims-incurred-but-not-yet-reported tail as each account's own Paid claims from the last 30 days before the report date - zero once that account's policy has already run a full year (nothing left in the pipeline to estimate). "Loss ratio (incl. IBNR)" = (Paid + Outstanding + IBNR) &divide; Earned Premium, distinct from "Loss ratio (actual)" which omits IBNR. "Burning cost" is actual claims per earned member-year (AED per member per annum) - the technical claims-cost rate underwriting uses to set required premium, independent of what was actually charged. Actual premium is earned (prorated by each member's elapsed policy term), not the full annual amount, so a group 3 months into its policy year is compared fairly rather than looking artificially cheap against claims. The Total row reflects whatever rows the search box currently shows.</div>
     </div>
     ${paPolicyYearBreakdownHtml()}
   `;
@@ -4465,6 +4471,12 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
   const lossRatioItems = byProduct.rows.map(r => ({
     label: String(r.product), value: r.loss_ratio_vs_actual != null ? r.loss_ratio_vs_actual * 100 : 0,
   }));
+  const lossRatioInclIbnrByProductItems = byProduct.rows.map(r => ({
+    label: String(r.product), value: r.loss_ratio_incl_ibnr != null ? r.loss_ratio_incl_ibnr * 100 : 0,
+  }));
+  const lossRatioInclIbnrByNetworkItems = byNetwork.rows.map(r => ({
+    label: String(r.network), value: r.loss_ratio_incl_ibnr != null ? r.loss_ratio_incl_ibnr * 100 : 0,
+  }));
   const burningCostItems = byNetwork.rows.map(r => ({ label: String(r.network), value: r.burning_cost || 0 }));
   const categoryLossRatioItems = byCategory.rows.map(r => ({
     label: String(r.category), value: r.loss_ratio_vs_actual != null ? r.loss_ratio_vs_actual * 100 : 0,
@@ -4555,6 +4567,17 @@ function piContentHtml({ byProduct, byNetwork, byNationality, byRelation, byGend
     <div class="card">
       <h3>Loss ratio (actual) by Product</h3>
       ${lossRatioItems.length ? svgBarChart(lossRatioItems, { formatValue: v => v.toFixed(1) + '%' }) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Loss ratio (incl. IBNR) by Product</h3>
+      <div class="hint">Paid + Outstanding + IBNR, over Earned Premium - IBNR estimates the claims-incurred-but-not-yet-reported tail as each account's own Paid claims from the last 30 days before the report date (zero once that account's own policy has already run a full year).</div>
+      ${lossRatioInclIbnrByProductItems.length ? svgBarChart(lossRatioInclIbnrByProductItems, { formatValue: v => v.toFixed(1) + '%', color: 'var(--series-3)' }) : '<div class="hint">No data.</div>'}
+    </div>
+
+    <div class="card">
+      <h3>Loss ratio (incl. IBNR) by Network</h3>
+      ${lossRatioInclIbnrByNetworkItems.length ? svgBarChart(lossRatioInclIbnrByNetworkItems, { formatValue: v => v.toFixed(1) + '%', color: 'var(--series-3)' }) : '<div class="hint">No data.</div>'}
     </div>
 
     <div class="card">

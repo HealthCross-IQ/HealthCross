@@ -495,8 +495,10 @@ class PortfolioSummaryRow(BaseModel):
     standard_premium: float
     actual_premium: float
     actual_claims: float
+    ibnr: float = 0.0  # incurred-but-not-reported reserve estimate (see ibnr_for_member)
     loss_ratio_vs_standard: Optional[float] = None
     loss_ratio_vs_actual: Optional[float] = None
+    loss_ratio_incl_ibnr: Optional[float] = None  # (Paid + Outstanding + IBNR) / Earned Premium
     actual_vs_standard_pct: Optional[float] = None
     earned_member_years: float = 0.0
     burning_cost: Optional[float] = None  # actual claims per earned member-year (AED per member per annum)

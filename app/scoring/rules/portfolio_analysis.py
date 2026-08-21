@@ -18,6 +18,7 @@ rather than silently mis-pricing it.
 """
 from collections import defaultdict
 from datetime import date as date_cls
+from datetime import timedelta
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
@@ -206,6 +207,47 @@ def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List
     return {"total": paid + outstanding, "paid": paid, "outstanding": outstanding}
 
 
+IBNR_LOOKBACK_DAYS = 30
+IBNR_POLICY_EXPIRY_DAYS = 365
+
+
+def ibnr_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]], as_of: date_cls) -> float:
+    """Incurred-but-not-reported reserve estimate for one member, per
+    underwriting's own two rules:
+
+    1. IBNR = this member's own Paid claims with a date_of_treatment in the
+       last 30 days before `as_of` - the most recent claims are the ones
+       least likely to have fully worked through the reporting pipeline
+       yet, so their own recent paid run-rate stands in for the
+       claims-incurred-but-not-yet-reported tail.
+    2. Zero once the member's own policy has run past a full year
+       (`as_of` more than 365 days after policy_start_date) - by then the
+       policy period is already closed out and has had a full year for
+       claims to filter through, so there's no meaningful unreported tail
+       left to estimate for it, regardless of that member's own recent
+       paid activity.
+    """
+    policy_start = member.get("policy_start_date")
+    if not policy_start or (as_of - policy_start).days > IBNR_POLICY_EXPIRY_DAYS:
+        return 0.0
+
+    beneficiary_id = member.get("beneficiary_id")
+    period_start = member.get("member_start_date") or member.get("policy_start_date")
+    period_end = member.get("member_end_date") or member.get("policy_end_date")
+    lookback_start = as_of - timedelta(days=IBNR_LOOKBACK_DAYS)
+
+    total = 0.0
+    for c in claims_by_beneficiary.get(beneficiary_id, []):
+        date_of_treatment = c.get("date_of_treatment")
+        if not date_of_treatment or not (lookback_start <= date_of_treatment <= as_of):
+            continue
+        if not _claim_matches_period(date_of_treatment, period_start, period_end):
+            continue
+        if _is_paid_claim_status(c.get("claim_status")):
+            total += c.get("final_amount") or 0.0
+    return total
+
+
 def analyze_portfolio_member(
     member: dict,
     group_product_by_name: Dict[str, str],
@@ -276,6 +318,7 @@ def analyze_portfolio_member(
     actual_gross_premium = member.get("actual_gross_premium")
     actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
     claims_breakdown = actual_claims_for_member(member, claims_by_beneficiary)
+    ibnr = ibnr_for_member(member, claims_by_beneficiary, as_of)
 
     return {
         "beneficiary_id": beneficiary_id,
@@ -313,6 +356,7 @@ def analyze_portfolio_member(
         "actual_claims": round(claims_breakdown["total"], 2),
         "actual_claims_paid": round(claims_breakdown["paid"], 2),
         "actual_claims_outstanding": round(claims_breakdown["outstanding"], 2),
+        "ibnr": round(ibnr, 2),
         "earned_premium_fraction": round(earned_fraction, 4),
         "warnings": warnings,
     }
@@ -372,6 +416,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "actual_claims": 0.0,
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
+            "ibnr": 0.0,
             "earned_member_years": 0.0,
             "product": None,
             "network": None,
@@ -389,6 +434,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         bucket["actual_claims"] += r.get("actual_claims") or 0.0
         bucket["actual_claims_paid"] += r.get("actual_claims_paid") or 0.0
         bucket["actual_claims_outstanding"] += r.get("actual_claims_outstanding") or 0.0
+        bucket["ibnr"] += r.get("ibnr") or 0.0
         bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
         if r.get("standard_premium") is not None:
             bucket["standard_premium"] += r["standard_premium"]
@@ -419,8 +465,19 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 # from outstanding (reserved/reported but not yet paid).
                 "actual_claims_paid": round(bucket["actual_claims_paid"], 2),
                 "actual_claims_outstanding": round(bucket["actual_claims_outstanding"], 2),
+                # Incurred-but-not-reported reserve estimate (see
+                # ibnr_for_member) - zero for a bucket made up entirely of
+                # already-expired policies, not necessarily zero overall.
+                "ibnr": round(bucket["ibnr"], 2),
                 "loss_ratio_vs_standard": round(actual_claims / standard_premium, 4) if standard_premium else None,
                 "loss_ratio_vs_actual": round(actual_claims / actual_premium, 4) if actual_premium else None,
+                # Underwriting's own fuller loss ratio: Paid + Outstanding +
+                # IBNR (actual_claims already sums the first two), over
+                # Earned Premium - distinct from loss_ratio_vs_actual above,
+                # which omits IBNR entirely.
+                "loss_ratio_incl_ibnr": round((actual_claims + bucket["ibnr"]) / actual_premium, 4)
+                if actual_premium
+                else None,
                 # Positive = actual premium sits above standard (charging
                 # more than the rate card); negative = discounted below it.
                 "actual_vs_standard_pct": round((actual_premium - standard_premium) / standard_premium * 100, 2)

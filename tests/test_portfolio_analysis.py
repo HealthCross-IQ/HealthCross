@@ -8,6 +8,7 @@ from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
     earned_premium_fraction,
     group_claims_by_beneficiary,
+    ibnr_for_member,
     normalize_subgroup_key,
     resolve_group_product,
     resolve_master_client,
@@ -190,6 +191,39 @@ def test_analyze_portfolio_member_treats_unrecognized_status_as_outstanding():
     assert result["actual_claims_outstanding"] == 500.0
 
 
+def test_ibnr_for_member_sums_only_paid_claims_in_the_last_30_days():
+    as_of = date(2026, 8, 15)
+    member = _member(policy_start_date=date(2026, 1, 1))
+    claims = [
+        {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},  # 14 days back - in window
+        {"date_of_treatment": date(2026, 7, 1), "final_amount": 900.0, "claim_status": "Paid Claims"},  # 45 days back - out of window
+        {"date_of_treatment": date(2026, 8, 5), "final_amount": 300.0, "claim_status": "Outstanding Claims"},  # in window but not Paid
+    ]
+    claims_by_ben = {member["beneficiary_id"]: claims}
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 500.0
+
+
+def test_ibnr_for_member_is_zero_once_the_policy_has_run_past_a_full_year():
+    # report date more than 365 days after policy_start_date - the account
+    # is already closed out and has had a full year for claims to filter
+    # through, so no IBNR regardless of recent paid activity.
+    as_of = date(2026, 8, 15)
+    member = _member(policy_start_date=date(2025, 1, 1))
+    claims_by_ben = {member["beneficiary_id"]: [
+        {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},
+    ]}
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 0.0
+
+
+def test_ibnr_for_member_is_zero_without_a_policy_start_date():
+    as_of = date(2026, 8, 15)
+    member = _member(policy_start_date=None)
+    claims_by_ben = {member["beneficiary_id"]: [
+        {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},
+    ]}
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 0.0
+
+
 def test_analyze_portfolio_member_only_counts_claims_within_its_own_policy_period():
     # A renewed member appears as TWO separate rows (one per policy year)
     # sharing the SAME beneficiary ID - claims dated in 2025 must only
@@ -343,6 +377,38 @@ def test_summarize_portfolio_segregates_paid_and_outstanding_claims_and_reconcil
     assert bronze["actual_claims"] == bronze["actual_claims_paid"] + bronze["actual_claims_outstanding"]
 
 
+def test_summarize_portfolio_rolls_up_ibnr_and_computes_loss_ratio_incl_ibnr():
+    as_of = date(2026, 8, 15)
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", policy_start_date=date(2026, 1, 1)),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [
+                {"date_of_treatment": date(2026, 8, 1), "final_amount": 1000.0, "claim_status": "Paid Claims"},
+            ]},
+            as_of=as_of,
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F", policy_start_date=date(2024, 1, 1)),  # already expired
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M2": [
+                {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},
+            ]},
+            as_of=as_of,
+        ),
+    ]
+    rows = summarize_portfolio(results, "product")
+    bronze = next(r for r in rows if r["product"] == "Bronze")
+    # M1's own recent Paid claim counts as IBNR (its policy hasn't expired);
+    # M2's identical recent Paid claim does NOT, since M2's policy started
+    # more than 365 days before as_of.
+    assert bronze["ibnr"] == 1000.0
+    assert bronze["actual_claims"] == 1500.0
+    assert bronze["actual_premium"] == 5000.0
+    assert bronze["loss_ratio_incl_ibnr"] == round((1500.0 + 1000.0) / 5000.0, 4)
+    assert bronze["loss_ratio_incl_ibnr"] != bronze["loss_ratio_vs_actual"]
+
+
 def test_summarize_portfolio_excludes_out_of_scope_members():
     results = [
         analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
@@ -365,8 +431,10 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "actual_claims": 0.0,
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
+            "ibnr": 0.0,
             "loss_ratio_vs_standard": None,
             "loss_ratio_vs_actual": 0.0,
+            "loss_ratio_incl_ibnr": 0.0,
             "actual_vs_standard_pct": None,
             "earned_member_years": 1.0,
             "burning_cost": 0.0,
