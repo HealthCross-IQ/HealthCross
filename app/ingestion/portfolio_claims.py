@@ -41,7 +41,15 @@ def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
         # proper datetime values for a .xlsb's date columns rather than
         # raw Excel serial numbers, so the is_numeric_dtype fallback below
         # is now just a safety net, not the normal path for this format.
-        df = pd.read_excel(file, engine="calamine")
+        #
+        # A real export has shipped with a completely blank placeholder
+        # sheet ("Sheet1") ahead of the actual data (on a separately named
+        # "Sheet 1") - reading only the first sheet silently parsed 0 rows
+        # from that blank one instead of erroring. Reading every sheet and
+        # taking the first non-empty one handles both that and the
+        # ordinary single-sheet case, without hardcoding either sheet's name.
+        sheets = pd.read_excel(file, engine="calamine", sheet_name=None)
+        df = next((sheet_df for sheet_df in sheets.values() if not sheet_df.empty), pd.DataFrame())
 
     df = map_columns(df, PORTFOLIO_CLAIMS_ALIASES)
 

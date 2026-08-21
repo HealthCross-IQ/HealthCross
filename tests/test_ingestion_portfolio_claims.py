@@ -63,7 +63,7 @@ def test_reads_xlsb_files_with_the_calamine_engine(monkeypatch, claims_xlsx):
         # Reuse the real xlsx fixture's content - only the engine kwarg
         # actually matters for this test, not real xlsb bytes.
         with open(claims_xlsx, "rb") as f:
-            return real_read_excel(f, engine="calamine")
+            return real_read_excel(f, **kwargs)
 
     monkeypatch.setattr(pd, "read_excel", _spy_read_excel)
     with open(claims_xlsx, "rb") as f:
@@ -85,3 +85,32 @@ def test_reads_xlsx_with_the_calamine_engine(monkeypatch, claims_xlsx):
     with open(claims_xlsx, "rb") as f:
         parse_portfolio_claims(f, "claims.xlsx")
     assert captured["engine"] == "calamine"
+
+
+@pytest.fixture()
+def claims_xlsx_with_leading_blank_sheet(tmp_path):
+    # A real HealthCross export shipped exactly this shape once: a
+    # completely blank "Sheet1" ahead of the actual data, which now lives
+    # on a separately named "Sheet 1" - reading only the first sheet
+    # silently parsed 0 rows instead of erroring (see parse_portfolio_claims).
+    wb = openpyxl.Workbook()
+    blank = wb.active
+    blank.title = "Sheet1"
+    data = wb.create_sheet("Sheet 1")
+    data.append(HEADER)
+    data.append([
+        "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+        "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "J309", "Allergic rhinitis", 100.0, 90.0,
+    ])
+    path = tmp_path / "claims_with_blank_sheet.xlsx"
+    wb.save(path)
+    return path
+
+
+def test_skips_a_leading_blank_sheet_to_find_the_real_data(claims_xlsx_with_leading_blank_sheet):
+    with open(claims_xlsx_with_leading_blank_sheet, "rb") as f:
+        rows = parse_portfolio_claims(f, "claims.xlsx")
+    assert len(rows) == 1
+    assert rows[0]["patient_id"] == "ACM0001"
