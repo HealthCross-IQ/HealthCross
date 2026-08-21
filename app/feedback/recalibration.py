@@ -19,7 +19,6 @@ of outcomes can't whipsaw the scorecard):
 from typing import Dict, List
 
 import numpy as np
-from sklearn.linear_model import LogisticRegression
 
 from app.reference.nationality_zones import ALL_ZONES
 
@@ -36,6 +35,13 @@ _FEATURE_KEYS = ["demographic_risk", "claims_experience_risk", "benefit_richness
 def _fit_profitability_model(X: np.ndarray, y: np.ndarray):
     if len(set(y.tolist())) < 2:
         return None
+    # Imported here rather than at module level - sklearn pulls in a native
+    # extension (_pairwise_fast) that some locked-down Windows environments
+    # block outright (an Application Control / WDAC policy), which would
+    # otherwise crash the entire app at startup just to support this one
+    # admin-only recalibration feature.
+    from sklearn.linear_model import LogisticRegression
+
     model = LogisticRegression(max_iter=1000)
     model.fit(X, y)
     return model
