@@ -400,6 +400,26 @@ def test_executive_portfolio_summary_includes_out_of_scope_members_in_headcount(
     assert summary["total_members"] == 2  # group/member counts aren't a pricing question
 
 
+def test_executive_portfolio_summary_includes_out_of_scope_members_own_premium_and_claims():
+    # Regression test: an out-of-scope member's written_premium/actual_claims/
+    # ibnr were silently missing from analyze_portfolio_member's early-return
+    # dict, so Written Premium/Incurred Claims quietly undercounted a real
+    # book by however much its out-of-scope members' own premium/claims came
+    # to - Total Groups/Members already counted them (member/group counts
+    # aren't a pricing question), Written Premium/Incurred Claims should too.
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", network_type_raw="MSH Intl Network", policy_start_date=date(2026, 1, 1)),
+            {}, RATE_CARDS, [],
+            {"M1": [{"date_of_treatment": date(2026, 1, 15), "final_amount": 100.0, "claim_status": "Paid Claims"}]},
+            as_of=date(2026, 1, 31),
+        ),
+    ]
+    summary = executive_portfolio_summary(results)
+    assert summary["written_premium"] == 2500.0  # _member()'s own actual_gross_premium, unprorated
+    assert summary["incurred_claims"] == 200.0  # 100 actual_claims + 100 ibnr (30-day-elapsed run rate == its own paid total)
+
+
 def test_executive_portfolio_summary_expense_ratio_is_overridable():
     results = [analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {"M1": [{"date_of_treatment": None, "final_amount": 1000.0}]})]
     summary = executive_portfolio_summary(results, expense_ratio_pct=0.25)

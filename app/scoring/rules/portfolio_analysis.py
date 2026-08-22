@@ -270,6 +270,19 @@ def analyze_portfolio_member(
     beneficiary_id = member["beneficiary_id"]
     as_of = as_of or date_cls.today()
 
+    # Computed up front, before the in-scope check below, so an
+    # out-of-scope member's own premium/claims/IBNR still feed Level 1's
+    # whole-book KPIs (executive_portfolio_summary counts every member "in
+    # AND out of scope" by design) without also leaking into any
+    # Product/Network-keyed rollup - summarize_portfolio and every other
+    # per-dimension view explicitly skip `in_scope: False` rows, so this
+    # is safe to compute unconditionally.
+    earned_fraction = earned_premium_fraction(member.get("policy_start_date"), member.get("policy_end_date"), as_of)
+    actual_gross_premium = member.get("actual_gross_premium")
+    actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
+    claims_breakdown = actual_claims_for_member(member, claims_by_beneficiary)
+    ibnr = ibnr_for_member(member, claims_by_beneficiary, as_of)
+
     if is_out_of_scope_network_type(member.get("network_type_raw")):
         # Still a real person in the population even though no rate-card
         # price applies to them - their age/gender/relation/nationality
@@ -293,6 +306,14 @@ def analyze_portfolio_member(
             "category": member.get("category"),
             "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
             "policy_start_date": member.get("policy_start_date"),
+            "written_premium": round(actual_gross_premium, 2) if actual_gross_premium is not None else None,
+            "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
+            "actual_claims": round(claims_breakdown["total"], 2),
+            "actual_claims_paid": round(claims_breakdown["paid"], 2),
+            "actual_claims_outstanding": round(claims_breakdown["outstanding"], 2),
+            "claim_count": claims_breakdown["count"],
+            "ibnr": round(ibnr, 2),
+            "earned_premium_fraction": round(earned_fraction, 4),
         }
 
     warnings: List[str] = []
@@ -303,8 +324,6 @@ def analyze_portfolio_member(
     product = resolve_group_product(member, group_product_by_name)
     if not product:
         warnings.append("No Product mapping found for this member's group")
-
-    earned_fraction = earned_premium_fraction(member.get("policy_start_date"), member.get("policy_end_date"), as_of)
 
     standard_premium = None
     if network and product:
@@ -323,11 +342,6 @@ def analyze_portfolio_member(
         if price_result["net_total"] is not None:
             standard_premium = price_result["net_total"] * earned_fraction
         warnings.extend(price_result["warnings"])
-
-    actual_gross_premium = member.get("actual_gross_premium")
-    actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
-    claims_breakdown = actual_claims_for_member(member, claims_by_beneficiary)
-    ibnr = ibnr_for_member(member, claims_by_beneficiary, as_of)
 
     return {
         "beneficiary_id": beneficiary_id,
