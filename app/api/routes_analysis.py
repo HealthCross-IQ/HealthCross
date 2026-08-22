@@ -1,5 +1,7 @@
+import calendar
 import io
 import re
+from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -27,6 +29,7 @@ from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, pro
 from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
+    _is_paid_claim_status,
     claims_above_thresholds,
     recurring_high_cost_members,
     top_claims_by_value,
@@ -42,6 +45,7 @@ from app.scoring.rules.renewal_rating import (
     calculate_renewal_rating,
     calculate_renewal_rating_two_methods,
     case_loading_pct,
+    dynamic_ibnr_incurred_claims,
     premium_component_breakdown,
 )
 
@@ -909,11 +913,11 @@ def _case_renewal_rating(
     explicit loading_pct (e.g. a what-if query param on
     /renewal-rating) still overrides it.
 
-    The top-level result is always Method A (unchanged, for every
-    existing caller) - a "method_b" key is attached alongside it with the
-    SAME annualized claims base plus an IBNR load (see
-    calculate_renewal_rating_two_methods), for the Renewal Bench's
-    side-by-side scorecard.
+    The top-level result is always Method A ("Gross Loss Ratio") - a
+    "method_b" key is attached alongside it (Method B/"Burning Cost") for
+    the Renewal Bench's side-by-side scorecard. The two methods use
+    DIFFERENT IBNR conventions on the same Paid+Outstanding base - see
+    calculate_renewal_rating_two_methods and dynamic_ibnr_incurred_claims.
     """
     entries = case.claims_ledger_entries
     if not entries or not case.current_annual_premium:
@@ -923,11 +927,34 @@ def _case_renewal_rating(
         return None
 
     # This month-by-month figure is Paid + Outstanding only (whatever the
-    # ledger's own final_amount carries) - calculate_renewal_rating_two_methods
-    # folds in the IBNR load itself to reach a true incurred figure before
-    # either method sees it (see renewal_rating.py's module docstring).
+    # ledger's own final_amount carries, regardless of claim_status) -
+    # Method B's own IBNR (a flat load) is applied to this below. Method A
+    # instead needs the paid/outstanding split and elapsed days for its
+    # own DYNAMIC IBNR - see dynamic_ibnr_incurred_claims.
     avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
     annualized_paid_and_outstanding = avg_month * 12
+
+    full_month_keys = {(m["year"], m["month"]) for m in full_months}
+    total_paid = 0.0
+    total_outstanding = 0.0
+    for e in entries:
+        d = e.date_of_treatment
+        if not d or (d.year, d.month) not in full_month_keys:
+            continue
+        if _is_paid_claim_status(e.claim_status):
+            total_paid += e.final_amount or 0.0
+        else:
+            total_outstanding += e.final_amount or 0.0
+
+    policy_start = entries[0].policy_start_date
+    last_year, last_month = max(full_month_keys)
+    period_end = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
+    elapsed_days = (period_end - policy_start).days if policy_start else 0
+
+    dynamic = dynamic_ibnr_incurred_claims(total_paid, total_outstanding, elapsed_days, len(full_months))
+
+    effective_ibnr_pct = ibnr_pct if ibnr_pct is not None else DEFAULT_IBNR_PCT
+    incurred_claims_method_b = annualized_paid_and_outstanding * (1 + effective_ibnr_pct)
 
     defaults = RenewalRatingAssumptions()
     effective_loading_pct = (
@@ -937,17 +964,22 @@ def _case_renewal_rating(
     )
     effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
     two_methods = calculate_renewal_rating_two_methods(
-        annualized_paid_and_outstanding, case.current_annual_premium,
+        dynamic["annualized_incurred_claims"], incurred_claims_method_b, case.current_annual_premium,
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
-        ibnr_pct=ibnr_pct if ibnr_pct is not None else DEFAULT_IBNR_PCT,
         credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
     )
+    months_used = [f"{m['year']}-{m['month']:02d}" for m in full_months]
+
     result = two_methods["method_a"]
     result["annualized_paid_and_outstanding"] = round(annualized_paid_and_outstanding, 2)
-    result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
+    result["ibnr_detail"] = dynamic
+    result["months_used"] = months_used
+
     result["method_b"] = two_methods["method_b"]
     result["method_b"]["annualized_paid_and_outstanding"] = result["annualized_paid_and_outstanding"]
-    result["method_b"]["months_used"] = result["months_used"]
+    result["method_b"]["ibnr_pct"] = effective_ibnr_pct
+    result["method_b"]["months_used"] = months_used
+
     result["method_gap"] = two_methods["gap"]
     result["method_gap_pct"] = two_methods["gap_pct"]
     return result

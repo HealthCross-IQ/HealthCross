@@ -5,32 +5,48 @@ a REPORT's population-level experience onto a NEW group's census. A
 renewal doesn't need that rescaling: it's the same group's own claims
 experience being compared against its own current premium.
 
-Both scorecard methods start from the SAME "Incurred Claims" base -
-Paid + Outstanding (this group's own trailing full months from the claims
-ledger, averaged and annualized - see
-app.api.routes_analysis._case_renewal_rating) + IBNR (a flat load,
-DEFAULT_IBNR_PCT, folded in BEFORE either method sees the figure, so
-"annualized_incurred_claims" passed into calculate_renewal_rating is
-already the true incurred figure, not just paid/outstanding). From there:
+Both scorecard methods reach an "Incurred Claims" figure - Paid + Outstanding
++ IBNR, the standard actuarial buildup - but compute IBNR differently, so
+each method's incurred base is computed UPSTREAM (see
+app.api.routes_analysis._case_renewal_rating) before calculate_renewal_rating
+ever sees it; this module's own job is only the trend/credibility/loading
+steps from there onward:
 
-  Method A ("Standard"/Gross Loss Ratio): incurred claims, trended for
-  inflation, then grossed up for the commission/OPEX loading by division
-  - the full experience-based figure, un-shaded.
+  Method A ("Gross Loss Ratio"): IBNR is a DYNAMIC reserve - this case's
+  own Paid claims run rate (Paid / elapsed days so far * 30), the exact
+  same convention as app/scoring/rules/portfolio_analysis.py's
+  ibnr_for_member - projected over a 30-day unreported tail. Trended for
+  inflation, then grossed up directly (credibility_pct=1.0, no shading) -
+  the full experience-based figure.
 
-  Method B ("Burning Cost"): the SAME trended incurred claims, but
-  additionally weighted by a credibility factor (DEFAULT_CREDIBILITY_PCT,
-  matching the credibility step in app/scoring/rules/claims_projection.py's
-  own burning-cost method) before grossing up - a partial-credibility
-  view of the same experience, rather than a second IBNR guess bolted onto
-  Method A.
+  Method B ("Burning Cost"): IBNR is a flat load (DEFAULT_IBNR_PCT, 10%)
+  on the same Paid+Outstanding base - the simpler, standard burning-cost
+  assumption. The SAME trended incurred claims are then additionally
+  weighted by a credibility factor (assumptions.credibility_pct, same
+  mechanism as the credibility step in claims_projection.py's own
+  burning-cost method) before grossing up.
+
+  DEFAULT_CREDIBILITY_PCT is 1.0 (no shading) here, since a renewal's
+  claims ledger is this exact group's own real, known experience - not a
+  projection borrowed from someone else's report the way
+  claims_projection.py's DEFAULT_CREDIBILITY_PCT=0.90 is. Still
+  overridable per-case for a very small or short-history renewal an
+  underwriter wants to discount.
 """
 from dataclasses import dataclass
 from typing import List, Optional
 
 DEFAULT_INFLATION_PCT = 0.075
 DEFAULT_LOADING_PCT = 0.33
-DEFAULT_IBNR_PCT = 0.10  # Folded into the shared incurred-claims base BEFORE either method - see _case_renewal_rating.
-DEFAULT_CREDIBILITY_PCT = 0.90  # Method B (Burning Cost) only - see calculate_renewal_rating_two_methods.
+DEFAULT_IBNR_PCT = 0.10  # Method B's flat IBNR load on Paid+Outstanding - see _case_renewal_rating for Method A's dynamic IBNR instead.
+DEFAULT_CREDIBILITY_PCT = 1.0  # Method B (Burning Cost) only - see calculate_renewal_rating_two_methods.
+# A renewal's own claims ledger is this exact group's real, known experience,
+# not a projection borrowed from someone else's report - unlike New Business's
+# burning-cost method (app/scoring/rules/claims_projection.py, its own
+# separate DEFAULT_CREDIBILITY_PCT=0.90), where credibility genuinely
+# matters since a DIFFERENT report's experience is being rescaled onto a
+# new group. Still overridable per-case (e.g. a very small or short-history
+# renewal an underwriter wants to discount), just not the default.
 
 # The renewal loading (33%) isn't one fee - it's broker commission, TPA
 # administration, HealthCross's own margin, and QIC's (the carrier's) own
@@ -57,7 +73,6 @@ MIN_CREDIBLE_CASE_COUNT = 5
 class RenewalRatingAssumptions:
     inflation_pct: float = DEFAULT_INFLATION_PCT
     loading_pct: float = DEFAULT_LOADING_PCT
-    ibnr_pct: float = DEFAULT_IBNR_PCT  # Paid+Outstanding -> Incurred - applies equally to both methods.
     credibility_pct: float = 1.0  # Method B (Burning Cost) only - 1.0 is a no-op, reproducing Method A exactly.
 
 
@@ -66,13 +81,12 @@ def calculate_renewal_rating(
     current_annual_premium: float,
     assumptions: Optional[RenewalRatingAssumptions] = None,
 ) -> dict:
-    """annualized_incurred_claims is Paid + Outstanding (this group's own
-    trailing full months from the claims ledger, averaged and annualized -
-    see app.api.routes_analysis._case_renewal_rating for where that base
-    figure comes from) - an IBNR load (assumptions.ibnr_pct, default 10%)
-    is applied here to turn that into a true INCURRED figure
-    (Paid + Outstanding + IBNR) before anything else happens to it, per
-    the standard actuarial definition.
+    """annualized_incurred_claims is the ALREADY-incurred figure (Paid +
+    Outstanding + IBNR) - IBNR is computed upstream by the caller (see
+    app.api.routes_analysis._case_renewal_rating), since Method A and
+    Method B each use a different IBNR convention (a dynamic Paid-claims
+    run rate vs. a flat load - see this module's own docstring) and so
+    arrive at this function with different incurred bases already.
 
     From that incurred base: trended for inflation, optionally weighted
     by a credibility factor (assumptions.credibility_pct, a straight
@@ -80,9 +94,7 @@ def calculate_renewal_rating(
     burning-cost method for the same convention), then grossed up for the
     renewal loading. credibility_pct=1.0 (the default) is a no-op, so a
     caller not passing it gets the full, un-shaded experience-based
-    figure - see calculate_renewal_rating_two_methods for Method A
-    (credibility_pct=1.0) and Method B/"Burning Cost"
-    (credibility_pct=DEFAULT_CREDIBILITY_PCT) side by side.
+    figure.
     """
     if annualized_incurred_claims < 0:
         raise ValueError("annualized_incurred_claims must not be negative.")
@@ -92,8 +104,7 @@ def calculate_renewal_rating(
     a = assumptions or RenewalRatingAssumptions()
 
     actual_loss_ratio = annualized_incurred_claims / current_annual_premium
-    claims_with_ibnr = annualized_incurred_claims * (1 + a.ibnr_pct)
-    trended_claims = claims_with_ibnr * (1 + a.inflation_pct)
+    trended_claims = annualized_incurred_claims * (1 + a.inflation_pct)
     credible_claims = trended_claims * a.credibility_pct
     required_premium = credible_claims / (1 - a.loading_pct)
     renewal_increase_pct = (required_premium / current_annual_premium - 1) * 100
@@ -102,7 +113,6 @@ def calculate_renewal_rating(
         "annualized_incurred_claims": round(annualized_incurred_claims, 2),
         "current_annual_premium": round(current_annual_premium, 2),
         "actual_loss_ratio": round(actual_loss_ratio, 4),
-        "claims_with_ibnr": round(claims_with_ibnr, 2),
         "trended_claims": round(trended_claims, 2),
         "credible_claims": round(credible_claims, 2),
         "required_premium": round(required_premium, 2),
@@ -110,42 +120,38 @@ def calculate_renewal_rating(
         "assumptions_used": {
             "inflation_pct": a.inflation_pct,
             "loading_pct": a.loading_pct,
-            "ibnr_pct": a.ibnr_pct,
             "credibility_pct": a.credibility_pct,
         },
     }
 
 
 def calculate_renewal_rating_two_methods(
-    annualized_incurred_claims: float,
+    incurred_claims_method_a: float,
+    incurred_claims_method_b: float,
     current_annual_premium: float,
     inflation_pct: float = DEFAULT_INFLATION_PCT,
     loading_pct: float = DEFAULT_LOADING_PCT,
-    ibnr_pct: float = DEFAULT_IBNR_PCT,
     credibility_pct: float = DEFAULT_CREDIBILITY_PCT,
 ) -> dict:
-    """Both renewal scorecard methods from the SAME incurred-claims base
-    (Paid + Outstanding + the SAME ibnr_pct load, applied equally to
-    both), side by side:
+    """Both renewal scorecard methods side by side, each from ITS OWN
+    already-incurred claims base (see calculate_renewal_rating's
+    docstring for why the two bases differ):
 
-      Method A ("Standard"/Gross Loss Ratio): the full incurred claims
-      figure, trended and grossed up - no credibility shading.
+      Method A ("Gross Loss Ratio"): incurred_claims_method_a (dynamic
+      IBNR), trended and grossed up directly - no credibility shading.
 
-      Method B ("Burning Cost"): the SAME trended incurred claims,
-      additionally weighted by credibility_pct (default 90%) before
-      grossing up - a partial-credibility view of the same experience,
-      matching claims_projection.py's own burning-cost convention.
-
-    The two are directly comparable since only the credibility step
-    differs; passing credibility_pct=1.0 reproduces Method A exactly.
+      Method B ("Burning Cost"): incurred_claims_method_b (flat-IBNR),
+      trended, additionally weighted by credibility_pct (default 100% -
+      a renewal's own ledger is real known experience, not a borrowed
+      projection), then grossed up.
     """
     method_a = calculate_renewal_rating(
-        annualized_incurred_claims, current_annual_premium,
-        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, ibnr_pct=ibnr_pct, credibility_pct=1.0),
+        incurred_claims_method_a, current_annual_premium,
+        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=1.0),
     )
     method_b = calculate_renewal_rating(
-        annualized_incurred_claims, current_annual_premium,
-        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, ibnr_pct=ibnr_pct, credibility_pct=credibility_pct),
+        incurred_claims_method_b, current_annual_premium,
+        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=credibility_pct),
     )
     return {
         "method_a": method_a,
@@ -155,6 +161,39 @@ def calculate_renewal_rating_two_methods(
             round((method_b["required_premium"] / method_a["required_premium"] - 1) * 100, 2)
             if method_a["required_premium"] else None
         ),
+    }
+
+
+def dynamic_ibnr_incurred_claims(
+    total_paid: float,
+    total_outstanding: float,
+    elapsed_days: int,
+    months_count: int,
+) -> dict:
+    """Method A's own incurred-claims base: Paid + Outstanding (this
+    case's own trailing full months from the claims ledger - see
+    app.api.routes_analysis._case_renewal_rating) + a DYNAMIC IBNR
+    reserve, rather than a flat percentage - this case's own Paid claims
+    run rate projected over a 30-day unreported tail (Paid / elapsed days
+    so far * 30), the exact same convention as
+    app/scoring/rules/portfolio_analysis.py's ibnr_for_member.
+
+    The to-date total (Paid + Outstanding + IBNR) is then annualized the
+    same way as the plain Paid+Outstanding figure elsewhere in this
+    module - divided by the number of full months actually observed,
+    times 12 - so Method A's annualization basis stays consistent with
+    Method B's, only the IBNR step itself differs.
+    """
+    ibnr = (total_paid / elapsed_days * 30) if elapsed_days > 0 else 0.0
+    incurred_to_date = total_paid + total_outstanding + ibnr
+    annualized_incurred_claims = (incurred_to_date / months_count * 12) if months_count else 0.0
+    return {
+        "total_paid": round(total_paid, 2),
+        "total_outstanding": round(total_outstanding, 2),
+        "elapsed_days": elapsed_days,
+        "ibnr": round(ibnr, 2),
+        "incurred_to_date": round(incurred_to_date, 2),
+        "annualized_incurred_claims": round(annualized_incurred_claims, 2),
     }
 
 

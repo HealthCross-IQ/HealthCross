@@ -328,7 +328,13 @@ def test_renewal_rating_end_to_end(client):
     resp = client.get(f"/cases/{case_id}/renewal-rating")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["annualized_incurred_claims"] == 2966593.29
+    assert body["annualized_paid_and_outstanding"] == 2966593.29
+    # Method A's own dynamic IBNR: total paid 2,224,944.97 over 272 elapsed
+    # days (Oct 1 2025 -> Jun 30 2026), projected over a 30-day tail.
+    assert body["ibnr_detail"]["total_paid"] == 2224944.97
+    assert body["ibnr_detail"]["elapsed_days"] == 272
+    assert body["ibnr_detail"]["ibnr"] == pytest.approx(245398.34, abs=0.01)
+    assert body["annualized_incurred_claims"] == pytest.approx(3293791.08, abs=0.01)
     assert body["current_annual_premium"] == 3_000_000.0
     assert len(body["months_used"]) == 9  # July excluded as trailing partial
     assert body["renewal_increase_pct"] > 0
@@ -359,25 +365,34 @@ def test_renewal_rating_includes_method_b_alongside_method_a(client):
     resp = client.get(f"/cases/{case_id}/renewal-rating")
     assert resp.status_code == 200
     body = resp.json()
-    # Both methods share the SAME incurred-claims base (Paid+Outstanding+IBNR).
-    assert body["annualized_incurred_claims"] == body["method_b"]["annualized_incurred_claims"]
-    assert body["claims_with_ibnr"] == body["method_b"]["claims_with_ibnr"]
-    assert body["assumptions_used"]["ibnr_pct"] == 0.10
-    assert body["method_b"]["assumptions_used"]["ibnr_pct"] == 0.10
-    # Method B (Burning Cost)'s credibility weighting means it requires LESS than Method A.
-    assert body["method_b"]["required_premium"] < body["required_premium"]
+    # Both methods share the SAME Paid+Outstanding base, but diverge at
+    # IBNR: Method A's is dynamic (Paid/elapsed_days*30), Method B's is a
+    # flat 10% - so they're expected to differ.
+    assert body["annualized_paid_and_outstanding"] == body["method_b"]["annualized_paid_and_outstanding"] == 1_200_000.0
+    # Jan 2026 is excluded as a trailing partial month, so only Oct-Dec 2025
+    # (91 elapsed days from the Oct 1 policy start) feed the dynamic IBNR.
+    assert body["ibnr_detail"]["elapsed_days"] == 91
+    assert body["ibnr_detail"]["ibnr"] == pytest.approx(98_901.10, abs=0.01)
+    assert body["annualized_incurred_claims"] == pytest.approx(1_595_604.40, abs=0.01)
+    assert body["method_b"]["ibnr_pct"] == 0.10
+    assert body["method_b"]["annualized_incurred_claims"] == pytest.approx(1_320_000.0, abs=0.01)
     assert body["method_gap"] == round(body["method_b"]["required_premium"] - body["required_premium"], 2)
 
 
 def test_renewal_rating_ibnr_pct_is_overridable(client):
+    # ibnr_pct only affects Method B (the flat load) - Method A's IBNR is
+    # always the dynamic Paid/elapsed_days*30 figure, not adjustable via
+    # a percentage.
     case_id = _create_case(client)
     client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
+    default_resp = client.get(f"/cases/{case_id}/renewal-rating")
     resp = client.get(f"/cases/{case_id}/renewal-rating", params={"ibnr_pct": 0.25})
     body = resp.json()
-    assert body["assumptions_used"]["ibnr_pct"] == 0.25
-    assert body["method_b"]["assumptions_used"]["ibnr_pct"] == 0.25
+    assert body["method_b"]["ibnr_pct"] == 0.25
+    assert body["annualized_incurred_claims"] == default_resp.json()["annualized_incurred_claims"]  # Method A unaffected
+    assert body["method_b"]["annualized_incurred_claims"] == pytest.approx(1_200_000.0 * 1.25, abs=0.01)
 
 
 def test_renewal_rating_credibility_pct_is_overridable(client):

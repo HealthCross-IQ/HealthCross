@@ -9,19 +9,19 @@ from app.scoring.rules.renewal_rating import (
     calculate_renewal_rating,
     calculate_renewal_rating_two_methods,
     case_loading_pct,
+    dynamic_ibnr_incurred_claims,
     premium_component_breakdown,
 )
 
 
 def test_worked_example_matches_hand_calculation():
-    # Paid+Outstanding 2,966,593 vs current premium 3,000,000 (hypothetical) -
-    # the default 10% IBNR load turns this into a true incurred figure
-    # before inflation/loading, per Paid+Outstanding+IBNR = Incurred.
+    # 2,966,593 is ALREADY the incurred figure (Paid+Outstanding+IBNR,
+    # computed upstream by the caller - see _case_renewal_rating) vs
+    # current premium 3,000,000 (hypothetical).
     result = calculate_renewal_rating(2_966_593, 3_000_000)
 
-    with_ibnr = 2_966_593 * 1.10
-    assert result["claims_with_ibnr"] == pytest.approx(with_ibnr, abs=1)
-    trended = with_ibnr * 1.075
+    assert result["actual_loss_ratio"] == pytest.approx(0.9889, abs=0.001)
+    trended = 2_966_593 * 1.075
     assert result["trended_claims"] == pytest.approx(trended, abs=1)
     required = trended / (1 - 0.33)
     assert result["required_premium"] == pytest.approx(required, abs=1)
@@ -31,7 +31,7 @@ def test_worked_example_matches_hand_calculation():
 
 def test_low_loss_ratio_can_still_require_an_increase_due_to_loading_and_inflation():
     # Even a modest loss ratio can still net to a rate increase once
-    # IBNR, inflation, and the commission/OPEX loading are applied.
+    # inflation and the commission/OPEX loading are applied.
     result = calculate_renewal_rating(500_000, 1_000_000)
     assert result["actual_loss_ratio"] == 0.5
     assert result["renewal_increase_pct"] > -50  # sanity: not a nonsensical value
@@ -45,18 +45,9 @@ def test_custom_assumptions_change_the_result():
     assert lighter_load["renewal_increase_pct"] < default_result["renewal_increase_pct"]
 
 
-def test_ibnr_load_turns_paid_and_outstanding_into_a_true_incurred_figure():
-    # Paid+Outstanding = 1,000,000 - the default 10% IBNR load makes this
-    # Paid+Outstanding+IBNR = Incurred = 1,100,000, applied BEFORE inflation.
-    result = calculate_renewal_rating(1_000_000, 1_000_000)
-    assert result["claims_with_ibnr"] == 1_100_000.0
-    assert result["trended_claims"] == pytest.approx(1_100_000 * 1.075, abs=0.01)
-    assert result["assumptions_used"]["ibnr_pct"] == DEFAULT_IBNR_PCT
-
-
 def test_credibility_pct_one_is_a_no_op():
     # credibility_pct=1.0 (Method A's own setting) is a true no-op - the
-    # SAME incurred/trended claims just get grossed up directly, no
+    # SAME trended claims just get grossed up directly, no
     # partial-credibility shading.
     result = calculate_renewal_rating(1_000_000, 1_000_000)
     assert result["credible_claims"] == result["trended_claims"]
@@ -69,20 +60,53 @@ def test_credibility_pct_below_one_shades_the_trended_claims_down():
     assert result["required_premium"] < calculate_renewal_rating(1_000_000, 1_000_000)["required_premium"]
 
 
-def test_calculate_renewal_rating_two_methods_shares_the_same_incurred_claims_base():
-    both = calculate_renewal_rating_two_methods(1_000_000, 1_000_000)
-    # Both methods apply the SAME IBNR load to the SAME Paid+Outstanding base.
-    assert both["method_a"]["annualized_incurred_claims"] == both["method_b"]["annualized_incurred_claims"] == 1_000_000
-    assert both["method_a"]["claims_with_ibnr"] == both["method_b"]["claims_with_ibnr"]
-    assert both["method_a"]["assumptions_used"]["ibnr_pct"] == DEFAULT_IBNR_PCT
-    assert both["method_b"]["assumptions_used"]["ibnr_pct"] == DEFAULT_IBNR_PCT
-    # Only credibility differs: Method A un-shaded (1.0), Method B (Burning
-    # Cost) weighted by DEFAULT_CREDIBILITY_PCT - so Method B requires LESS.
+def test_calculate_renewal_rating_two_methods_uses_each_methods_own_incurred_base():
+    # Method A and Method B get DIFFERENT incurred-claims figures (each
+    # method's own IBNR convention - see _case_renewal_rating) - the combo
+    # function just runs each through calculate_renewal_rating with its
+    # own credibility setting.
+    both = calculate_renewal_rating_two_methods(1_100_000, 1_050_000, 1_000_000)
+    assert both["method_a"]["annualized_incurred_claims"] == 1_100_000
+    assert both["method_b"]["annualized_incurred_claims"] == 1_050_000
     assert both["method_a"]["assumptions_used"]["credibility_pct"] == 1.0
-    assert both["method_b"]["assumptions_used"]["credibility_pct"] == DEFAULT_CREDIBILITY_PCT
+    assert both["method_b"]["assumptions_used"]["credibility_pct"] == DEFAULT_CREDIBILITY_PCT == 1.0
+    assert both["gap"] == round(both["method_b"]["required_premium"] - both["method_a"]["required_premium"], 2)
+
+
+def test_calculate_renewal_rating_two_methods_matches_when_given_the_same_base_and_default_credibility():
+    # DEFAULT_CREDIBILITY_PCT is 1.0 - a renewal's own claims ledger is
+    # real, known experience, not a projection needing to be discounted -
+    # so given the SAME incurred base for both, they produce the SAME
+    # required premium by default.
+    both = calculate_renewal_rating_two_methods(1_000_000, 1_000_000, 1_000_000)
+    assert both["method_b"]["required_premium"] == both["method_a"]["required_premium"]
+    assert both["gap"] == 0.0
+
+
+def test_overriding_credibility_pct_makes_method_b_require_less():
+    both = calculate_renewal_rating_two_methods(1_000_000, 1_000_000, 1_000_000, credibility_pct=0.90)
+    assert both["method_b"]["assumptions_used"]["credibility_pct"] == 0.90
     assert both["method_b"]["required_premium"] < both["method_a"]["required_premium"]
     assert both["gap"] == round(both["method_b"]["required_premium"] - both["method_a"]["required_premium"], 2)
     assert both["gap_pct"] < 0
+
+
+def test_dynamic_ibnr_incurred_claims_matches_the_documented_formula():
+    # Paid 158,785 over 351 elapsed days, projected over a 30-day tail -
+    # same worked example used to validate against Portfolio Analysis's
+    # own ibnr_for_member convention.
+    result = dynamic_ibnr_incurred_claims(
+        total_paid=158_785, total_outstanding=17_392, elapsed_days=351, months_count=10,
+    )
+    assert result["ibnr"] == pytest.approx(13_571.37, abs=0.01)
+    assert result["incurred_to_date"] == pytest.approx(158_785 + 17_392 + 13_571.37, abs=0.01)
+    assert result["annualized_incurred_claims"] == pytest.approx(result["incurred_to_date"] / 10 * 12, abs=0.01)
+
+
+def test_dynamic_ibnr_incurred_claims_handles_zero_elapsed_days():
+    result = dynamic_ibnr_incurred_claims(total_paid=100_000, total_outstanding=0, elapsed_days=0, months_count=1)
+    assert result["ibnr"] == 0.0
+    assert result["incurred_to_date"] == 100_000.0
 
 
 def test_rejects_negative_claims_or_non_positive_premium():
