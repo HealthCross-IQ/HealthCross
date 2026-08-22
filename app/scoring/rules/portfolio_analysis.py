@@ -196,6 +196,7 @@ def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List
     period_end = member.get("member_end_date") or member.get("policy_end_date")
     paid = 0.0
     outstanding = 0.0
+    count = 0
     for c in claims_by_beneficiary.get(beneficiary_id, []):
         if not _claim_matches_period(c.get("date_of_treatment"), period_start, period_end):
             continue
@@ -204,7 +205,8 @@ def actual_claims_for_member(member: dict, claims_by_beneficiary: Dict[str, List
             paid += amount
         else:
             outstanding += amount
-    return {"total": paid + outstanding, "paid": paid, "outstanding": outstanding}
+        count += 1
+    return {"total": paid + outstanding, "paid": paid, "outstanding": outstanding, "count": count}
 
 
 IBNR_LOOKBACK_DAYS = 30
@@ -356,6 +358,7 @@ def analyze_portfolio_member(
         "actual_claims": round(claims_breakdown["total"], 2),
         "actual_claims_paid": round(claims_breakdown["paid"], 2),
         "actual_claims_outstanding": round(claims_breakdown["outstanding"], 2),
+        "claim_count": claims_breakdown["count"],
         "ibnr": round(ibnr, 2),
         "earned_premium_fraction": round(earned_fraction, 4),
         "warnings": warnings,
@@ -417,6 +420,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
             "ibnr": 0.0,
+            "claim_count": 0,
             "earned_member_years": 0.0,
             "product": None,
             "network": None,
@@ -435,6 +439,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         bucket["actual_claims_paid"] += r.get("actual_claims_paid") or 0.0
         bucket["actual_claims_outstanding"] += r.get("actual_claims_outstanding") or 0.0
         bucket["ibnr"] += r.get("ibnr") or 0.0
+        bucket["claim_count"] += r.get("claim_count") or 0
         bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
         if r.get("standard_premium") is not None:
             bucket["standard_premium"] += r["standard_premium"]
@@ -489,6 +494,15 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 # use to set a required premium independent of what was
                 # actually charged, unlike the premium-relative loss ratios above.
                 "burning_cost": round(actual_claims / earned_member_years, 2) if earned_member_years else None,
+                "claim_count": bucket["claim_count"],
+                # Frequency: claims per earned member-year (exposure-adjusted,
+                # not flat per-head, so a bucket with partial-year members
+                # isn't penalized for looking like it claims less often than
+                # it actually does). Severity: average cost per claim - high
+                # frequency + low severity vs. low frequency + high severity
+                # can produce the same loss ratio for very different reasons.
+                "claim_frequency": round(bucket["claim_count"] / earned_member_years, 3) if earned_member_years else None,
+                "claim_severity": round(actual_claims / bucket["claim_count"], 2) if bucket["claim_count"] else None,
                 "policy_start_date": bucket["policy_start_date"].isoformat() if bucket["policy_start_date"] else None,
             }
         )

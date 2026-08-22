@@ -409,6 +409,41 @@ def test_summarize_portfolio_rolls_up_ibnr_and_computes_loss_ratio_incl_ibnr():
     assert bronze["loss_ratio_incl_ibnr"] != bronze["loss_ratio_vs_actual"]
 
 
+def test_summarize_portfolio_computes_claim_frequency_and_severity():
+    # Frequency = claims per earned member-year (exposure-adjusted);
+    # severity = average AED cost per claim - two portfolios can share the
+    # same loss ratio for very different reasons (many small claims vs. a
+    # few large ones), which is exactly what these two numbers tell apart.
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [
+                {"date_of_treatment": None, "final_amount": 100.0, "claim_status": "Paid Claims"},
+                {"date_of_treatment": None, "final_amount": 200.0, "claim_status": "Paid Claims"},
+            ]},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": None, "final_amount": 4700.0, "claim_status": "Paid Claims"}]},
+        ),
+    ]
+    rows = summarize_portfolio(results, "product")
+    bronze = next(r for r in rows if r["product"] == "Bronze")
+    assert bronze["claim_count"] == 3
+    assert bronze["earned_member_years"] == 2.0  # no policy dates set - each member defaults to fully earned
+    assert bronze["claim_frequency"] == round(3 / 2.0, 3)
+    assert bronze["claim_severity"] == round(5000.0 / 3, 2)  # 100+200+4700 total, 3 claims
+
+
+def test_summarize_portfolio_claim_frequency_and_severity_are_none_without_claims():
+    results = [analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {})]
+    rows = summarize_portfolio(results, "product")
+    bronze = next(r for r in rows if r["product"] == "Bronze")
+    assert bronze["claim_count"] == 0
+    assert bronze["claim_frequency"] == 0.0  # earned_member_years is still 1.0 here, so this is a real 0 rate
+    assert bronze["claim_severity"] is None  # can't average over zero claims
+
+
 def test_summarize_portfolio_excludes_out_of_scope_members():
     results = [
         analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
@@ -438,6 +473,9 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "actual_vs_standard_pct": None,
             "earned_member_years": 1.0,
             "burning_cost": 0.0,
+            "claim_count": 0,
+            "claim_frequency": 0.0,
+            "claim_severity": None,
             "policy_start_date": None,
             "network": "MSH Regular",
         }

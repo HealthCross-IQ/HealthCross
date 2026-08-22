@@ -502,6 +502,9 @@ class PortfolioSummaryRow(BaseModel):
     actual_vs_standard_pct: Optional[float] = None
     earned_member_years: float = 0.0
     burning_cost: Optional[float] = None  # actual claims per earned member-year (AED per member per annum)
+    claim_count: int = 0
+    claim_frequency: Optional[float] = None  # claims per earned member-year
+    claim_severity: Optional[float] = None  # average AED cost per claim
 
 
 class PortfolioSummaryOut(BaseModel):

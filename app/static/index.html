@@ -4182,14 +4182,17 @@ function paComputeTotals(rows) {
     acc.actual_claims_paid += r.actual_claims_paid || 0;
     acc.actual_claims_outstanding += r.actual_claims_outstanding || 0;
     acc.ibnr += r.ibnr || 0;
+    acc.claim_count += r.claim_count || 0;
     acc.earned_member_years += r.earned_member_years;
     return acc;
-  }, { member_count: 0, priced_member_count: 0, standard_premium: 0, actual_premium: 0, actual_claims: 0, actual_claims_paid: 0, actual_claims_outstanding: 0, ibnr: 0, earned_member_years: 0 });
+  }, { member_count: 0, priced_member_count: 0, standard_premium: 0, actual_premium: 0, actual_claims: 0, actual_claims_paid: 0, actual_claims_outstanding: 0, ibnr: 0, claim_count: 0, earned_member_years: 0 });
   totals.loss_ratio_vs_standard = totals.standard_premium ? totals.actual_claims / totals.standard_premium : null;
   totals.loss_ratio_vs_actual = totals.actual_premium ? totals.actual_claims / totals.actual_premium : null;
   totals.loss_ratio_incl_ibnr = totals.actual_premium ? (totals.actual_claims + totals.ibnr) / totals.actual_premium : null;
   totals.actual_vs_standard_pct = totals.standard_premium ? (totals.actual_premium - totals.standard_premium) / totals.standard_premium * 100 : null;
   totals.burning_cost = totals.earned_member_years ? totals.actual_claims / totals.earned_member_years : null;
+  totals.claim_frequency = totals.earned_member_years ? totals.claim_count / totals.earned_member_years : null;
+  totals.claim_severity = totals.claim_count ? totals.actual_claims / totals.claim_count : null;
   return totals;
 }
 
@@ -4215,6 +4218,9 @@ function paSummaryRowHtml(groupByField, r) {
       <td><b>${r.loss_ratio_incl_ibnr != null ? (r.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
       <td>${r.earned_member_years.toLocaleString()}</td>
       <td>${r.burning_cost != null ? r.burning_cost.toLocaleString() : '-'}</td>
+      <td>${(r.claim_count || 0).toLocaleString()}</td>
+      <td>${r.claim_frequency != null ? r.claim_frequency.toLocaleString() : '-'}</td>
+      <td>${r.claim_severity != null ? r.claim_severity.toLocaleString() : '-'}</td>
     </tr>
   `;
 }
@@ -4247,7 +4253,7 @@ function paSummaryHtml(summary) {
             <th>${escapeHtml(groupByLabel)}</th><th>Members</th><th>Priced</th>
             <th>Actual premium</th><th>Claims (Paid)</th><th>Claims (Outstanding)</th><th>IBNR</th><th>Actual claims</th>
             <th>Actual vs. standard</th><th>Loss ratio (standard)</th><th>Loss ratio (actual)</th><th>Loss ratio (incl. IBNR)</th>
-            <th>Exposed (member-years)</th><th>Burning cost</th>
+            <th>Exposed (member-years)</th><th>Burning cost</th><th>Claims (count)</th><th>Frequency</th><th>Severity</th>
           </tr>
           ${visibleRows.map(r => paSummaryRowHtml(summary.group_by, r)).join('')}
           <tr style="font-weight:600; border-top:2px solid var(--border, #ccc);">
@@ -4265,10 +4271,13 @@ function paSummaryHtml(summary) {
             <td><b>${totals.loss_ratio_incl_ibnr != null ? (totals.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
             <td>${totals.earned_member_years.toLocaleString()}</td>
             <td>${totals.burning_cost != null ? totals.burning_cost.toLocaleString() : '-'}</td>
+            <td>${totals.claim_count.toLocaleString()}</td>
+            <td>${totals.claim_frequency != null ? totals.claim_frequency.toLocaleString() : '-'}</td>
+            <td>${totals.claim_severity != null ? totals.claim_severity.toLocaleString() : '-'}</td>
           </tr>
         </table>
       </div>
-      <div class="hint">Standard premium is hidden for now (not yet meaningful until Product mapping is fully uploaded) - "Loss ratio (standard)"/"Actual vs. standard" will populate once it's back. "Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet. "Claims (Paid)" + "Claims (Outstanding)" always add up to "Actual claims" - Outstanding covers anything not explicitly a "Paid" status (reserved/reported but not yet settled). "IBNR" estimates the claims-incurred-but-not-yet-reported tail as each account's own Paid claims from the last 30 days before the report date - zero once that account's policy has already run a full year (nothing left in the pipeline to estimate). "Loss ratio (incl. IBNR)" = (Paid + Outstanding + IBNR) &divide; Earned Premium, distinct from "Loss ratio (actual)" which omits IBNR. "Burning cost" is actual claims per earned member-year (AED per member per annum) - the technical claims-cost rate underwriting uses to set required premium, independent of what was actually charged. Actual premium is earned (prorated by each member's elapsed policy term), not the full annual amount, so a group 3 months into its policy year is compared fairly rather than looking artificially cheap against claims. The Total row reflects whatever rows the search box currently shows.</div>
+      <div class="hint">Standard premium is hidden for now (not yet meaningful until Product mapping is fully uploaded) - "Loss ratio (standard)"/"Actual vs. standard" will populate once it's back. "Priced" members are in-scope with both a recognized network AND a Product mapping - unmapped/unrecognized members still count toward Members but can't be compared against the rate card yet. "Claims (Paid)" + "Claims (Outstanding)" always add up to "Actual claims" - Outstanding covers anything not explicitly a "Paid" status (reserved/reported but not yet settled). "IBNR" estimates the claims-incurred-but-not-yet-reported tail as each account's own Paid claims from the last 30 days before the report date - zero once that account's policy has already run a full year (nothing left in the pipeline to estimate). "Loss ratio (incl. IBNR)" = (Paid + Outstanding + IBNR) &divide; Earned Premium, distinct from "Loss ratio (actual)" which omits IBNR. "Burning cost" is actual claims per earned member-year (AED per member per annum) - the technical claims-cost rate underwriting uses to set required premium, independent of what was actually charged. "Frequency" is claims per earned member-year, "Severity" is the average AED cost per claim - two groups can share the same loss ratio for very different reasons (many small claims vs. a few large ones), which frequency/severity tell apart. Actual premium is earned (prorated by each member's elapsed policy term), not the full annual amount, so a group 3 months into its policy year is compared fairly rather than looking artificially cheap against claims. The Total row reflects whatever rows the search box currently shows.</div>
     </div>
     ${paPolicyYearBreakdownHtml()}
   `;
