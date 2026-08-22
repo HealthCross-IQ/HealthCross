@@ -18,7 +18,6 @@ rather than silently mis-pricing it.
 """
 from collections import defaultdict
 from datetime import date as date_cls
-from datetime import timedelta
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
@@ -217,11 +216,15 @@ def ibnr_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]], 
     """Incurred-but-not-reported reserve estimate for one member, per
     underwriting's own two rules:
 
-    1. IBNR = this member's own Paid claims with a date_of_treatment in the
-       last 30 days before `as_of` - the most recent claims are the ones
-       least likely to have fully worked through the reporting pipeline
-       yet, so their own recent paid run-rate stands in for the
-       claims-incurred-but-not-yet-reported tail.
+    1. IBNR = (this member's own total Paid claims so far, from the start
+       of their period through `as_of`) / (elapsed days so far) * 30 - a
+       dynamic daily paid-claims run rate projected over a 30-day
+       unreported tail, rather than a flat sum of whatever happened to
+       land in the last 30 calendar days (which can swing wildly on a
+       single large or small claim landing just inside/outside that
+       window). Early in a policy period this run rate is naturally
+       noisier (few days of data) and it smooths out as more of the
+       period elapses.
     2. Zero once the member's own policy has run past a full year
        (`as_of` more than 365 days after policy_start_date) - by then the
        policy period is already closed out and has had a full year for
@@ -236,18 +239,22 @@ def ibnr_for_member(member: dict, claims_by_beneficiary: Dict[str, List[dict]], 
     beneficiary_id = member.get("beneficiary_id")
     period_start = member.get("member_start_date") or member.get("policy_start_date")
     period_end = member.get("member_end_date") or member.get("policy_end_date")
-    lookback_start = as_of - timedelta(days=IBNR_LOOKBACK_DAYS)
+    effective_as_of = min(as_of, period_end) if period_end else as_of
 
-    total = 0.0
+    elapsed_days = (effective_as_of - period_start).days
+    if elapsed_days <= 0:
+        return 0.0
+
+    total_paid = 0.0
     for c in claims_by_beneficiary.get(beneficiary_id, []):
         date_of_treatment = c.get("date_of_treatment")
-        if not date_of_treatment or not (lookback_start <= date_of_treatment <= as_of):
+        if not date_of_treatment or date_of_treatment > effective_as_of:
             continue
         if not _claim_matches_period(date_of_treatment, period_start, period_end):
             continue
         if _is_paid_claim_status(c.get("claim_status")):
-            total += c.get("final_amount") or 0.0
-    return total
+            total_paid += c.get("final_amount") or 0.0
+    return total_paid / elapsed_days * IBNR_LOOKBACK_DAYS
 
 
 def analyze_portfolio_member(

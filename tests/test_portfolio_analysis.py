@@ -196,16 +196,38 @@ def test_analyze_portfolio_member_treats_unrecognized_status_as_outstanding():
     assert result["actual_claims_outstanding"] == 500.0
 
 
-def test_ibnr_for_member_sums_only_paid_claims_in_the_last_30_days():
-    as_of = date(2026, 8, 15)
+def test_ibnr_for_member_is_the_paid_claims_run_rate_projected_over_30_days():
+    # policy_start 2026-01-01, as_of 2026-03-02 -> 60 days elapsed.
+    as_of = date(2026, 3, 2)
     member = _member(policy_start_date=date(2026, 1, 1))
     claims = [
-        {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},  # 14 days back - in window
-        {"date_of_treatment": date(2026, 7, 1), "final_amount": 900.0, "claim_status": "Paid Claims"},  # 45 days back - out of window
-        {"date_of_treatment": date(2026, 8, 5), "final_amount": 300.0, "claim_status": "Outstanding Claims"},  # in window but not Paid
+        {"date_of_treatment": date(2026, 1, 15), "final_amount": 500.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 2, 20), "final_amount": 100.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 2, 25), "final_amount": 300.0, "claim_status": "Outstanding Claims"},  # not Paid - excluded
     ]
     claims_by_ben = {member["beneficiary_id"]: claims}
-    assert ibnr_for_member(member, claims_by_ben, as_of) == 500.0
+    # (500 + 100) paid / 60 elapsed days * 30 = 300.0
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 300.0
+
+
+def test_ibnr_for_member_excludes_paid_claims_dated_after_as_of():
+    as_of = date(2026, 3, 2)
+    member = _member(policy_start_date=date(2026, 1, 1))
+    claims = [
+        {"date_of_treatment": date(2026, 1, 15), "final_amount": 600.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 3, 15), "final_amount": 9000.0, "claim_status": "Paid Claims"},  # after as_of - excluded
+    ]
+    claims_by_ben = {member["beneficiary_id"]: claims}
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 300.0
+
+
+def test_ibnr_for_member_is_zero_when_no_time_has_elapsed_yet():
+    as_of = date(2026, 1, 1)
+    member = _member(policy_start_date=date(2026, 1, 1))
+    claims_by_ben = {member["beneficiary_id"]: [
+        {"date_of_treatment": date(2026, 1, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},
+    ]}
+    assert ibnr_for_member(member, claims_by_ben, as_of) == 0.0
 
 
 def test_ibnr_for_member_is_zero_once_the_policy_has_run_past_a_full_year():
@@ -327,18 +349,21 @@ def test_analyze_portfolio_member_counts_all_claims_when_member_has_no_policy_da
 
 
 def test_executive_portfolio_summary_computes_level_1_kpis():
-    as_of = date(2026, 8, 15)
+    # as_of is exactly 30 days after policy_start_date, so the IBNR run
+    # rate (total paid so far / elapsed days * 30) reduces to exactly the
+    # total paid so far - a convenient identity for a clean assertion.
+    as_of = date(2026, 1, 31)
     results = [
         analyze_portfolio_member(
             _member(beneficiary_id="M1", contract="Acme Sub LLC", master_contract="Acme Holdings", policy_start_date=date(2026, 1, 1)),
             {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
-            {"M1": [{"date_of_treatment": date(2026, 8, 1), "final_amount": 1000.0, "claim_status": "Paid Claims"}]},
+            {"M1": [{"date_of_treatment": date(2026, 1, 15), "final_amount": 1000.0, "claim_status": "Paid Claims"}]},
             as_of=as_of,
         ),
         analyze_portfolio_member(
             _member(beneficiary_id="M2", gender="F", contract="Other Sub LLC", master_contract="Other Holdings", policy_start_date=date(2026, 1, 1)),
             {"Other Sub LLC": "Gold"}, RATE_CARDS, [],
-            {"M2": [{"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"}]},
+            {"M2": [{"date_of_treatment": date(2026, 1, 20), "final_amount": 500.0, "claim_status": "Paid Claims"}]},
             as_of=as_of,
         ),
     ]
@@ -347,8 +372,8 @@ def test_executive_portfolio_summary_computes_level_1_kpis():
     assert summary["total_members"] == 2
     assert summary["written_premium"] == 5000.0  # 2 x 2500 actual_gross_premium, unprorated
     assert summary["earned_premium"] == 5000.0  # fully earned - both start exactly at as_of's year
-    # actual_claims (1000+500) + IBNR (each claim also falls in its own
-    # member's last-30-days IBNR window, since neither policy has expired)
+    # actual_claims (1000+500) + IBNR (each member's 30-day-elapsed run
+    # rate equals its own paid total exactly, since neither policy expired)
     assert summary["incurred_claims"] == 3000.0
     assert summary["loss_ratio"] == round(3000.0 / 5000.0, 4)
     assert summary["expense_ratio_pct"] == 0.33
@@ -501,13 +526,16 @@ def test_summarize_portfolio_segregates_paid_and_outstanding_claims_and_reconcil
 
 
 def test_summarize_portfolio_rolls_up_ibnr_and_computes_loss_ratio_incl_ibnr():
-    as_of = date(2026, 8, 15)
+    # as_of is exactly 30 days after M1's policy_start_date, so its IBNR
+    # run rate (total paid so far / elapsed days * 30) equals its total
+    # paid so far exactly - a clean identity for the assertion below.
+    as_of = date(2026, 1, 31)
     results = [
         analyze_portfolio_member(
             _member(beneficiary_id="M1", policy_start_date=date(2026, 1, 1)),
             {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
             {"M1": [
-                {"date_of_treatment": date(2026, 8, 1), "final_amount": 1000.0, "claim_status": "Paid Claims"},
+                {"date_of_treatment": date(2026, 1, 15), "final_amount": 1000.0, "claim_status": "Paid Claims"},
             ]},
             as_of=as_of,
         ),
@@ -515,15 +543,15 @@ def test_summarize_portfolio_rolls_up_ibnr_and_computes_loss_ratio_incl_ibnr():
             _member(beneficiary_id="M2", gender="F", policy_start_date=date(2024, 1, 1)),  # already expired
             {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
             {"M2": [
-                {"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"},
+                {"date_of_treatment": date(2026, 1, 15), "final_amount": 500.0, "claim_status": "Paid Claims"},
             ]},
             as_of=as_of,
         ),
     ]
     rows = summarize_portfolio(results, "product")
     bronze = next(r for r in rows if r["product"] == "Bronze")
-    # M1's own recent Paid claim counts as IBNR (its policy hasn't expired);
-    # M2's identical recent Paid claim does NOT, since M2's policy started
+    # M1's own paid-to-date run rate counts as IBNR (its policy hasn't
+    # expired); M2's identical claim does NOT, since M2's policy started
     # more than 365 days before as_of.
     assert bronze["ibnr"] == 1000.0
     assert bronze["actual_claims"] == 1500.0
