@@ -526,6 +526,100 @@ def recurring_high_cost_members(
     return recurring
 
 
+#: MEDICAL_CATEGORY -> friendlier display label, for the categories that
+#: map cleanly onto a named benefit. PARAMEDICAL reads as "Physiotherapy"
+#: because in HealthCross's own claims book it's overwhelmingly
+#: musculoskeletal diagnoses (back pain, joint/disc/muscle disorders) -
+#: an empirical read of the real data, not a guess. Everything else keeps
+#: its own real category name (see _utilization_category_label) rather
+#: than being forced into an artificial "Other" bucket.
+UTILIZATION_CATEGORY_LABELS = {
+    "PHARMACY": "Pharmacy",
+    "VISION CARE": "Optical",
+    "PSYCHIATRY": "Mental Health",
+    "PARAMEDICAL": "Physiotherapy",
+}
+#: Shown as one combined "Dental" row rather than three separate ones.
+UTILIZATION_DENTAL_CATEGORIES = {"GENERAL DENTAL", "ORTHODONTIA", "DENTAL PROSTHESIS"}
+
+
+def _utilization_category_label(raw_category: Optional[str]) -> str:
+    if not raw_category:
+        return "Unclassified"
+    if raw_category in UTILIZATION_DENTAL_CATEGORIES:
+        return "Dental"
+    if raw_category in UTILIZATION_CATEGORY_LABELS:
+        return UTILIZATION_CATEGORY_LABELS[raw_category]
+    return raw_category.title()
+
+
+def utilization_by_encounter_type(claims: List[dict]) -> List[dict]:
+    """Outpatient/Inpatient/Maternity split, straight from each claim
+    line's own IP_OP_MATERNITY field - HealthCross's export populates
+    this on every row, so this is a complete cut (unlike benefit category
+    below, nothing falls through to "Unclassified" here in practice).
+    """
+    buckets: Dict[str, dict] = defaultdict(lambda: {"claim_count": 0, "total_value": 0.0})
+    total_value_all = 0.0
+    for c in claims:
+        key = (c.get("ip_op_maternity") or "Unclassified").title()
+        amount = c.get("final_amount") or 0.0
+        buckets[key]["claim_count"] += 1
+        buckets[key]["total_value"] += amount
+        total_value_all += amount
+
+    rows = [
+        {
+            "encounter_type": key,
+            "claim_count": bucket["claim_count"],
+            "total_value": round(bucket["total_value"], 2),
+            "pct_of_total": round(bucket["total_value"] / total_value_all * 100, 1) if total_value_all else None,
+        }
+        for key, bucket in buckets.items()
+    ]
+    rows.sort(key=lambda r: r["total_value"], reverse=True)
+    return rows
+
+
+def utilization_by_benefit_category(claims: List[dict]) -> List[dict]:
+    """Which benefits are actually driving cost, to spot benefit leakage
+    and major cost drivers. PHARMACY/VISION CARE/PSYCHIATRY/PARAMEDICAL
+    show under the friendlier Pharmacy/Optical/Mental Health/
+    Physiotherapy labels, the three dental categories (GENERAL DENTAL/
+    ORTHODONTIA/DENTAL PROSTHESIS) combine into one "Dental" row, and
+    everything else (Laboratory/Consultation/Diagnostic Procedures/
+    Hospitalisation/Day Case/Maternity/Prevention/Miscellaneous) is shown
+    under its own real category name - several of these are large shares
+    of total spend on their own, so folding them into a vague "Other"
+    would hide rather than reveal a cost driver.
+
+    Chronic conditions, Alternative treatments, and High-cost specialty
+    treatments aren't represented here at all - HealthCross's own export
+    has no field that tags a claim as any of those three, so building
+    them would mean guessing rather than reading real data.
+    """
+    buckets: Dict[str, dict] = defaultdict(lambda: {"claim_count": 0, "total_value": 0.0})
+    total_value_all = 0.0
+    for c in claims:
+        key = _utilization_category_label(c.get("medical_category"))
+        amount = c.get("final_amount") or 0.0
+        buckets[key]["claim_count"] += 1
+        buckets[key]["total_value"] += amount
+        total_value_all += amount
+
+    rows = [
+        {
+            "category": key,
+            "claim_count": bucket["claim_count"],
+            "total_value": round(bucket["total_value"], 2),
+            "pct_of_total": round(bucket["total_value"] / total_value_all * 100, 1) if total_value_all else None,
+        }
+        for key, bucket in buckets.items()
+    ]
+    rows.sort(key=lambda r: r["total_value"], reverse=True)
+    return rows
+
+
 _GROUP_BY_FIELDS = {
     "product", "network", "region", "nationality_zone", "client", "master_client",
     "gender", "relation", "policy_year", "category",
@@ -947,7 +1041,11 @@ def summarize_burning_cost_overall(member_results: List[dict]) -> Optional[dict]
 DEFAULT_EXPENSE_RATIO_PCT = 0.33  # matches the case-level renewal loading default (see renewal_rating.py)
 
 
-def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: float = DEFAULT_EXPENSE_RATIO_PCT) -> dict:
+def executive_portfolio_summary(
+    member_results: List[dict],
+    expense_ratio_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+    opex_by_client: Optional[Dict[str, float]] = None,
+) -> dict:
     """The top-of-page "Level 1 - Executive Portfolio" KPI set: Total
     Groups, Total Members, Written Premium, Earned Premium, Incurred
     Claims, Loss Ratio, Combined Ratio, Average Premium per Member, Claim
@@ -962,15 +1060,19 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
     here uses) - Incurred Claims is Paid + Outstanding + IBNR, i.e. the
     same fuller figure loss_ratio_incl_ibnr is built from.
 
-    Combined Ratio = Loss Ratio + an assumed expense ratio (commission +
-    TPA + admin + HC/management fees, as a flat % of premium) -
+    Combined Ratio = Loss Ratio + an expense ratio (commission + TPA +
+    admin + HC/management fees, as a fraction of premium) -
     underwriting's own reminder that a healthy-looking loss ratio can
     still mean an unprofitable book once acquisition/administration cost
-    is added on top. Defaults to 33% (the same default loading used for a
-    single case's own renewal rating - see renewal_rating.py's
-    DEFAULT_LOADING_PCT) since Portfolio Analysis has no per-account fee
-    split of its own the way a single case does; override via
-    expense_ratio_pct for a more precise book-wide assumption.
+    is added on top. `opex_by_client` (master_client -> real OPEX/Loading
+    %, from the uploaded Client Master sheet - see
+    app/ingestion/client_master.py) gives each client's own REAL expense
+    ratio where it's on file; `expense_ratio_pct` (defaults to 33%, the
+    same default loading used for a single case's own renewal rating -
+    see renewal_rating.py's DEFAULT_LOADING_PCT) is only the FALLBACK for
+    a client with no real figure uploaded. The reported expense_ratio_pct
+    is the resulting premium-weighted BLEND across every member, not a
+    flat assumption, whenever any real OPEX is on file at all.
 
     Claim Frequency (claims per earned member-year) and Claim Severity
     (average AED cost per claim) are the SAME whole-book totals
@@ -987,6 +1089,7 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
     ibnr_total = 0.0
     claim_count = 0
     earned_member_years = 0.0
+    weighted_expense = 0.0
     for r in member_results:
         total_members += 1
         master_client = r.get("master_client")
@@ -994,8 +1097,11 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
             groups.add(master_client)
         if r.get("written_premium") is not None:
             written_premium += r["written_premium"]
-        if r.get("actual_premium") is not None:
-            earned_premium += r["actual_premium"]
+        premium = r.get("actual_premium")
+        if premium is not None:
+            earned_premium += premium
+            member_opex = opex_by_client.get(master_client) if opex_by_client and master_client else None
+            weighted_expense += premium * (member_opex if member_opex is not None else expense_ratio_pct)
         actual_claims_total += r.get("actual_claims") or 0.0
         ibnr_total += r.get("ibnr") or 0.0
         claim_count += r.get("claim_count") or 0
@@ -1003,6 +1109,7 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
 
     incurred_claims = actual_claims_total + ibnr_total
     loss_ratio = incurred_claims / earned_premium if earned_premium else None
+    blended_expense_ratio_pct = weighted_expense / earned_premium if earned_premium else expense_ratio_pct
     claim_frequency = claim_count / earned_member_years if earned_member_years else None
     claim_severity = actual_claims_total / claim_count if claim_count else None
     return {
@@ -1012,8 +1119,8 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
         "earned_premium": round(earned_premium, 2),
         "incurred_claims": round(incurred_claims, 2),
         "loss_ratio": round(loss_ratio, 4) if loss_ratio is not None else None,
-        "expense_ratio_pct": expense_ratio_pct,
-        "combined_ratio": round(loss_ratio + expense_ratio_pct, 4) if loss_ratio is not None else None,
+        "expense_ratio_pct": round(blended_expense_ratio_pct, 4),
+        "combined_ratio": round(loss_ratio + blended_expense_ratio_pct, 4) if loss_ratio is not None else None,
         "average_premium_per_member": round(written_premium / total_members, 2) if total_members else None,
         "claim_count": claim_count,
         "claim_frequency": round(claim_frequency, 4) if claim_frequency is not None else None,
@@ -1095,6 +1202,69 @@ def summarize_by_group_size_band(member_results: List[dict]) -> List[dict]:
             "group_count": group_count,
             "member_count": bucket["member_count"],
             "average_group_size": round(bucket["member_count"] / group_count, 1) if group_count else None,
+            "actual_premium": round(bucket["actual_premium"], 2),
+            "actual_claims": round(bucket["actual_claims"], 2),
+            "ibnr": round(bucket["ibnr"], 2),
+            "incurred_claims": round(incurred_claims, 2),
+            "loss_ratio": round(loss_ratio, 4) if loss_ratio is not None else None,
+        })
+    return rows
+
+
+def summarize_new_vs_renewal(member_results: List[dict]) -> List[dict]:
+    """Splits the book into New Business vs. Renewal by how many distinct
+    policy years appear for each master client in this book-wide extract:
+    a client with only ONE policy year on file is New Business (this is
+    its first year on book); a client with TWO OR MORE is Renewal (it's
+    already renewed onto at least one later policy year, evidenced by
+    both cohorts' members appearing in the same current extract).
+
+    This is a heuristic, not a true "first ever policy" flag - a
+    long-standing renewal client whose prior-year members have since
+    fully rolled off the current extract (e.g. a stale/inactive cohort
+    purged from the export) would misclassify as New Business under this
+    rule, since only what's actually present in the uploaded book can be
+    counted. There is no other new-vs-renewal indicator in HealthCross's
+    own export to fall back on (POLICYSEQUENCE is blank in practice).
+    """
+    years_by_group: Dict[str, set] = defaultdict(set)
+    for r in member_results:
+        master_client = r.get("master_client")
+        policy_year = r.get("policy_year")
+        if master_client and policy_year:
+            years_by_group[master_client].add(policy_year)
+
+    classification_by_group: Dict[str, str] = {
+        mc: ("Renewal" if len(years) >= 2 else "New Business") for mc, years in years_by_group.items()
+    }
+
+    buckets: Dict[str, dict] = defaultdict(
+        lambda: {"groups": set(), "member_count": 0, "actual_premium": 0.0, "actual_claims": 0.0, "ibnr": 0.0}
+    )
+    for r in member_results:
+        master_client = r.get("master_client")
+        classification = classification_by_group.get(master_client, "Unknown") if master_client else "Unknown"
+        bucket = buckets[classification]
+        if master_client:
+            bucket["groups"].add(master_client)
+        bucket["member_count"] += 1
+        if r.get("actual_premium") is not None:
+            bucket["actual_premium"] += r["actual_premium"]
+        bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["ibnr"] += r.get("ibnr") or 0.0
+
+    rows = []
+    for classification in ("New Business", "Renewal", "Unknown"):
+        if classification not in buckets:
+            continue
+        bucket = buckets[classification]
+        group_count = len(bucket["groups"])
+        incurred_claims = bucket["actual_claims"] + bucket["ibnr"]
+        loss_ratio = incurred_claims / bucket["actual_premium"] if bucket["actual_premium"] else None
+        rows.append({
+            "classification": classification,
+            "group_count": group_count,
+            "member_count": bucket["member_count"],
             "actual_premium": round(bucket["actual_premium"], 2),
             "actual_claims": round(bucket["actual_claims"], 2),
             "ibnr": round(bucket["ibnr"], 2),

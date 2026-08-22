@@ -4,6 +4,7 @@ HealthCross's own already-booked book against the New Business rate card.
 from datetime import date
 
 from app.scoring.rules.portfolio_analysis import (
+    DEFAULT_EXPENSE_RATIO_PCT,
     age_bands_from_rate_cards,
     analyze_portfolio_member,
     claims_above_thresholds,
@@ -18,10 +19,13 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_overall,
     summarize_by_group_size_band,
+    summarize_new_vs_renewal,
     summarize_population_mix,
     summarize_portfolio,
     top_claims_by_value,
     top_members_by_total_claims,
+    utilization_by_benefit_category,
+    utilization_by_encounter_type,
 )
 
 RATE_CARDS = [
@@ -428,6 +432,29 @@ def test_executive_portfolio_summary_expense_ratio_is_overridable():
     assert summary["combined_ratio"] == round(summary["loss_ratio"] + 0.25, 4)
 
 
+def test_executive_portfolio_summary_uses_real_client_opex_where_uploaded():
+    # M1's client has a real 20% OPEX on file - M2's client doesn't, so it
+    # falls back to the flat 33% default. Both premiums are equal (2500
+    # each), so the blended expense ratio should land exactly halfway
+    # between 20% and 33%.
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", contract="Has Opex Co", master_contract="Has Opex Co"), {}, RATE_CARDS, [], {},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", contract="No Opex Co", master_contract="No Opex Co"), {}, RATE_CARDS, [], {},
+        ),
+    ]
+    summary = executive_portfolio_summary(results, opex_by_client={"Has Opex Co": 0.20})
+    assert summary["expense_ratio_pct"] == round((0.20 + 0.33) / 2, 4)
+
+
+def test_executive_portfolio_summary_blends_opex_when_no_client_has_a_real_figure():
+    results = [analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {})]
+    summary = executive_portfolio_summary(results, opex_by_client={})
+    assert summary["expense_ratio_pct"] == DEFAULT_EXPENSE_RATIO_PCT
+
+
 def test_summarize_by_group_size_band_pools_groups_by_headcount():
     # "Small Co" has 2 members (band 1-10), "Big Co" has 3 members split
     # across two subgroups sharing the same master_contract (band 1-10
@@ -489,6 +516,30 @@ def test_summarize_by_group_size_band_includes_out_of_scope_members_own_premium_
     assert band["actual_premium"] == 2500.0
 
 
+def test_summarize_new_vs_renewal_classifies_by_distinct_policy_years():
+    results = [
+        # "One Year Co" has only one policy year on file - New Business.
+        analyze_portfolio_member(
+            _member(beneficiary_id="N1", contract="One Year Co", master_contract="One Year Co", policy_start_date=date(2026, 1, 1)),
+            {}, RATE_CARDS, [], {},
+        ),
+        # "Renewed Co" has two members on two different policy years - Renewal.
+        analyze_portfolio_member(
+            _member(beneficiary_id="R1", contract="Renewed Co", master_contract="Renewed Co", policy_start_date=date(2025, 1, 1)),
+            {}, RATE_CARDS, [], {},
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="R2", contract="Renewed Co", master_contract="Renewed Co", policy_start_date=date(2026, 1, 1)),
+            {}, RATE_CARDS, [], {},
+        ),
+    ]
+    rows = {r["classification"]: r for r in summarize_new_vs_renewal(results)}
+    assert rows["New Business"]["group_count"] == 1
+    assert rows["New Business"]["member_count"] == 1
+    assert rows["Renewal"]["group_count"] == 1
+    assert rows["Renewal"]["member_count"] == 2
+
+
 def _claim(**overrides):
     base = {
         "patient_id": "P1", "group_name": "Acme Sub LLC", "client_name": "Acme Holdings",
@@ -508,6 +559,56 @@ def test_top_claims_by_value_ranks_individual_claim_lines_highest_first():
     top = top_claims_by_value(claims, top_n=2)
     assert [c["patient_id"] for c in top] == ["P2", "P3"]
     assert top[0]["final_amount"] == 250000.0
+
+
+def test_utilization_by_encounter_type_splits_op_ip_maternity():
+    claims = [
+        _claim(ip_op_maternity="OP", final_amount=100.0),
+        _claim(ip_op_maternity="OP", final_amount=200.0),
+        _claim(ip_op_maternity="IP", final_amount=5000.0),
+        _claim(ip_op_maternity="MATERNITY", final_amount=3000.0),
+    ]
+    rows = {r["encounter_type"]: r for r in utilization_by_encounter_type(claims)}
+    assert rows["Op"]["claim_count"] == 2
+    assert rows["Op"]["total_value"] == 300.0
+    assert rows["Ip"]["total_value"] == 5000.0
+    assert rows["Maternity"]["total_value"] == 3000.0
+    # Percentages should sum to ~100% across all rows (each row's own
+    # rounding to 1 decimal place can drift the total by a tenth or so).
+    assert abs(sum(r["pct_of_total"] for r in rows.values()) - 100.0) < 0.5
+
+
+def test_utilization_by_benefit_category_relabels_known_categories():
+    claims = [
+        _claim(medical_category="PHARMACY", final_amount=100.0),
+        _claim(medical_category="VISION CARE", final_amount=200.0),
+        _claim(medical_category="PSYCHIATRY", final_amount=300.0),
+        _claim(medical_category="PARAMEDICAL", final_amount=400.0),
+    ]
+    rows = {r["category"]: r for r in utilization_by_benefit_category(claims)}
+    assert rows["Pharmacy"]["total_value"] == 100.0
+    assert rows["Optical"]["total_value"] == 200.0
+    assert rows["Mental Health"]["total_value"] == 300.0
+    assert rows["Physiotherapy"]["total_value"] == 400.0
+
+
+def test_utilization_by_benefit_category_combines_dental_categories():
+    claims = [
+        _claim(medical_category="GENERAL DENTAL", final_amount=100.0),
+        _claim(medical_category="ORTHODONTIA", final_amount=200.0),
+        _claim(medical_category="DENTAL PROSTHESIS", final_amount=300.0),
+    ]
+    rows = {r["category"]: r for r in utilization_by_benefit_category(claims)}
+    assert rows["Dental"]["claim_count"] == 3
+    assert rows["Dental"]["total_value"] == 600.0
+
+
+def test_utilization_by_benefit_category_keeps_unmapped_categories_under_their_own_name():
+    # LABORATORY has no equivalent on the user's requested taxonomy - shown
+    # under its own real name rather than folded into a vague "Other".
+    claims = [_claim(medical_category="LABORATORY", final_amount=500.0)]
+    rows = {r["category"]: r for r in utilization_by_benefit_category(claims)}
+    assert rows["Laboratory"]["total_value"] == 500.0
 
 
 def test_top_members_by_total_claims_sums_across_claim_lines():

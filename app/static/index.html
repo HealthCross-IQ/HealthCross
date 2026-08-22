@@ -3955,6 +3955,8 @@ let paLastAgeGender = null;
 let paLastDemographic = null;
 let paLastLargeClaims = null;
 let paLastGroupSizeBands = null;
+let paLastNewVsRenewal = null;
+let paLastUtilization = null;
 let paGroupBy = 'product';
 let paPolicyYear = '';
 let paSearchTerm = '';
@@ -4066,6 +4068,14 @@ function portfolioAnalysisPanelHtml() {
           </div>
         </div>
         <div class="pa-upload-slot">
+          <label>Client Master (OPEX, Product, Start Date)</label>
+          <input type="file" id="pa-file-client-master" accept=".xlsx,.csv">
+          <div class="pa-upload-actions">
+            <button onclick="paUploadFile('client-master')">Upload</button>
+            <span id="pa-status-client-master" class="status-pending"></span>
+          </div>
+        </div>
+        <div class="pa-upload-slot">
           <label>Data as of (production/extract date)</label>
           <input type="date" id="pa-data-as-of">
           <div class="pa-upload-actions">
@@ -4077,6 +4087,7 @@ function portfolioAnalysisPanelHtml() {
       <div class="hint">Set this to the date the Members/Claims export was actually produced (e.g. "as of 15/07/2026") - earned premium proration measures elapsed policy time against this date by default, instead of whatever day you happen to click "Run analysis". Included automatically with your next Membership/Claims upload, or set it directly with "Save date" any time.</div>
       <div class="hint">"Subgroup &rarr; Master Group mapping" is a plain two-column sheet (Subgroup, Group Name) - each subgroup's row names the master policy it actually belongs to (a master's own row maps to itself). This is the authoritative source for "Client (Master)" grouping/filtering, since the Membership export's own MASTERCONTRACT column isn't reliable for this.</div>
       <div class="hint">Both mapping uploads above are optional if the Membership export already carries its own "Master Client Name" and "PRODUCTNAME" columns - those are used directly and take priority over these uploads whenever present.</div>
+      <div class="hint">"Client Master" is a plain sheet keyed by master client (Client Name (Master), OPEX, Product, Start Date - OPEX can be typed as 27.5, 0.275, or "27.5%") - each client's own real OPEX/Loading % is used in the Level 1 Executive Portfolio's Combined Ratio instead of the flat 33% assumption, wherever that client has one on file. Product/Start Date are for your own reference only right now.</div>
     </div>
     <div class="card">
       <h3>Run analysis</h3>
@@ -4127,6 +4138,18 @@ function portfolioAnalysisPanelHtml() {
       <div id="pa-group-size-bands-area">${paLastGroupSizeBands ? paGroupSizeBandsHtml(paLastGroupSizeBands) : ''}</div>
     </div>
     <div class="card">
+      <h3>New business vs. renewal</h3>
+      <div class="hint">A master client with only ONE policy year on file is New Business (this is its first year on book); one with two or more is Renewal (it's already renewed onto at least one later policy year, evidenced by both cohorts appearing in the same current extract). This is a read of what's actually in the uploaded book, not a true "first ever policy" flag - a long-standing renewal client whose prior-year members have since fully rolled off the extract would misclassify as New Business. Ignores the policy year filter above (comparing across policy years is the whole point).</div>
+      <div class="row"><button onclick="paLoadNewVsRenewal()">Load</button></div>
+      <div id="pa-new-vs-renewal-area">${paLastNewVsRenewal ? paNewVsRenewalHtml(paLastNewVsRenewal) : ''}</div>
+    </div>
+    <div class="card">
+      <h3>Utilization of benefits</h3>
+      <div class="hint">Which encounter types and benefit categories are actually driving cost, to spot benefit leakage and major cost drivers. Independent of the rate card/members upload - works from the claims book alone, whole book (not scoped to the filters above). Pharmacy/Optical/Mental Health/Physiotherapy/Dental are relabeled from the claims export's own categories (Physiotherapy = PARAMEDICAL, which in this book is overwhelmingly musculoskeletal claims); everything else keeps its own real category name rather than being hidden in a vague "Other". Chronic conditions, Alternative treatments, and High-cost specialty treatments aren't shown - the export has no field that tags a claim as any of those three.</div>
+      <div class="row"><button onclick="paLoadUtilization()">Load</button></div>
+      <div id="pa-utilization-area">${paLastUtilization ? paUtilizationHtml(paLastUtilization) : ''}</div>
+    </div>
+    <div class="card">
       <h3>Large claims &amp; high-cost members</h3>
       <div class="hint">The usual large-loss cut before drilling into loss ratio by segment - one or two catastrophic claims can distort a small or medium group's numbers on their own. Independent of the rate card/members upload - works from the claims book alone.</div>
       <div class="row"><button onclick="paLoadLargeClaims()">Load</button></div>
@@ -4164,7 +4187,7 @@ async function paLoadExecutiveSummary() {
         <div class="kpi"><span class="label">Claim frequency</span><span class="value">${s.claim_frequency != null ? s.claim_frequency.toFixed(2) : '-'}</span></div>
         <div class="kpi"><span class="label">Claim severity</span><span class="value">${s.claim_severity != null ? 'AED ' + s.claim_severity.toLocaleString() : '-'}</span></div>
       </div>
-      <div class="hint" style="margin:0;">Combined ratio = Loss ratio + an assumed ${(s.expense_ratio_pct * 100).toFixed(0)}% expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Incurred claims = Paid + Outstanding + IBNR. Claim frequency = claims per earned member-year; Claim severity = average AED cost per claim - a poor loss ratio can be read as "too many claims" vs. "a few expensive ones" before drilling into any one segment.</div>
+      <div class="hint" style="margin:0;">Combined ratio = Loss ratio + expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Expense ratio here (${(s.expense_ratio_pct * 100).toFixed(1)}%) uses each client's own real OPEX/Loading % from the uploaded Client Master sheet where it's on file, falling back to a flat 33% assumption otherwise - it's a blend across the whole book, not a flat number, once any client has a real figure uploaded. Incurred claims = Paid + Outstanding + IBNR. Claim frequency = claims per earned member-year; Claim severity = average AED cost per claim - a poor loss ratio can be read as "too many claims" vs. "a few expensive ones" before drilling into any one segment.</div>
     `;
   } catch (err) {
     area.innerHTML = '';
@@ -4203,10 +4226,12 @@ async function paUploadFile(kind) {
   const inputId = {
     'members': 'pa-file-members', 'claims': 'pa-file-claims',
     'group-product-mapping': 'pa-file-mapping', 'subgroup-mapping': 'pa-file-subgroup-mapping',
+    'client-master': 'pa-file-client-master',
   }[kind];
   const statusId = {
     'members': 'pa-status-members', 'claims': 'pa-status-claims',
     'group-product-mapping': 'pa-status-mapping', 'subgroup-mapping': 'pa-status-subgroup-mapping',
+    'client-master': 'pa-status-client-master',
   }[kind];
   const input = document.getElementById(inputId);
   const statusEl = document.getElementById(statusId);
@@ -4294,6 +4319,80 @@ function paGroupSizeBandsHtml(rows) {
   `;
 }
 
+async function paLoadNewVsRenewal() {
+  paReadFilterInputs();
+  try {
+    const params = paBuildFilterParams();
+    const data = await api(`/portfolio-analysis/new-vs-renewal?${params.toString()}`);
+    paLastNewVsRenewal = data.rows;
+    document.getElementById('pa-new-vs-renewal-area').innerHTML = paNewVsRenewalHtml(paLastNewVsRenewal);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paNewVsRenewalHtml(rows) {
+  const bodyRows = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.classification)}</td>
+      <td>${r.group_count.toLocaleString()}</td>
+      <td>${r.member_count.toLocaleString()}</td>
+      <td>${r.actual_premium.toLocaleString()}</td>
+      <td>${r.incurred_claims.toLocaleString()}</td>
+      <td><b>${r.loss_ratio != null ? (r.loss_ratio * 100).toFixed(1) + '%' : '-'}</b></td>
+    </tr>`).join('');
+  return `
+    <div style="overflow-x:auto;">
+      <table>
+        <tr><th>Classification</th><th>Groups</th><th>Members</th><th>Earned premium</th><th>Incurred claims</th><th>Loss ratio</th></tr>
+        ${bodyRows || '<tr><td colspan="6" class="hint">No data.</td></tr>'}
+      </table>
+    </div>
+  `;
+}
+
+async function paLoadUtilization() {
+  try {
+    paLastUtilization = await api('/portfolio-analysis/utilization');
+    document.getElementById('pa-utilization-area').innerHTML = paUtilizationHtml(paLastUtilization);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paUtilizationHtml(data) {
+  const encounterRows = data.by_encounter_type.map(r => `
+    <tr>
+      <td>${escapeHtml(r.encounter_type)}</td>
+      <td>${r.claim_count.toLocaleString()}</td>
+      <td>${r.total_value.toLocaleString()}</td>
+      <td>${r.pct_of_total != null ? r.pct_of_total.toFixed(1) + '%' : '-'}</td>
+    </tr>`).join('');
+  const categoryRows = data.by_benefit_category.map(r => `
+    <tr>
+      <td>${escapeHtml(r.category)}</td>
+      <td>${r.claim_count.toLocaleString()}</td>
+      <td>${r.total_value.toLocaleString()}</td>
+      <td>${r.pct_of_total != null ? r.pct_of_total.toFixed(1) + '%' : '-'}</td>
+    </tr>`).join('');
+  return `
+    <h4>By encounter type</h4>
+    <div style="overflow-x:auto;">
+      <table>
+        <tr><th>Encounter type</th><th>Claims</th><th>Total (AED)</th><th>% of total</th></tr>
+        ${encounterRows || '<tr><td colspan="4" class="hint">No data.</td></tr>'}
+      </table>
+    </div>
+    <h4>By benefit category</h4>
+    <div style="overflow-x:auto;">
+      <table>
+        <tr><th>Category</th><th>Claims</th><th>Total (AED)</th><th>% of total</th></tr>
+        ${categoryRows || '<tr><td colspan="4" class="hint">No data.</td></tr>'}
+      </table>
+    </div>
+  `;
+}
+
 async function paLoadLargeClaims() {
   try {
     paLastLargeClaims = await api('/portfolio-analysis/large-claims');
@@ -4374,7 +4473,7 @@ async function printPortfolioManagementReport() {
 
   paReadFilterInputs();
   const isClientLevel = !!paFilters.master_client;
-  let execSummary, productSummary, networkSummary, largeClaims, policyYearBreakdown;
+  let execSummary, productSummary, networkSummary, largeClaims, policyYearBreakdown, utilization, groupSizeBands, newVsRenewal;
   try {
     [execSummary, productSummary, networkSummary] = await Promise.all([
       api(`/portfolio-analysis/executive-summary?${paBuildFilterParams().toString()}`),
@@ -4386,14 +4485,34 @@ async function printPortfolioManagementReport() {
     toast(err.message, true);
     return;
   }
+  // Client-level report: scope Large Claims/Utilization to this one
+  // master client's own claims too, instead of the whole book - neither
+  // endpoint takes the full filter set (they have no Product/Network of
+  // their own to filter by), just master_client.
+  const claimsScopeParam = isClientLevel ? `?master_client=${encodeURIComponent(paFilters.master_client)}` : '';
   try {
-    // Client-level report: scope Large Claims to this one master client's
-    // own claims too, instead of the whole book - the endpoint doesn't
-    // take the full filter set (it has no Product/Network of its own to
-    // filter by), just master_client.
-    const largeClaimsParams = isClientLevel ? `?master_client=${encodeURIComponent(paFilters.master_client)}` : '';
-    largeClaims = await api(`/portfolio-analysis/large-claims${largeClaimsParams}`);
+    largeClaims = await api(`/portfolio-analysis/large-claims${claimsScopeParam}`);
   } catch (err) { largeClaims = null; /* no claims uploaded (or none for this client) - section omitted */ }
+  try {
+    utilization = await api(`/portfolio-analysis/utilization${claimsScopeParam}`);
+  } catch (err) { utilization = null; /* no claims uploaded (or none for this client) - section omitted */ }
+
+  // Group Size Distribution and New vs. Renewal describe the WHOLE
+  // BOOK's own shape (how many groups of each size, how many have
+  // renewed) - not meaningful scoped down to a single already-known
+  // client, so these are whole-book-only sections, omitted entirely from
+  // a client-level report.
+  if (!isClientLevel) {
+    try {
+      const bandsData = await api(`/portfolio-analysis/group-size-bands?${paBuildFilterParams().toString()}`);
+      groupSizeBands = bandsData.rows;
+    } catch (err) { groupSizeBands = null; }
+    try {
+      const nvrParams = paBuildFilterParams();
+      const newVsRenewalData = await api(`/portfolio-analysis/new-vs-renewal?${nvrParams.toString()}`);
+      newVsRenewal = newVsRenewalData.rows;
+    } catch (err) { newVsRenewal = null; }
+  }
 
   // A client-level report on a client that's already renewed can blend
   // last year's and this year's members into one set of figures unless
@@ -4440,7 +4559,7 @@ async function printPortfolioManagementReport() {
     else keyFindings.push(`Loss ratio (incl. IBNR) stands at <strong>${lrPct.toFixed(1)}%</strong>.`);
   }
   if (crPct != null) {
-    keyFindings.push(`Combined ratio (loss ratio + ${(execSummary.expense_ratio_pct * 100).toFixed(0)}% assumed expense load) is <strong>${crPct.toFixed(1)}%</strong>${crPct >= 100 ? ' - the book is running at an underwriting loss once acquisition/administration cost is included' : ''}.`);
+    keyFindings.push(`Combined ratio (loss ratio + ${(execSummary.expense_ratio_pct * 100).toFixed(1)}% expense ratio) is <strong>${crPct.toFixed(1)}%</strong>${crPct >= 100 ? ' - the book is running at an underwriting loss once acquisition/administration cost is included' : ''}.`);
   }
   keyFindings.push(`<strong>${execSummary.total_groups.toLocaleString()}</strong> groups and <strong>${execSummary.total_members.toLocaleString()}</strong> members in scope, at an average premium of <strong>AED ${execSummary.average_premium_per_member != null ? execSummary.average_premium_per_member.toLocaleString() : '-'}</strong> per member.`);
   if (largeClaims && largeClaims.recurring_high_cost_members.length) {
@@ -4505,6 +4624,79 @@ async function printPortfolioManagementReport() {
       </section>`;
   }
 
+  let utilizationHtml = '';
+  if (utilization) {
+    const encounterRows = utilization.by_encounter_type.map(r => `
+      <tr><td>${escapeHtml(r.encounter_type)}</td><td class="rcs-num">${r.claim_count.toLocaleString()}</td><td class="rcs-num">${r.total_value.toLocaleString()}</td><td class="rcs-num">${r.pct_of_total != null ? r.pct_of_total.toFixed(1) + '%' : '-'}</td></tr>`).join('');
+    const categoryRows = utilization.by_benefit_category.map(r => `
+      <tr><td>${escapeHtml(r.category)}</td><td class="rcs-num">${r.claim_count.toLocaleString()}</td><td class="rcs-num">${r.total_value.toLocaleString()}</td><td class="rcs-num">${r.pct_of_total != null ? r.pct_of_total.toFixed(1) + '%' : '-'}</td></tr>`).join('');
+    utilizationHtml = `
+      <section class="rcs-section">
+        <h3>Utilization of Benefits <span class="rcs-muted-label">${isClientLevel ? '(this client)' : '(whole book)'}</span></h3>
+        <p class="rcs-desc">Which encounter types and benefit categories are actually driving cost. Physiotherapy/Optical/Mental Health/Pharmacy/Dental are relabeled from the claims export's own categories; everything else keeps its own real category name rather than being hidden in a vague "Other". Chronic conditions, Alternative treatments, and High-cost specialty treatments aren't shown - the export has no field that tags a claim as any of those three.</p>
+        <table class="rcs-data" style="margin-bottom:16px;">
+          <tr><th>Encounter type</th><th class="rcs-num">Claims</th><th class="rcs-num">Total (AED)</th><th class="rcs-num">% of total</th></tr>
+          ${encounterRows}
+        </table>
+        <table class="rcs-data">
+          <tr><th>Benefit category</th><th class="rcs-num">Claims</th><th class="rcs-num">Total (AED)</th><th class="rcs-num">% of total</th></tr>
+          ${categoryRows}
+        </table>
+      </section>`;
+  }
+
+  let groupSizeBandsHtml = '';
+  if (groupSizeBands) {
+    const rows = groupSizeBands.map(r => `
+      <tr>
+        <td>${escapeHtml(r.band)} lives</td>
+        <td class="rcs-num">${r.group_count.toLocaleString()}</td>
+        <td class="rcs-num">${r.member_count.toLocaleString()}</td>
+        <td class="rcs-num">${r.average_group_size != null ? r.average_group_size.toLocaleString() : '-'}</td>
+        <td class="rcs-num">${r.actual_premium.toLocaleString()}</td>
+        <td class="rcs-num"><b>${r.loss_ratio != null ? (r.loss_ratio * 100).toFixed(1) + '%' : '-'}</b></td>
+      </tr>`).join('');
+    groupSizeBandsHtml = `
+      <section class="rcs-section">
+        <h3>Group Size Distribution &amp; Loss Ratio by Group-Size Band</h3>
+        <p class="rcs-desc">A small group's own claims are too thin to be meaningful on their own, so its experience is pooled with every other similarly-sized group instead - the same credibility logic underwriting already applies informally, made explicit.</p>
+        <table class="rcs-data">
+          <tr><th>Group size</th><th class="rcs-num">Groups</th><th class="rcs-num">Members</th><th class="rcs-num">Avg. group size</th><th class="rcs-num">Earned premium</th><th class="rcs-num">Loss ratio</th></tr>
+          ${rows || '<tr><td colspan="6" class="rcs-desc">No data.</td></tr>'}
+        </table>
+      </section>`;
+  }
+
+  let newVsRenewalHtml = '';
+  if (newVsRenewal) {
+    const rows = newVsRenewal.map(r => `
+      <tr>
+        <td>${escapeHtml(r.classification)}</td>
+        <td class="rcs-num">${r.group_count.toLocaleString()}</td>
+        <td class="rcs-num">${r.member_count.toLocaleString()}</td>
+        <td class="rcs-num">${r.actual_premium.toLocaleString()}</td>
+        <td class="rcs-num"><b>${r.loss_ratio != null ? (r.loss_ratio * 100).toFixed(1) + '%' : '-'}</b></td>
+      </tr>`).join('');
+    newVsRenewalHtml = `
+      <section class="rcs-section">
+        <h3>New Business vs. Renewal</h3>
+        <p class="rcs-desc">A master client with only one policy year on file is classified New Business; two or more (evidenced by both cohorts appearing in the same current extract) is Renewal. A heuristic read of what's actually in the uploaded book, not a true "first ever policy" flag.</p>
+        <table class="rcs-data">
+          <tr><th>Classification</th><th class="rcs-num">Groups</th><th class="rcs-num">Members</th><th class="rcs-num">Earned premium</th><th class="rcs-num">Loss ratio</th></tr>
+          ${rows || '<tr><td colspan="5" class="rcs-desc">No data.</td></tr>'}
+        </table>
+      </section>`;
+  }
+
+  const page3Sections = [groupSizeBandsHtml, newVsRenewalHtml, utilizationHtml].filter(Boolean);
+  const totalPages = page3Sections.length ? 3 : 2;
+  const page3Html = page3Sections.length ? `
+<div class="rcs-paper"><div class="rcs-page-tag">Page 3 of ${totalPages} &middot; Portfolio Structure &amp; Utilization</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>${escapeHtml(scopeLine.replace(/<[^>]+>/g, ''))}</div></div>
+  ${page3Sections.join('')}
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
+</div></div>` : '';
+
   const title = isClientLevel ? `Portfolio Management Report - ${paFilters.master_client}` : 'Portfolio Management Report';
   const generatedOn = new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
 
@@ -4554,7 +4746,7 @@ async function printPortfolioManagementReport() {
   @media print { .rcs-doc { border: none; box-shadow: none; } body { background: #fff; padding: 0; } }
 </style></head><body>
 
-<div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 2 &middot; Executive Summary</div><div class="rcs-doc">
+<div class="rcs-paper"><div class="rcs-page-tag">Page 1 of ${totalPages} &middot; Executive Summary</div><div class="rcs-doc">
   <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>Generated ${generatedOn}</div></div>
   <div class="rcs-client-block">
     <div class="rcs-eyebrow">${isClientLevel ? 'Client-Level &middot; Master Group' : 'Whole Book &middot; Level 1'}</div>
@@ -4576,13 +4768,15 @@ async function printPortfolioManagementReport() {
   <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
 </div></div>
 
-<div class="rcs-paper"><div class="rcs-page-tag">Page 2 of 2 &middot; Loss Ratio &amp; Large Claims</div><div class="rcs-doc">
+<div class="rcs-paper"><div class="rcs-page-tag">Page 2 of ${totalPages} &middot; Loss Ratio &amp; Large Claims</div><div class="rcs-doc">
   <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>${escapeHtml(scopeLine.replace(/<[^>]+>/g, ''))}</div></div>
   ${groupByLabelHtml('Product', productSummary)}
   ${groupByLabelHtml('Network', networkSummary)}
   ${largeClaimsHtml}
   <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
 </div></div>
+
+${page3Html}
 
 <script>window.onload = () => window.print();<\/script>
 </body></html>`;

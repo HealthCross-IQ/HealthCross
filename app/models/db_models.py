@@ -625,6 +625,30 @@ class SubgroupMasterMapping(Base):
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
+class ClientMasterInfo(Base):
+    """Per-master-client reference data underwriting maintains separately
+    from the Membership/Claims exports - principally each client's own
+    real OPEX/Loading % (commission + TPA + admin + HC/management fees,
+    as a fraction of premium), used in place of the flat
+    DEFAULT_EXPENSE_RATIO_PCT assumption for Combined Ratio wherever a
+    client's own real figure is on file. Product/start_date are carried
+    along for reference/display only - Product itself is still sourced
+    from GroupProductMapping/the membership export's own PRODUCTNAME
+    where those are more authoritative. Wholesale-replaced on each fresh
+    upload, like the other client-level mapping tables.
+    """
+
+    __tablename__ = "client_master_info"
+
+    id = Column(Integer, primary_key=True)
+    master_client_name = Column(String, nullable=False)
+    opex_pct = Column(Float, nullable=True)
+    product = Column(String, nullable=True)
+    start_date = Column(Date, nullable=True)
+    source_filename = Column(String, nullable=True)
+    uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class PortfolioDataSnapshot(Base):
     """Single-row setting remembering the book's own data-as-of (production/
     extract) date - e.g. the real Members/Claims exports are each named

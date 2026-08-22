@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, 
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.ingestion.client_master import parse_client_master
 from app.ingestion.group_product_mapping import parse_group_product_mapping
 from app.ingestion.portfolio_claims import parse_portfolio_claims
 from app.ingestion.portfolio_members import parse_portfolio_members
@@ -36,9 +37,12 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_by_product_network,
     summarize_burning_cost_by_product_network_age_gender,
+    summarize_new_vs_renewal,
     summarize_portfolio,
     top_claims_by_value,
     top_members_by_total_claims,
+    utilization_by_benefit_category,
+    utilization_by_encounter_type,
 )
 
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
@@ -136,6 +140,24 @@ def upload_subgroup_mapping(file: UploadFile = File(...), db: Session = Depends(
 
     db.query(models.SubgroupMasterMapping).delete()
     db.bulk_insert_mappings(models.SubgroupMasterMapping, rows)
+    db.commit()
+    return schemas.PortfolioUploadOut(rows_ingested=len(rows))
+
+
+@router.post("/client-master/upload", response_model=schemas.PortfolioUploadOut)
+def upload_client_master(file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Per-master-client reference sheet (Client Name (Master), OPEX,
+    Product, Start Date, ...) - principally each client's own real OPEX/
+    Loading %, used in place of the flat 33% expense-ratio assumption for
+    Combined Ratio wherever a client's own real figure is on file (see
+    executive_portfolio_summary's opex_by_client parameter).
+    """
+    rows = parse_client_master(file.file, file.filename)
+    if not rows:
+        raise HTTPException(status_code=400, detail="No client rows found in this file")
+
+    db.query(models.ClientMasterInfo).delete()
+    db.bulk_insert_mappings(models.ClientMasterInfo, rows)
     db.commit()
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
@@ -363,10 +385,17 @@ def portfolio_executive_summary(
     Groups, Total Members, Written/Earned Premium, Incurred Claims, Loss
     Ratio, Combined Ratio, Average Premium per Member) - see
     executive_portfolio_summary for what each one means and how Combined
-    Ratio's expense_ratio_pct assumption works.
+    Ratio's expense_ratio_pct assumption works. Uses each client's own
+    real OPEX/Loading % from the uploaded Client Master sheet wherever
+    it's on file, falling back to expense_ratio_pct otherwise.
     """
     results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
-    return executive_portfolio_summary(results, expense_ratio_pct=expense_ratio_pct)
+    opex_by_client = {
+        cm.master_client_name: cm.opex_pct
+        for cm in db.query(models.ClientMasterInfo).all()
+        if cm.opex_pct is not None
+    }
+    return executive_portfolio_summary(results, expense_ratio_pct=expense_ratio_pct, opex_by_client=opex_by_client)
 
 
 @router.get("/group-size-bands")
@@ -386,6 +415,24 @@ def portfolio_group_size_bands(
     """
     results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     return {"rows": summarize_by_group_size_band(results)}
+
+
+@router.get("/new-vs-renewal")
+def portfolio_new_vs_renewal(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """New Business vs. Renewal split, classified per master client by how
+    many distinct policy years appear for it in this book-wide extract -
+    see summarize_new_vs_renewal for the full definition and its
+    limitation. Deliberately has no policy_year filter of its own -
+    restricting to one policy year first would leave every client with
+    only one year visible, making everything look like New Business
+    regardless of its real history.
+    """
+    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), filters=filters)
+    return {"rows": summarize_new_vs_renewal(results)}
 
 
 @router.get("/insights")
@@ -628,6 +675,30 @@ def portfolio_filter_options(db: Session = Depends(get_db)):
     }
 
 
+def _master_client_by_beneficiary(db: Session) -> Dict[str, str]:
+    """beneficiary_id -> resolved master client name, for attributing a
+    raw claim line (which only carries a patient_id, not a master client)
+    to the same master client every other Portfolio Analysis view uses -
+    see resolve_master_client. Shared by every claims-only view
+    (Large Claims, Utilization of Benefits) that needs to roll up or
+    filter by master client without a full membership/rate-card join.
+    """
+    subgroup_master_by_name: Dict[str, str] = {
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+    }
+    return {
+        m.beneficiary_id: resolve_master_client(
+            {"contract": m.contract, "master_contract": m.master_contract, "master_client_name": m.master_client_name},
+            subgroup_master_by_name,
+        )
+        for m in db.query(
+            models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
+            models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name,
+        ).all()
+        if m.beneficiary_id
+    }
+
+
 def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
     """Every uploaded claim line's own group_name/client_name/provider_name
     are already denormalized onto PortfolioClaimEntry itself (a book-wide
@@ -642,20 +713,7 @@ def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
     up by master client just like everything else, instead of splintering
     one group across its own subgroups.
     """
-    subgroup_master_by_name: Dict[str, str] = {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
-    }
-    master_client_by_beneficiary: Dict[str, str] = {
-        m.beneficiary_id: resolve_master_client(
-            {"contract": m.contract, "master_contract": m.master_contract, "master_client_name": m.master_client_name},
-            subgroup_master_by_name,
-        )
-        for m in db.query(
-            models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
-            models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name,
-        ).all()
-        if m.beneficiary_id
-    }
+    master_client_by_beneficiary = _master_client_by_beneficiary(db)
 
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
@@ -678,6 +736,66 @@ def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
         }
         for patient_id, group_name, client_name, provider_name, diagnosis_description, date_of_treatment, final_amount in rows
     ]
+
+
+def _claim_dicts_for_utilization(db: Session) -> List[dict]:
+    """Every uploaded claim line's own ip_op_maternity/medical_category/
+    final_amount, plus its resolved master client (see
+    _master_client_by_beneficiary) so this can be scoped to one client for
+    a client-level report - a Utilization of Benefits view, like Large
+    Claims, is purely about the claim lines themselves and needs no
+    member/rate-card join otherwise (see _claim_dicts_for_large_claims's
+    own docstring).
+    """
+    master_client_by_beneficiary = _master_client_by_beneficiary(db)
+
+    rows = db.query(
+        models.PortfolioClaimEntry.patient_id,
+        models.PortfolioClaimEntry.client_name,
+        models.PortfolioClaimEntry.ip_op_maternity,
+        models.PortfolioClaimEntry.medical_category,
+        models.PortfolioClaimEntry.final_amount,
+    ).all()
+    return [
+        {
+            "master_client": master_client_by_beneficiary.get(patient_id) or client_name,
+            "ip_op_maternity": ip_op_maternity,
+            "medical_category": medical_category,
+            "final_amount": final_amount,
+        }
+        for patient_id, client_name, ip_op_maternity, medical_category, final_amount in rows
+    ]
+
+
+@router.get("/utilization")
+def portfolio_utilization(
+    master_client: Optional[str] = Query(
+        None, description="Restrict to one master client's own claims (for a client-level report) - matches the resolved master client name, same as /large-claims"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Utilization of Benefits - which encounter types (Outpatient/
+    Inpatient/Maternity) and which benefit categories (Pharmacy/Dental/
+    Optical/Mental Health/Physiotherapy/...) are actually driving cost,
+    to spot benefit leakage and major cost drivers. See
+    utilization_by_encounter_type/utilization_by_benefit_category for the
+    category mapping and what's deliberately left out (Chronic
+    conditions/Alternative treatments/High-cost specialty treatments have
+    no matching field in HealthCross's own export).
+
+    Whole-book by default, independent of any rate card or membership
+    upload - purely a claims analysis, same as /large-claims - pass
+    master_client to scope it to one client's own claims instead.
+    """
+    claims = _claim_dicts_for_utilization(db)
+    if master_client:
+        claims = [c for c in claims if c.get("master_client") == master_client]
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims uploaded yet")
+    return {
+        "by_encounter_type": utilization_by_encounter_type(claims),
+        "by_benefit_category": utilization_by_benefit_category(claims),
+    }
 
 
 @router.get("/large-claims")

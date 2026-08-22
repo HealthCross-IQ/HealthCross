@@ -527,6 +527,37 @@ def test_executive_summary_expense_ratio_is_overridable(client, members_xlsx, ra
     assert resp.json()["expense_ratio_pct"] == 0.25
 
 
+def test_upload_client_master_ingests_rows(client, tmp_path):
+    path = _write_xlsx(
+        tmp_path, "client_master.xlsx", ["Client Name (Master)", "OPEX", "Product", "Start Date"],
+        [["Acme Holdings", 0.20, "Gold", "2025-01-01"]],
+    )
+    with open(path, "rb") as f:
+        resp = client.post("/portfolio-analysis/client-master/upload", files={"file": ("client_master.xlsx", f, "application/octet-stream")})
+    assert resp.status_code == 200
+    assert resp.json()["rows_ingested"] == 1
+
+
+def test_executive_summary_uses_real_client_opex_from_client_master_upload(client, tmp_path, members_xlsx, rate_card_xlsx):
+    # members_xlsx's single member's master client is "Acme Holdings" -
+    # give it a real 20% OPEX and confirm the executive-summary's own
+    # Combined Ratio uses it instead of the flat 33% default.
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    client_master_path = _write_xlsx(
+        tmp_path, "client_master.xlsx", ["Client Name (Master)", "OPEX"], [["Acme Holdings", 0.20]],
+    )
+    with open(client_master_path, "rb") as f:
+        client.post("/portfolio-analysis/client-master/upload", files={"file": ("client_master.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/executive-summary")
+    assert resp.status_code == 200
+    assert resp.json()["expense_ratio_pct"] == 0.20
+
+
 def test_group_size_bands_pools_groups_by_headcount_band(client, tmp_path, rate_card_xlsx):
     members_path = _write_xlsx(
         tmp_path,
@@ -560,6 +591,86 @@ def test_group_size_bands_pools_groups_by_headcount_band(client, tmp_path, rate_
 def test_group_size_bands_requires_members_uploaded_first(client):
     resp = client.get("/portfolio-analysis/group-size-bands")
     assert resp.status_code == 400
+
+
+def test_new_vs_renewal_classifies_by_distinct_policy_years(client, tmp_path, rate_card_xlsx):
+    members_path = _write_xlsx(
+        tmp_path,
+        "members_new_vs_renewal.xlsx",
+        MEMBERS_HEADER,
+        [
+            # "One Year Co" - a single policy year on file - New Business.
+            ["One Year Co", "One Year Co", "P1", "QC-N1", "N1", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2026-01-01", "2027-01-01", "2026-01-01", "2027-01-01", 1000, 1000, None, None, 100],
+            # "Renewed Co" - two members on two different policy years - Renewal.
+            ["Renewed Co", "Renewed Co", "P2", "QC-R1", "R1", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01", 1000, 1000, None, None, 100],
+            ["Renewed Co", "Renewed Co", "P2", "QC-R1", "R2", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2026-01-01", "2027-01-01", "2026-01-01", "2027-01-01", 1000, 1000, None, None, 100],
+        ],
+    )
+    with open(members_path, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/new-vs-renewal")
+    assert resp.status_code == 200
+    rows = {r["classification"]: r for r in resp.json()["rows"]}
+    assert rows["New Business"]["group_count"] == 1
+    assert rows["New Business"]["member_count"] == 1
+    assert rows["Renewal"]["group_count"] == 1
+    assert rows["Renewal"]["member_count"] == 2
+
+
+def test_new_vs_renewal_requires_members_uploaded_first(client):
+    resp = client.get("/portfolio-analysis/new-vs-renewal")
+    assert resp.status_code == 400
+
+
+def test_utilization_returns_encounter_type_and_benefit_category_breakdowns(client, claims_xlsx):
+    with open(claims_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("claims.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/utilization")
+    assert resp.status_code == 200
+    body = resp.json()
+    # claims_xlsx's single claim: IP_OP_MATERNITY=OP, MEDICAL_CATEGORY=PHARMACY, Final Amount in AED=90.0
+    encounter_rows = {r["encounter_type"]: r for r in body["by_encounter_type"]}
+    assert encounter_rows["Op"]["total_value"] == 90.0
+    category_rows = {r["category"]: r for r in body["by_benefit_category"]}
+    assert category_rows["Pharmacy"]["total_value"] == 90.0
+
+
+def test_utilization_requires_claims_uploaded_first(client):
+    resp = client.get("/portfolio-analysis/utilization")
+    assert resp.status_code == 400
+
+
+def test_utilization_master_client_filter_scopes_to_one_client(client, tmp_path):
+    claims_path = _write_xlsx(
+        tmp_path,
+        "two_client_utilization.xlsx",
+        CLAIMS_HEADER,
+        [
+            ["ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+             "J309", "Allergic rhinitis", 100.0, 90.0],
+            ["ZZZ0001", "CLMZ1", "Paid Claims", "Other Co", "Other Holdings", "QC-Z",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis", 5000.0, 4500.0],
+        ],
+    )
+    with open(claims_path, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("claims.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/utilization", params={"master_client": "Acme Holdings"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert {r["category"] for r in body["by_benefit_category"]} == {"Pharmacy"}
+    assert {r["encounter_type"] for r in body["by_encounter_type"]} == {"Op"}
 
 
 def test_summary_rejects_an_invalid_group_by(client, members_xlsx, rate_card_xlsx):
