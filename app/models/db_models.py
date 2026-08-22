@@ -122,6 +122,27 @@ class CensusRecord(Base):
     case = relationship("Case", back_populates="census_records")
 
 
+class CensusSnapshot(Base):
+    """This case's own census relation-mix (Employees/Spouses/Children/...)
+    member counts, captured right before a fresh census upload replaces
+    CensusRecord - see app/api/routes_cases.py's upload_census. Lets
+    Census Movement (Renewal Bench) compare the expiring census against
+    the newly-uploaded renewal one, category by category, without
+    needing to keep every old member-level row around just for this one
+    comparison. One case has at most one snapshot - its own most recent
+    "before" state - wholesale-replaced the same way CensusRecord itself
+    is on every fresh upload.
+    """
+
+    __tablename__ = "census_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    case_id = Column(Integer, ForeignKey("cases.id"), nullable=False)
+    relation = Column(String, nullable=True)
+    member_count = Column(Integer, nullable=False)
+    captured_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class BenefitPlan(Base):
     __tablename__ = "benefit_plans"
 

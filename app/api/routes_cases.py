@@ -1,5 +1,6 @@
 import re
 import string
+from collections import defaultdict
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -153,6 +154,20 @@ def upload_census(
     # A re-upload replaces the case's census entirely rather than piling on
     # top of a previous one - otherwise re-uploading the same file (e.g.
     # after fixing a typo) silently multiplies the member count.
+    existing = db.query(models.CensusRecord).filter_by(case_id=case.id).all()
+    if existing:
+        # Snapshot the relation mix (Employees/Spouses/Children/...) BEFORE
+        # it's replaced, so Census Movement (Renewal Bench) can compare
+        # this "expiring" state against whatever's uploaded next as the
+        # "renewal" census - see GET /{case_id}/census-movement.
+        relation_counts: dict = defaultdict(int)
+        for r in existing:
+            relation_counts[r.relation or "Unspecified"] += 1
+        db.query(models.CensusSnapshot).filter_by(case_id=case.id).delete()
+        db.add_all(
+            models.CensusSnapshot(case_id=case.id, relation=relation, member_count=count)
+            for relation, count in relation_counts.items()
+        )
     db.query(models.CensusRecord).filter_by(case_id=case.id).delete()
 
     records = [models.CensusRecord(case_id=case.id, **row) for row in parsed]
@@ -162,6 +177,73 @@ def upload_census(
         db.refresh(record)
     maybe_auto_requote(case.id, db)
     return records
+
+
+@router.get("/{case_id}/census-movement")
+def get_census_movement(case_id: int, db: Session = Depends(get_db)):
+    """Compares the expiring census (captured as a CensusSnapshot right
+    before the most recent replace-mode census upload) against the
+    renewal census now on the case, so Renewal Bench can surface
+    population movement per relation (Employee/Spouse/Child/...) plus an
+    approximate premium impact. Requires at least two census uploads on
+    this case - the first upload has nothing to snapshot yet.
+    """
+    case = _get_case_or_404(db, case_id)
+    snapshots = db.query(models.CensusSnapshot).filter_by(case_id=case_id).all()
+    if not snapshots:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                "No prior census snapshot to compare against - upload a "
+                "renewal census over an existing one to see movement."
+            ),
+        )
+    expiring_by_relation = {s.relation: s.member_count for s in snapshots}
+    total_expiring = sum(expiring_by_relation.values())
+
+    current_counts: dict = defaultdict(int)
+    for r in case.census_records:
+        current_counts[r.relation or "Unspecified"] += 1
+    total_renewal = sum(current_counts.values())
+
+    avg_premium_per_member = (
+        case.current_annual_premium / total_expiring
+        if case.current_annual_premium and total_expiring
+        else None
+    )
+
+    relations = sorted(set(expiring_by_relation) | set(current_counts))
+    rows = []
+    total_impact = 0.0
+    for rel in relations:
+        expiring = expiring_by_relation.get(rel, 0)
+        renewal = current_counts.get(rel, 0)
+        change = renewal - expiring
+        impact = round(change * avg_premium_per_member, 2) if avg_premium_per_member is not None else None
+        if impact is not None:
+            total_impact += impact
+        rows.append(
+            {
+                "relation": rel,
+                "expiring_count": expiring,
+                "renewal_count": renewal,
+                "change": change,
+                "premium_impact": impact,
+            }
+        )
+
+    return {
+        "rows": rows,
+        "total_expiring": total_expiring,
+        "total_renewal": total_renewal,
+        "total_change": total_renewal - total_expiring,
+        "total_premium_impact": round(total_impact, 2) if avg_premium_per_member is not None else None,
+        "premium_impact_basis": (
+            "Approximate: case average premium per member "
+            "(current_annual_premium / expiring member count), not "
+            "category-specific pricing."
+        ),
+    }
 
 
 @router.post("/detect-upload-kind")
