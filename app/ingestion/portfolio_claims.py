@@ -28,6 +28,48 @@ PORTFOLIO_CLAIMS_ALIASES: Dict[str, List[str]] = {
 }
 
 
+#: A sheet must map at least this many of the expected claim-line columns
+#: to be treated as the claims data rather than a pivot/summary sheet. The
+#: real export's data sheet maps nearly all of them; its pivot summaries
+#: map zero or one, so anything in between is ambiguous enough to reject.
+_MIN_MAPPED_CLAIM_COLUMNS = 5
+
+#: Without these, a "claims" sheet can't drive any per-claim analysis at
+#: all - a summary sheet that happens to carry a few matching header names
+#: still isn't the claim-line data.
+_REQUIRED_CLAIM_COLUMNS = ("final_amount", "date_of_treatment")
+
+
+def _mapped_claim_column_count(sheet_df: pd.DataFrame) -> int:
+    """How many expected claim-line fields this sheet's own headers
+    actually resolve to (see PORTFOLIO_CLAIMS_ALIASES). 0 for a pivot
+    summary whose real headers sit below a title row - those parse into
+    "Unnamed: N" columns that match no alias."""
+    if sheet_df.empty:
+        return 0
+    mapped = map_columns(sheet_df, PORTFOLIO_CLAIMS_ALIASES)
+    present = set(mapped.columns) & set(PORTFOLIO_CLAIMS_ALIASES)
+    if not all(col in present for col in _REQUIRED_CLAIM_COLUMNS):
+        return 0
+    return len(present)
+
+
+def _best_claims_sheet(sheets: Dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Whichever sheet actually holds the per-claim-line data - see the
+    comment in parse_portfolio_claims for why "first non-empty" isn't
+    good enough on a real multi-sheet export. Falls back to the first
+    non-empty sheet when nothing qualifies, so a plain single-sheet
+    upload (and its own error handling downstream) behaves as before."""
+    scored = [
+        (_mapped_claim_column_count(sheet_df), len(sheet_df), sheet_df)
+        for sheet_df in sheets.values()
+    ]
+    qualifying = [s for s in scored if s[0] >= _MIN_MAPPED_CLAIM_COLUMNS]
+    if qualifying:
+        return max(qualifying, key=lambda s: (s[0], s[1]))[2]
+    return next((sheet_df for sheet_df in sheets.values() if not sheet_df.empty), pd.DataFrame())
+
+
 def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
     lower_name = filename.lower()
     if lower_name.endswith(".csv"):
@@ -42,14 +84,17 @@ def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
         # raw Excel serial numbers, so the is_numeric_dtype fallback below
         # is now just a safety net, not the normal path for this format.
         #
-        # A real export has shipped with a completely blank placeholder
-        # sheet ("Sheet1") ahead of the actual data (on a separately named
-        # "Sheet 1") - reading only the first sheet silently parsed 0 rows
-        # from that blank one instead of erroring. Reading every sheet and
-        # taking the first non-empty one handles both that and the
-        # ordinary single-sheet case, without hardcoding either sheet's name.
+        # A real export ships several sheets alongside the claim-line data:
+        # pivot summaries ("Premium", "Claims", "LOSS RATIO", "Loading"),
+        # a partial extract ("Detail1"), and the full per-claim-line sheet
+        # ("DATA"). Picking the first non-empty sheet grabbed a pivot
+        # summary whose headers sit below a title row, so every aliased
+        # column mapped to nothing and each row parsed to all-None WITHOUT
+        # raising - silent garbage. Pick by CONTENT instead: whichever
+        # sheet maps the most expected claim-line columns wins, ties broken
+        # by row count so the full export beats a partial extract of it.
         sheets = pd.read_excel(file, engine="calamine", sheet_name=None)
-        df = next((sheet_df for sheet_df in sheets.values() if not sheet_df.empty), pd.DataFrame())
+        df = _best_claims_sheet(sheets)
 
     df = map_columns(df, PORTFOLIO_CLAIMS_ALIASES)
 

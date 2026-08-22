@@ -562,6 +562,89 @@
     .rb-scorecard-methods { grid-template-columns: 1fr; }
   }
 
+  /* ---------- Loss Ratio board (scoped - portfolio-level per-account
+     loss ratio, the underwriting view the book is tracked on) ---------- */
+  .lr-scope {
+    --lr-bg: #f7f9fb; --lr-surface: #ffffff; --lr-surface-2: #eef3f7;
+    --lr-ink: #0f1c2e; --lr-ink-2: #46586e; --lr-muted: #8496a8;
+    --lr-border: rgba(15,28,46,0.10); --lr-border-strong: rgba(15,28,46,0.20);
+    --lr-accent: #5cd9ff; --lr-deep: #1c2a48;
+    --lr-good: #16855c; --lr-good-soft: rgba(22,133,92,0.12);
+    --lr-warn: #b07d12; --lr-warn-soft: rgba(176,125,18,0.14);
+    --lr-bad: #c0392b; --lr-bad-soft: rgba(192,57,43,0.12);
+    --lr-shadow: 0 1px 2px rgba(15,28,46,0.05), 0 10px 30px -16px rgba(15,28,46,0.25);
+    font-variant-numeric: tabular-nums;
+    color: var(--lr-ink);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .lr-scope {
+      --lr-bg: #0b1220; --lr-surface: #121c2c; --lr-surface-2: #1a2537;
+      --lr-ink: #eaf1f8; --lr-ink-2: #b3c2d3; --lr-muted: #7b8ca0;
+      --lr-border: rgba(234,241,248,0.10); --lr-border-strong: rgba(234,241,248,0.20);
+      --lr-good: #3fcf94; --lr-good-soft: rgba(63,207,148,0.14);
+      --lr-warn: #e0b24f; --lr-warn-soft: rgba(224,178,79,0.16);
+      --lr-bad: #ef6f60; --lr-bad-soft: rgba(239,111,96,0.16);
+      --lr-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -16px rgba(0,0,0,0.6);
+    }
+  }
+  :root[data-theme="dark"] .lr-scope {
+    --lr-bg: #0b1220; --lr-surface: #121c2c; --lr-surface-2: #1a2537;
+    --lr-ink: #eaf1f8; --lr-ink-2: #b3c2d3; --lr-muted: #7b8ca0;
+    --lr-border: rgba(234,241,248,0.10); --lr-border-strong: rgba(234,241,248,0.20);
+    --lr-good: #3fcf94; --lr-good-soft: rgba(63,207,148,0.14);
+    --lr-warn: #e0b24f; --lr-warn-soft: rgba(224,178,79,0.16);
+    --lr-bad: #ef6f60; --lr-bad-soft: rgba(239,111,96,0.16);
+    --lr-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -16px rgba(0,0,0,0.6);
+  }
+
+  .lr-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; }
+  .lr-title { font-family: 'Fraunces', serif; font-size: 23px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 5px; color: var(--lr-ink); }
+  .lr-sub { font-size: 12.5px; color: var(--lr-muted); margin: 0; max-width: 68ch; line-height: 1.5; }
+
+  .lr-banner { background: linear-gradient(135deg, var(--lr-deep), color-mix(in srgb, var(--lr-deep) 72%, #0a1020)); color: #eaf6ff; border-radius: 16px; padding: 22px 24px; box-shadow: var(--lr-shadow); margin-bottom: 18px; }
+  .lr-banner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 20px 26px; }
+  .lr-b-item .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; opacity: 0.72; margin-bottom: 6px; }
+  .lr-b-item .v { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
+  .lr-b-item .v small { font-size: 13px; opacity: 0.8; font-weight: 500; }
+  .lr-b-item.hero .v { font-size: 30px; }
+  .lr-b-sep { height: 1px; background: rgba(255,255,255,0.16); margin: 18px 0; }
+
+  .lr-card { background: var(--lr-surface); border: 1px solid var(--lr-border); border-radius: 14px; box-shadow: var(--lr-shadow); margin-bottom: 16px; overflow: hidden; }
+  .lr-card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--lr-border); flex-wrap: wrap; }
+  .lr-card-title { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 0; color: var(--lr-ink); }
+  .lr-card-note { font-size: 11.5px; color: var(--lr-muted); }
+
+  .lr-table-wrap { overflow-x: auto; }
+  .lr-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
+  .lr-table th { position: sticky; top: 0; background: var(--lr-surface-2); text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--lr-ink-2); padding: 9px 10px; border-bottom: 1.5px solid var(--lr-border-strong); }
+  .lr-table th.num, .lr-table td.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  .lr-table td { padding: 9px 10px; border-bottom: 1px solid var(--lr-border); color: var(--lr-ink); }
+  .lr-table tbody tr:hover td { background: var(--lr-surface-2); }
+  .lr-table tfoot td { padding: 11px 10px; font-weight: 700; border-top: 2px solid var(--lr-border-strong); background: var(--lr-surface-2); font-family: 'IBM Plex Mono', monospace; }
+  .lr-table tfoot td.lbl { font-family: inherit; }
+  .lr-acct { font-weight: 600; white-space: normal; min-width: 190px; }
+  .lr-acct .yr { display: block; font-size: 10.5px; color: var(--lr-muted); font-weight: 500; font-family: 'IBM Plex Mono', monospace; }
+
+  .lr-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; padding: 2px 8px; border-radius: 999px; }
+  .lr-chip.good { background: var(--lr-good-soft); color: var(--lr-good); }
+  .lr-chip.warn { background: var(--lr-warn-soft); color: var(--lr-warn); }
+  .lr-chip.bad { background: var(--lr-bad-soft); color: var(--lr-bad); }
+  .lr-exp { font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; color: var(--lr-muted); border: 1px solid var(--lr-border-strong); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+
+  .lr-bar { position: relative; height: 6px; border-radius: 3px; background: var(--lr-surface-2); overflow: hidden; min-width: 68px; }
+  .lr-bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
+  .lr-bar .mark { position: absolute; top: -2px; bottom: -2px; width: 1.5px; background: var(--lr-ink-2); opacity: 0.55; }
+
+  .lr-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+  .lr-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--lr-ink-2); }
+  .lr-field input, .lr-field select { font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--lr-border-strong); background: var(--lr-surface); color: var(--lr-ink); }
+  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 9px; border: 1px solid transparent; background: var(--lr-deep); color: #eaf6ff; padding: 9px 16px; }
+  .lr-btn:hover { filter: brightness(1.15); }
+  .lr-btn.ghost { background: transparent; border-color: var(--lr-border-strong); color: var(--lr-ink-2); }
+  .lr-btn.ghost:hover { background: var(--lr-surface-2); filter: none; }
+  .lr-empty { padding: 42px 24px; text-align: center; color: var(--lr-muted); font-size: 13px; }
+
+
   .rb-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
   .rb-header-title { font-family: 'Fraunces', serif; font-size: 20px; font-weight: 600; color: var(--rb-ink); margin: 0 0 5px; }
   .rb-header-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--rb-ink-2); }
@@ -639,6 +722,7 @@
 
       <div class="hc-rail-group">
         <div class="hc-rail-label">Claims Analysis</div>
+        <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
       </div>
@@ -965,6 +1049,11 @@ function hcRailNewQuote() {
 function hcRailIntlComparison() {
   _hcRailSetActive('hc-rail-intl-comparison');
   showInternationalComparison();
+}
+
+function hcRailLossRatio() {
+  _hcRailSetActive('hc-rail-loss-ratio');
+  showLossRatioBoard();
 }
 
 function hcRailClaimsExplorer() {
@@ -4277,6 +4366,388 @@ async function loadRenewalBenchCensusMovement() {
   } catch (err) {
     area.innerHTML = '';
   }
+}
+
+
+/* ---------------- Loss Ratio board (portfolio level) ---------------- */
+
+let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null };
+
+function _lrMoney(v, dp) {
+  if (v == null) return '-';
+  return Number(v).toLocaleString(undefined, { minimumFractionDigits: dp || 0, maximumFractionDigits: dp || 0 });
+}
+
+function _lrPct(v) {
+  return v == null ? '-' : (v * 100).toFixed(1) + '%';
+}
+
+// Underwriting's own read on a loss ratio: at or under 70% the account is
+// funding itself comfortably, 70-100% is thin, and over 100% the claims
+// alone exceed the premium before any expense load is even applied.
+function _lrBand(ratio) {
+  if (ratio == null) return '';
+  if (ratio > 1) return 'bad';
+  if (ratio >= 0.7) return 'warn';
+  return 'good';
+}
+
+function _lrRatioCell(ratio) {
+  if (ratio == null) return '<td class="num">-</td>';
+  const band = _lrBand(ratio);
+  const colorVar = band === 'bad' ? 'var(--lr-bad)' : band === 'warn' ? 'var(--lr-warn)' : 'var(--lr-good)';
+  // Bar is scaled so 100% sits at two-thirds width - the tick mark - so an
+  // account running over 100% visibly overshoots it rather than saturating.
+  const pct = Math.min(100, ratio / 1.5 * 100);
+  return `
+    <td class="num">
+      <div style="display:flex; align-items:center; gap:8px; justify-content:flex-end;">
+        <div class="lr-bar"><span style="width:${pct.toFixed(1)}%; background:${colorVar};"></span><i class="mark" style="left:66.6%"></i></div>
+        <span class="lr-chip ${band}">${_lrPct(ratio)}</span>
+      </div>
+    </td>
+  `;
+}
+
+function _lrSortRows(rows) {
+  const key = lrState.sort, dir = lrState.dir === 'asc' ? 1 : -1;
+  return rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;   // nulls always last, regardless of direction
+    if (bv == null) return -1;
+    if (typeof av === 'string') return av.localeCompare(bv) * dir;
+    return (av - bv) * dir;
+  });
+}
+
+function lrSortBy(key) {
+  if (lrState.sort === key) lrState.dir = lrState.dir === 'asc' ? 'desc' : 'asc';
+  else { lrState.sort = key; lrState.dir = 'desc'; }
+  document.getElementById('lr-table-area').innerHTML = _lrTableHtml();
+}
+
+function _lrTh(key, label, cls) {
+  const active = lrState.sort === key;
+  const arrow = active ? (lrState.dir === 'asc' ? ' ↑' : ' ↓') : '';
+  return `<th class="${cls || ''}" style="cursor:pointer; ${active ? 'color:var(--lr-ink);' : ''}" onclick="lrSortBy('${key}')">${escapeHtml(label)}${arrow}</th>`;
+}
+
+function _lrTableHtml() {
+  const rows = _lrSortRows(lrState.rows);
+  const t = lrState.totals;
+  if (!rows.length) {
+    return '<div class="lr-card"><div class="lr-empty">No accounts to report yet - upload the Membership and Claims exports on the Claims Explorer screen first.</div></div>';
+  }
+  const body = rows.map(r => `
+    <tr>
+      <td class="lr-acct">${escapeHtml(r.master_client)}${r.expired ? '<span class="lr-exp">expired</span>' : ''}<span class="yr">${r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
+      <td class="num">${_lrMoney(r.paid)}</td>
+      <td class="num">${_lrMoney(r.outstanding)}</td>
+      <td class="num">${_lrMoney(r.ibnr)}</td>
+      <td class="num" style="font-weight:600;">${_lrMoney(r.incurred_claims)}</td>
+      <td class="num">${_lrPct(r.loading_pct)}</td>
+      <td class="num">${_lrMoney(r.gross_premium)}</td>
+      <td class="num">${_lrMoney(r.earned_premium)}</td>
+      <td class="num">${_lrMoney(r.net_premium)}</td>
+      ${_lrRatioCell(r.gross_loss_ratio)}
+      ${_lrRatioCell(r.net_loss_ratio)}
+    </tr>
+  `).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Loss ratio by account</div>
+          <div class="lr-card-note">One row per account policy period. Click any column to sort.</div>
+        </div>
+        <div class="lr-card-note">Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr>
+            ${_lrTh('master_client', 'Account')}
+            ${_lrTh('paid', 'Paid', 'num')}
+            ${_lrTh('outstanding', 'OS', 'num')}
+            ${_lrTh('ibnr', 'IBNR', 'num')}
+            ${_lrTh('incurred_claims', 'Incurred', 'num')}
+            ${_lrTh('loading_pct', 'Loading', 'num')}
+            ${_lrTh('gross_premium', 'Gross prem.', 'num')}
+            ${_lrTh('earned_premium', 'Earned prem.', 'num')}
+            ${_lrTh('net_premium', 'Net prem.', 'num')}
+            ${_lrTh('gross_loss_ratio', 'Gross LR', 'num')}
+            ${_lrTh('net_loss_ratio', 'Net LR', 'num')}
+          </tr></thead>
+          <tbody>${body}</tbody>
+          ${t ? `<tfoot><tr>
+            <td class="lbl">Book total &middot; ${t.account_count} accounts &middot; ${t.member_count.toLocaleString()} lives</td>
+            <td class="num">${_lrMoney(t.paid)}</td>
+            <td class="num">${_lrMoney(t.outstanding)}</td>
+            <td class="num">${_lrMoney(t.ibnr)}</td>
+            <td class="num">${_lrMoney(t.incurred_claims)}</td>
+            <td class="num">-</td>
+            <td class="num">${_lrMoney(t.gross_premium)}</td>
+            <td class="num">${_lrMoney(t.earned_premium)}</td>
+            <td class="num">${_lrMoney(t.net_premium)}</td>
+            <td class="num">${_lrPct(t.gross_loss_ratio)}</td>
+            <td class="num">${_lrPct(t.net_loss_ratio)}</td>
+          </tr></tfoot>` : ''}
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function _lrBannerHtml(t) {
+  if (!t) return '';
+  const over = lrState.rows.filter(r => r.net_loss_ratio != null && r.net_loss_ratio > 1).length;
+  return `
+    <div class="lr-banner">
+      <div class="lr-banner-grid">
+        <div class="lr-b-item hero">
+          <div class="k">Net earned loss ratio</div>
+          <div class="v">${_lrPct(t.net_loss_ratio)}</div>
+        </div>
+        <div class="lr-b-item hero">
+          <div class="k">Gross earned loss ratio</div>
+          <div class="v">${_lrPct(t.gross_loss_ratio)}</div>
+        </div>
+        <div class="lr-b-item">
+          <div class="k">Accounts over 100% net</div>
+          <div class="v">${over}<small> / ${t.account_count}</small></div>
+        </div>
+        <div class="lr-b-item">
+          <div class="k">Lives</div>
+          <div class="v">${t.member_count.toLocaleString()}</div>
+        </div>
+      </div>
+      <div class="lr-b-sep"></div>
+      <div class="lr-banner-grid">
+        <div class="lr-b-item"><div class="k">Paid</div><div class="v"><small>AED </small>${_lrMoney(t.paid)}</div></div>
+        <div class="lr-b-item"><div class="k">Outstanding</div><div class="v"><small>AED </small>${_lrMoney(t.outstanding)}</div></div>
+        <div class="lr-b-item"><div class="k">IBNR</div><div class="v"><small>AED </small>${_lrMoney(t.ibnr)}</div></div>
+        <div class="lr-b-item"><div class="k">Incurred claims</div><div class="v"><small>AED </small>${_lrMoney(t.incurred_claims)}</div></div>
+        <div class="lr-b-item"><div class="k">Earned premium</div><div class="v"><small>AED </small>${_lrMoney(t.earned_premium)}</div></div>
+        <div class="lr-b-item"><div class="k">Net premium</div><div class="v"><small>AED </small>${_lrMoney(t.net_premium)}</div></div>
+      </div>
+    </div>
+  `;
+}
+
+function lossRatioBoardHtml() {
+  return `
+    <div class="lr-scope">
+      <div class="lr-head">
+        <div>
+          <h2 class="lr-title">Portfolio Loss Ratio</h2>
+          <p class="lr-sub">Every account on the book, one row per policy period, with Incurred Claims built as Paid + Outstanding + IBNR against Earned and Net premium. An expired policy reserves no IBNR and earns its full annual premium.</p>
+        </div>
+        <div style="display:flex; gap:8px;">
+          <button class="lr-btn ghost" onclick="lrDownloadCsv()">Export CSV</button>
+          <button class="lr-btn" onclick="printLossRatioReport()">Print / Save as PDF</button>
+        </div>
+      </div>
+      <div class="lr-toolbar">
+        <div class="lr-field">
+          <label>Report date</label>
+          <input type="date" id="lr-as-of" value="${lrState.asOf || ''}">
+        </div>
+        <div class="lr-field">
+          <label>Loading fallback %</label>
+          <input type="number" id="lr-loading" step="0.5" value="33" style="width:110px;">
+        </div>
+        <button class="lr-btn ghost" onclick="loadLossRatioBoard()">Refresh</button>
+      </div>
+      <div id="lr-banner-area"></div>
+      <div id="lr-table-area"></div>
+    </div>
+  `;
+}
+
+async function showLossRatioBoard() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = lossRatioBoardHtml();
+  await loadLossRatioBoard();
+}
+
+async function loadLossRatioBoard() {
+  const bannerArea = document.getElementById('lr-banner-area');
+  const tableArea = document.getElementById('lr-table-area');
+  if (!tableArea) return;
+  const asOfEl = document.getElementById('lr-as-of');
+  const loadEl = document.getElementById('lr-loading');
+  const params = new URLSearchParams();
+  if (asOfEl && asOfEl.value) params.set('as_of', asOfEl.value);
+  if (loadEl && loadEl.value) params.set('default_loading_pct', String(Number(loadEl.value) / 100));
+  tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
+  try {
+    const r = await api(`/portfolio-analysis/account-loss-ratio?${params.toString()}`);
+    lrState.rows = r.rows || [];
+    lrState.totals = r.totals || null;
+    if (asOfEl && !asOfEl.value && lrState.rows.length) {
+      // Surface whichever report date the server actually used, so the
+      // field never sits blank while the figures below already depend on one.
+      asOfEl.value = r.as_of || '';
+    }
+    bannerArea.innerHTML = _lrBannerHtml(lrState.totals);
+    tableArea.innerHTML = _lrTableHtml();
+  } catch (err) {
+    bannerArea.innerHTML = '';
+    tableArea.innerHTML = `<div class="lr-card"><div class="lr-empty">${escapeHtml(err.message || 'Could not load the loss ratio board')}</div></div>`;
+  }
+}
+
+function lrDownloadCsv() {
+  const cols = ['master_client','policy_start_date','days','expired','member_count','claim_count','paid','outstanding','ibnr','incurred_claims','loading_pct','gross_premium','earned_premium','net_premium','gross_loss_ratio','net_loss_ratio'];
+  const esc = v => {
+    const str = v == null ? '' : String(v);
+    return /[",\n]/.test(str) ? '"' + str.replace(/"/g, '""') + '"' : str;
+  };
+  const lines = [cols.join(',')].concat(_lrSortRows(lrState.rows).map(r => cols.map(c => esc(r[c])).join(',')));
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `portfolio-loss-ratio-${lrState.asOf || 'export'}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+
+function printLossRatioReport() {
+  if (!lrState.rows.length) { toast('Nothing to print yet - load the loss ratio board first', true); return; }
+  const t = lrState.totals;
+  const rows = _lrSortRows(lrState.rows);
+  const over = rows.filter(r => r.net_loss_ratio != null && r.net_loss_ratio > 1);
+  const asOf = (document.getElementById('lr-as-of') || {}).value || lrState.asOf || '';
+
+  const bodyRows = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.master_client)}${r.expired ? ' <em>(expired)</em>' : ''}<br><span class="sub">${r.policy_start_date} &middot; ${r.days}d &middot; ${r.member_count} lives</span></td>
+      <td class="num">${_lrMoney(r.paid)}</td>
+      <td class="num">${_lrMoney(r.outstanding)}</td>
+      <td class="num">${_lrMoney(r.ibnr)}</td>
+      <td class="num b">${_lrMoney(r.incurred_claims)}</td>
+      <td class="num">${_lrPct(r.loading_pct)}</td>
+      <td class="num">${_lrMoney(r.gross_premium)}</td>
+      <td class="num">${_lrMoney(r.earned_premium)}</td>
+      <td class="num">${_lrMoney(r.net_premium)}</td>
+      <td class="num ${_lrBand(r.gross_loss_ratio)}">${_lrPct(r.gross_loss_ratio)}</td>
+      <td class="num b ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
+    </tr>
+  `).join('');
+
+  const watchRows = over.slice(0, 12).map(r => `
+    <tr>
+      <td>${escapeHtml(r.master_client)}<br><span class="sub">${r.policy_start_date} &middot; ${r.member_count} lives</span></td>
+      <td class="num">${_lrMoney(r.incurred_claims)}</td>
+      <td class="num">${_lrMoney(r.net_premium)}</td>
+      <td class="num b bad">${_lrPct(r.net_loss_ratio)}</td>
+    </tr>
+  `).join('');
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Portfolio Loss Ratio Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; padding: 26px 20px; background: #fff; color: #0f1c2e; font-variant-numeric: tabular-nums; }
+  .sheet { max-width: 1040px; margin: 0 auto; }
+  .masthead { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 2.5px solid #1c2a48; padding-bottom: 14px; margin-bottom: 22px; }
+  .brand { font-family: 'Fraunces', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #1c2a48; }
+  h1 { font-family: 'Fraunces', serif; font-size: 26px; font-weight: 600; margin: 6px 0 4px; letter-spacing: -0.015em; }
+  .meta { font-size: 11.5px; color: #64748b; }
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid rgba(15,28,46,0.14); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
+  .kpi { padding: 14px 16px; border-right: 1px solid rgba(15,28,46,0.10); }
+  .kpi:last-child { border-right: none; }
+  .kpi .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; color: #64748b; font-weight: 700; margin-bottom: 6px; }
+  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
+  h2 { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 24px 0 4px; }
+  .note { font-size: 11px; color: #64748b; margin-bottom: 9px; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  th { text-align: left; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; font-weight: 700; padding: 7px 7px; border-bottom: 1.5px solid rgba(15,28,46,0.24); background: #eef3f7; }
+  td { padding: 6px 7px; border-bottom: 1px solid rgba(15,28,46,0.09); vertical-align: top; }
+  td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+  td.b { font-weight: 700; }
+  .sub { font-size: 9px; color: #94a3b8; font-family: 'IBM Plex Mono', monospace; }
+  tfoot td { border-top: 2px solid rgba(15,28,46,0.24); font-weight: 700; font-family: 'IBM Plex Mono', monospace; background: #eef3f7; }
+  .good { color: #16855c; } .warn { color: #b07d12; } .bad { color: #c0392b; }
+  .method { margin-top: 22px; padding: 13px 16px; background: #f7f9fb; border-left: 3px solid #5cd9ff; border-radius: 0 8px 8px 0; font-size: 10.5px; color: #46586e; line-height: 1.65; page-break-inside: avoid; }
+  .method b { color: #0f1c2e; }
+  tr { page-break-inside: avoid; }
+  @media print { body { padding: 0; } .kpis, .method { page-break-inside: avoid; } }
+</style></head><body><div class="sheet">
+  <div class="masthead">
+    <div>
+      <div class="brand">HealthCross &middot; Underwriting Intelligence</div>
+      <h1>Portfolio Loss Ratio Report</h1>
+      <div class="meta">${t.account_count} account policy periods &middot; ${t.member_count.toLocaleString()} lives${asOf ? ' &middot; report date ' + escapeHtml(asOf) : ''}</div>
+    </div>
+    <div class="meta">Generated ${new Date().toLocaleDateString()}</div>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="k">Net earned loss ratio</div><div class="v ${_lrBand(t.net_loss_ratio)}">${_lrPct(t.net_loss_ratio)}</div></div>
+    <div class="kpi"><div class="k">Gross earned loss ratio</div><div class="v ${_lrBand(t.gross_loss_ratio)}">${_lrPct(t.gross_loss_ratio)}</div></div>
+    <div class="kpi"><div class="k">Incurred claims</div><div class="v">${_lrMoney(t.incurred_claims)}</div></div>
+    <div class="kpi"><div class="k">Earned premium</div><div class="v">${_lrMoney(t.earned_premium)}</div></div>
+  </div>
+
+  ${over.length ? `
+    <h2>Accounts running over 100% net</h2>
+    <div class="note">Claims incurred already exceed the net premium retained after loading - ${over.length} of ${t.account_count} account periods${over.length > 12 ? ', showing the 12 largest by net loss ratio' : ''}.</div>
+    <table>
+      <thead><tr><th>Account</th><th class="num">Incurred</th><th class="num">Net premium</th><th class="num">Net LR</th></tr></thead>
+      <tbody>${watchRows}</tbody>
+    </table>
+  ` : ''}
+
+  <h2>Loss ratio by account</h2>
+  <div class="note">One row per account policy period, sorted by ${escapeHtml(lrState.sort.replace(/_/g, ' '))} (${lrState.dir === 'asc' ? 'ascending' : 'descending'}).</div>
+  <table>
+    <thead><tr>
+      <th>Account</th><th class="num">Paid</th><th class="num">OS</th><th class="num">IBNR</th>
+      <th class="num">Incurred</th><th class="num">Loading</th><th class="num">Gross prem.</th>
+      <th class="num">Earned prem.</th><th class="num">Net prem.</th><th class="num">Gross LR</th><th class="num">Net LR</th>
+    </tr></thead>
+    <tbody>${bodyRows}</tbody>
+    <tfoot><tr>
+      <td>Book total</td>
+      <td class="num">${_lrMoney(t.paid)}</td>
+      <td class="num">${_lrMoney(t.outstanding)}</td>
+      <td class="num">${_lrMoney(t.ibnr)}</td>
+      <td class="num">${_lrMoney(t.incurred_claims)}</td>
+      <td class="num">-</td>
+      <td class="num">${_lrMoney(t.gross_premium)}</td>
+      <td class="num">${_lrMoney(t.earned_premium)}</td>
+      <td class="num">${_lrMoney(t.net_premium)}</td>
+      <td class="num ${_lrBand(t.gross_loss_ratio)}">${_lrPct(t.gross_loss_ratio)}</td>
+      <td class="num ${_lrBand(t.net_loss_ratio)}">${_lrPct(t.net_loss_ratio)}</td>
+    </tr></tfoot>
+  </table>
+
+  <div class="method">
+    <b>Method.</b>
+    <b>Days</b> counts from the policy effective date through the report date, inclusive.
+    <b>IBNR</b> reserves an unreported tail of Paid &divide; Days &times; 30; an account whose policy term has fully run (over 365 days) reserves none, since every claim against it has by then been reported.
+    <b>Incurred Claims</b> = Paid + Outstanding + IBNR.
+    <b>Earned Premium</b> prorates the gross annual premium by Days &divide; 365, capped at the full premium once the term has run.
+    <b>Net Premium</b> = Earned &times; (1 &minus; Loading), where Loading is each client's own OPEX where it is on file.
+    <b>Gross LR</b> = Incurred &divide; Earned; <b>Net LR</b> = Incurred &divide; Net.
+    Book totals recompute both ratios from summed amounts rather than averaging account ratios.
+  </div>
+</div>
+<script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
 
 /* ---------------- scorecard ---------------- */

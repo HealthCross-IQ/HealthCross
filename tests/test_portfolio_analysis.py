@@ -3,8 +3,12 @@ HealthCross's own already-booked book against the New Business rate card.
 """
 from datetime import date
 
+import pytest
+
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_EXPENSE_RATIO_PCT,
+    account_loss_ratio_rows,
+    account_loss_ratio_totals,
     age_bands_from_rate_cards,
     analyze_portfolio_member,
     claims_above_thresholds,
@@ -1449,3 +1453,102 @@ def test_renewal_due_accounts_uses_the_latest_end_date_seen_per_client():
 def test_renewal_due_accounts_skips_clients_with_no_end_date_at_all():
     members = [_member(beneficiary_id="M1", master_contract="No Date Co", policy_end_date=None)]
     assert renewal_due_accounts(members, within_days=60, as_of=date(2026, 2, 1)) == []
+
+
+def _lr_member(master_client, policy_start, paid=0.0, outstanding=0.0, gross=0.0, claim_count=0):
+    return {
+        "master_client": master_client,
+        "policy_start_date": policy_start,
+        "actual_claims_paid": paid,
+        "actual_claims_outstanding": outstanding,
+        "written_premium": gross,
+        "claim_count": claim_count,
+    }
+
+
+def test_account_loss_ratio_rows_reproduce_the_books_own_loss_ratio_sheet():
+    # Real figures for BIC BRED (SUISSE) from HealthCross's own LOSS RATIO
+    # sheet, report date 2026-07-15: Days 320, IBNR 13,422.11,
+    # Incurred 171,294.61, Earned 231,221.90, Net 166,479.77,
+    # Gross LR 0.7408, Net LR 1.0289.
+    members = [_lr_member("BIC BRED (SUISSE)", date(2025, 8, 30),
+                          paid=143_169.20, outstanding=14_703.30, gross=263_737.479452)]
+    opex = {"BIC BRED (SUISSE)": [{"start_date": None, "end_date": None, "opex_pct": 0.28}]}
+
+    rows = account_loss_ratio_rows(members, as_of=date(2026, 7, 15), opex_records_by_client=opex)
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["days"] == 320  # inclusive of the effective date itself
+    assert row["expired"] is False
+    assert row["ibnr"] == pytest.approx(13_422.11, abs=0.01)
+    assert row["incurred_claims"] == pytest.approx(171_294.61, abs=0.01)
+    assert row["earned_premium"] == pytest.approx(231_221.90, abs=0.01)
+    assert row["net_premium"] == pytest.approx(166_479.77, abs=0.01)
+    assert row["gross_loss_ratio"] == pytest.approx(0.7408, abs=0.0001)
+    assert row["net_loss_ratio"] == pytest.approx(1.0289, abs=0.0001)
+
+
+def test_account_loss_ratio_expired_policy_has_no_ibnr_and_earns_the_full_premium():
+    # ACQUISIT DMCC from the same sheet: 441 days elapsed, so the policy
+    # term has fully run - IBNR is zero and the FULL gross premium is
+    # earned rather than prorating past 100%.
+    members = [_lr_member("ACQUISIT DMCC", date(2025, 5, 1),
+                          paid=385_239.86, outstanding=1_288.64, gross=883_707.167123)]
+    opex = {"ACQUISIT DMCC": [{"start_date": None, "end_date": None, "opex_pct": 0.23}]}
+
+    row = account_loss_ratio_rows(members, as_of=date(2026, 7, 15), opex_records_by_client=opex)[0]
+
+    assert row["days"] == 441
+    assert row["expired"] is True
+    assert row["ibnr"] == 0.0
+    assert row["incurred_claims"] == pytest.approx(386_528.50, abs=0.01)
+    assert row["earned_premium"] == pytest.approx(883_707.17, abs=0.01)  # full gross, not prorated
+    assert row["gross_loss_ratio"] == pytest.approx(0.4374, abs=0.0001)
+
+
+def test_account_loss_ratio_keeps_each_policy_period_as_its_own_row():
+    # A client that has already renewed has members on two policy periods
+    # in the same upload - each earns and reserves separately, so an
+    # expired year's settled claims never blend into the open year's.
+    members = [
+        _lr_member("ACQUISIT DMCC", date(2025, 5, 1), paid=385_239.86, outstanding=1_288.64, gross=883_707.17),
+        _lr_member("ACQUISIT DMCC", date(2026, 5, 1), paid=85_428.60, outstanding=104_329.06, gross=886_982.28),
+    ]
+    rows = account_loss_ratio_rows(members, as_of=date(2026, 7, 15))
+
+    assert len(rows) == 2
+    expired, current = rows[0], rows[1]
+    assert expired["policy_start_date"] == "2025-05-01"
+    assert expired["ibnr"] == 0.0
+    assert current["policy_start_date"] == "2026-05-01"
+    assert current["days"] == 76
+    assert current["ibnr"] == pytest.approx(33_721.82, abs=0.01)
+
+
+def test_account_loss_ratio_has_no_ibnr_when_nothing_has_been_paid_yet():
+    # A brand-new policy with outstanding-only claims has no paid run rate
+    # to project a 30-day tail from.
+    members = [_lr_member("NEW CO", date(2026, 7, 1), paid=0.0, outstanding=5_000.0, gross=100_000.0)]
+    row = account_loss_ratio_rows(members, as_of=date(2026, 7, 15))[0]
+
+    assert row["days"] == 15
+    assert row["ibnr"] == 0.0
+    assert row["incurred_claims"] == 5_000.0
+
+
+def test_account_loss_ratio_totals_recompute_ratios_from_summed_amounts():
+    members = [
+        _lr_member("SMALL CO", date(2026, 1, 1), paid=90_000.0, outstanding=0.0, gross=100_000.0),
+        _lr_member("BIG CO", date(2026, 1, 1), paid=100_000.0, outstanding=0.0, gross=1_000_000.0),
+    ]
+    rows = account_loss_ratio_rows(members, as_of=date(2026, 7, 15))
+    totals = account_loss_ratio_totals(rows)
+
+    assert totals["account_count"] == 2
+    # Weighted by the summed amounts, NOT the mean of the two rows' own
+    # very different ratios - the small account must not carry equal weight.
+    expected = totals["incurred_claims"] / totals["earned_premium"]
+    assert totals["gross_loss_ratio"] == pytest.approx(expected, abs=0.0001)
+    naive_mean = sum(r["gross_loss_ratio"] for r in rows) / 2
+    assert totals["gross_loss_ratio"] != pytest.approx(naive_mean, abs=0.01)

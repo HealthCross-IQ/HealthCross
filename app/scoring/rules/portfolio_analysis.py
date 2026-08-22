@@ -1435,3 +1435,157 @@ def demographic_summary(member_results: List[dict]) -> dict:
     summary["network_counts"] = dict(sorted(network_counts.items()))
     summary["out_of_scope_member_count"] = sum(1 for r in member_results if not r.get("in_scope", True))
     return summary
+
+
+#: A policy whose term has fully run has no unreported tail left to
+#: reserve for - every claim that will ever be reported against it has
+#: been. Above this many elapsed days the account is treated as expired:
+#: IBNR drops to zero and the FULL annual premium is earned, rather than
+#: prorating past 100%.
+FULL_POLICY_TERM_DAYS = 365
+
+#: The unreported tail an open policy reserves for, expressed as a number
+#: of days of its own paid-claims run rate (Paid / elapsed days * 30) -
+#: the same 30-day convention ibnr_for_member uses per member, applied
+#: here at whole-account level instead.
+ACCOUNT_IBNR_TAIL_DAYS = 30
+
+
+def account_loss_ratio_rows(
+    member_results: List[dict],
+    as_of: date_cls,
+    opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
+    default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+) -> List[dict]:
+    """Per-account loss ratio, one row per account POLICY PERIOD - the
+    underwriting "Loss Ratio" view HealthCross tracks its own book on:
+
+        Days             = as_of - policy effective date
+        IBNR             = Paid / Days * 30, or 0 once the policy expired
+        Incurred Claims  = Paid + Outstanding + IBNR
+        Earned Premium   = Gross * Days / 365, or the FULL Gross once expired
+        Net Premium      = Earned * (1 - Loading)
+        Gross LR         = Incurred / Earned
+        Net LR           = Incurred / Net
+
+    Rows are keyed by (master client, policy start date), NOT by client
+    alone: a client that has already renewed has members on two different
+    policy periods in the same upload, and each period earns, reserves,
+    and runs its own loss ratio separately - collapsing them would blend
+    an expired year's settled claims into the current year's open one.
+
+    IBNR here is deliberately an ACCOUNT-level figure (the account's own
+    combined paid run rate over its own elapsed days), not the sum of each
+    member's own ibnr_for_member - one member's part-year enrollment
+    shouldn't project its own 30-day tail independently of the policy the
+    account actually runs on.
+
+    Loading is each client's own real OPEX % from the uploaded Client
+    Master sheet where it's on file (resolved per policy period via
+    resolve_client_opex_pct, so a client whose loading changed between
+    renewals uses the right one for each), falling back to
+    default_loading_pct otherwise.
+    """
+    buckets: Dict[tuple, dict] = {}
+    for r in member_results:
+        master_client = r.get("master_client")
+        policy_start = r.get("policy_start_date")
+        if not master_client or not policy_start:
+            continue
+        key = (master_client, policy_start)
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = buckets[key] = {
+                "master_client": master_client,
+                "policy_start_date": policy_start,
+                "member_count": 0,
+                "paid": 0.0,
+                "outstanding": 0.0,
+                "gross_premium": 0.0,
+                "claim_count": 0,
+            }
+        bucket["member_count"] += 1
+        bucket["paid"] += r.get("actual_claims_paid") or 0.0
+        bucket["outstanding"] += r.get("actual_claims_outstanding") or 0.0
+        bucket["gross_premium"] += r.get("written_premium") or 0.0
+        bucket["claim_count"] += r.get("claim_count") or 0
+
+    rows = []
+    for (master_client, policy_start), bucket in buckets.items():
+        # Inclusive of the effective date itself - a policy incepting today
+        # has one day of exposure, not zero. Matches the book's own Loss
+        # Ratio sheet exactly; an exclusive count understates elapsed days
+        # by one, which then flows through IBNR, Earned Premium and both
+        # loss ratios.
+        days = (as_of - policy_start).days + 1
+        expired = days > FULL_POLICY_TERM_DAYS
+        paid = bucket["paid"]
+        outstanding = bucket["outstanding"]
+        gross_premium = bucket["gross_premium"]
+
+        ibnr = 0.0 if (expired or days <= 0 or not paid) else paid / days * ACCOUNT_IBNR_TAIL_DAYS
+        incurred_claims = paid + outstanding + ibnr
+
+        if expired:
+            earned_premium = gross_premium
+        elif days > 0:
+            earned_premium = gross_premium * days / FULL_POLICY_TERM_DAYS
+        else:
+            earned_premium = 0.0
+
+        loading_pct = resolve_client_opex_pct(
+            master_client, policy_start, opex_records_by_client, default_loading_pct
+        )
+        net_premium = earned_premium * (1 - loading_pct)
+
+        rows.append(
+            {
+                "master_client": master_client,
+                "policy_start_date": policy_start.isoformat(),
+                "member_count": bucket["member_count"],
+                "days": days,
+                "expired": expired,
+                "paid": round(paid, 2),
+                "outstanding": round(outstanding, 2),
+                "ibnr": round(ibnr, 2),
+                "incurred_claims": round(incurred_claims, 2),
+                "loading_pct": round(loading_pct, 4),
+                "gross_premium": round(gross_premium, 2),
+                "earned_premium": round(earned_premium, 2),
+                "net_premium": round(net_premium, 2),
+                "gross_loss_ratio": round(incurred_claims / earned_premium, 4) if earned_premium else None,
+                "net_loss_ratio": round(incurred_claims / net_premium, 4) if net_premium else None,
+                "claim_count": bucket["claim_count"],
+            }
+        )
+
+    rows.sort(key=lambda r: (r["master_client"], r["policy_start_date"]))
+    return rows
+
+
+def account_loss_ratio_totals(rows: List[dict]) -> dict:
+    """Book-wide totals across account_loss_ratio_rows - the sheet's own
+    bottom line. Loss ratios are recomputed from the summed amounts, not
+    averaged across rows: a 12-life account's own ratio must not carry the
+    same weight as a 900-life one in a book-wide figure."""
+    paid = sum(r["paid"] for r in rows)
+    outstanding = sum(r["outstanding"] for r in rows)
+    ibnr = sum(r["ibnr"] for r in rows)
+    incurred_claims = sum(r["incurred_claims"] for r in rows)
+    gross_premium = sum(r["gross_premium"] for r in rows)
+    earned_premium = sum(r["earned_premium"] for r in rows)
+    net_premium = sum(r["net_premium"] for r in rows)
+    return {
+        "account_count": len(rows),
+        "member_count": sum(r["member_count"] for r in rows),
+        "claim_count": sum(r["claim_count"] for r in rows),
+        "paid": round(paid, 2),
+        "outstanding": round(outstanding, 2),
+        "ibnr": round(ibnr, 2),
+        "incurred_claims": round(incurred_claims, 2),
+        "gross_premium": round(gross_premium, 2),
+        "earned_premium": round(earned_premium, 2),
+        "net_premium": round(net_premium, 2),
+        "gross_loss_ratio": round(incurred_claims / earned_premium, 4) if earned_premium else None,
+        "net_loss_ratio": round(incurred_claims / net_premium, 4) if net_premium else None,
+    }

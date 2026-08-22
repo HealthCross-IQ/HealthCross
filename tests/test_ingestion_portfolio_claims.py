@@ -116,6 +116,74 @@ def test_skips_a_leading_blank_sheet_to_find_the_real_data(claims_xlsx_with_lead
     assert rows[0]["patient_id"] == "ACM0001"
 
 
+@pytest.fixture()
+def claims_xlsx_with_pivot_summary_sheets(tmp_path):
+    # The real HealthCross_Claims export ships pivot/summary sheets AHEAD
+    # of the per-claim-line data: "Premium", "Claims", "LOSS RATIO",
+    # "Loading" (each a pivot whose real headers sit below a title row, so
+    # pandas names their columns "Unnamed: N"), a partial "Detail1"
+    # extract, and the full "DATA" sheet. Taking the first non-empty sheet
+    # picked up a pivot summary and silently produced all-None rows.
+    wb = openpyxl.Workbook()
+    premium = wb.active
+    premium.title = "Premium"
+    premium.append([None, None, None, None])
+    premium.append([None, "ONE Group", "Eff Date", "Total"])
+    premium.append([None, "ACQUISIT DMCC", "2025-05-01", 883707.16])
+
+    detail = wb.create_sheet("Detail1")  # a partial extract, same headers as DATA
+    detail.append(HEADER)
+    detail.append([
+        "PAR0001", "CLMP", "Paid Claims", "Partial Sub", "Partial Holdings", "QC9-PAR-A",
+        "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "J309", "Allergic rhinitis", 10.0, 10.0,
+    ])
+
+    data = wb.create_sheet("DATA")  # the real, full claim-line sheet
+    data.append(HEADER)
+    for i in range(3):
+        data.append([
+            f"ACM000{i}", f"CLM{i}", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+            "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+            "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+            "J309", "Allergic rhinitis", 100.0, 90.0,
+        ])
+
+    path = tmp_path / "claims_with_pivots.xlsx"
+    wb.save(path)
+    return path
+
+
+def test_picks_the_claim_line_sheet_over_leading_pivot_summary_sheets(claims_xlsx_with_pivot_summary_sheets):
+    with open(claims_xlsx_with_pivot_summary_sheets, "rb") as f:
+        rows = parse_portfolio_claims(f, "claims.xlsb")
+
+    # Must pick "DATA" (3 real claim lines), not the leading "Premium"
+    # pivot (which would parse as all-None rows) nor the smaller
+    # "Detail1" partial extract that shares DATA's own headers.
+    assert len(rows) == 3
+    assert {r["patient_id"] for r in rows} == {"ACM0000", "ACM0001", "ACM0002"}
+    assert all(r["final_amount"] == 90.0 for r in rows)
+
+
+def test_a_pivot_only_workbook_does_not_masquerade_as_claim_data(tmp_path):
+    # Nothing qualifies as claim-line data - the parser falls back to the
+    # first non-empty sheet rather than picking a pivot as if it were real,
+    # leaving the resulting all-None rows for callers to reject.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Premium"
+    ws.append([None, "ONE Group", "Eff Date", "Total"])
+    ws.append([None, "ACQUISIT DMCC", "2025-05-01", 883707.16])
+    path = tmp_path / "pivots_only.xlsx"
+    wb.save(path)
+
+    with open(path, "rb") as f:
+        rows = parse_portfolio_claims(f, "claims.xlsb")
+    assert all(r["final_amount"] is None for r in rows)
+
+
 def test_recognizes_the_contract_wording_for_amount_columns(tmp_path):
     # A newer HealthCross export renamed "Claimed Amount AED"/"Final Amount
     # in AED" to "Claimed Amount Contract"/"Final Amount Contract" (still

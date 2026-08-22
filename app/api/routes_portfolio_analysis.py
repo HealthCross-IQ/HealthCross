@@ -22,6 +22,8 @@ from app.models import db_models as models
 from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.portfolio_analysis import (
+    account_loss_ratio_rows,
+    account_loss_ratio_totals,
     DEFAULT_EXPENSE_RATIO_PCT,
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
     analyze_portfolio_member,
@@ -237,6 +239,7 @@ def _run_analysis(
     policy_year: Optional[str] = None,
     client: Optional[str] = None,
     filters: Optional[Dict[str, str]] = None,
+    require_rate_card: bool = True,
 ) -> List[dict]:
     members = _member_dicts(db)
     if not members:
@@ -250,7 +253,7 @@ def _run_analysis(
         if not members:
             raise HTTPException(status_code=400, detail=f"No members found for client '{client}'")
     rate_cards = _rate_card_dicts(db)
-    if not rate_cards:
+    if not rate_cards and require_rate_card:
         raise HTTPException(status_code=400, detail="No rate card uploaded yet")
     variant_rates = _variant_rate_dicts(db)
 
@@ -402,6 +405,59 @@ def portfolio_executive_summary(
     return executive_portfolio_summary(
         results, expense_ratio_pct=expense_ratio_pct, opex_records_by_client=opex_records_by_client
     )
+
+
+@router.get("/account-loss-ratio")
+def portfolio_account_loss_ratio(
+    as_of: Optional[date] = Query(None, description="Report date to measure elapsed days and earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    default_loading_pct: float = Query(
+        DEFAULT_EXPENSE_RATIO_PCT,
+        description="Loading (OPEX) fallback for an account with no real figure on file in the uploaded Client Master sheet",
+    ),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """Per-account loss ratio - one row per account POLICY PERIOD, the
+    underwriting view HealthCross tracks its own book on: Paid,
+    Outstanding, IBNR, Incurred Claims, Days, Loading, Gross/Earned/Net
+    Premium, and both Gross and Net loss ratios. See
+    account_loss_ratio_rows for each column's own definition (notably: an
+    expired policy reserves no IBNR and earns its FULL annual premium,
+    rather than prorating past 100%).
+
+    Loading is each client's own real OPEX % from the uploaded Client
+    Master sheet wherever it is on file, resolved per policy period so a
+    client whose loading changed between renewals uses the right one for
+    each; default_loading_pct is only the fallback.
+    """
+    # Loss ratio compares each account's own ACTUAL premium against its own
+    # ACTUAL claims - the rate card only ever feeds standard_premium (what
+    # the card WOULD charge), which no column here uses. Requiring one would
+    # block the book's core underwriting view on an unrelated upload.
+    results = _run_analysis(
+        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client,
+        filters=filters, require_rate_card=False,
+    )
+    opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
+    for cm in db.query(models.ClientMasterInfo).all():
+        if cm.opex_pct is not None:
+            opex_records_by_client[cm.master_client_name].append(
+                {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
+            )
+    effective_as_of = as_of or _get_stored_as_of(db) or date.today()
+    rows = account_loss_ratio_rows(
+        results,
+        as_of=effective_as_of,
+        opex_records_by_client=opex_records_by_client,
+        default_loading_pct=default_loading_pct,
+    )
+    return {
+        "as_of": effective_as_of.isoformat(),
+        "rows": rows,
+        "totals": account_loss_ratio_totals(rows),
+    }
 
 
 @router.get("/renewal-due-list")
