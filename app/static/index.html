@@ -92,7 +92,62 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
+    overflow-y: auto;
   }
+
+  /* ---------- Portal rail nav (3 pillars: New Business / Renewal /
+     Claims Analysis) - its own scoped palette/type, matching the
+     approved Renewal Bench mockup, layered above the existing case
+     list/filters rather than replacing them. ---------- */
+  .hc-rail {
+    --hcr-ink: #10201b; --hcr-ink-2: #46564e; --hcr-muted: #838f88;
+    --hcr-border: rgba(16,32,27,0.12);
+    --hcr-accent: #0f6e5c; --hcr-accent-soft: rgba(15,110,92,0.10);
+    --hcr-secondary: #a8672a; --hcr-secondary-soft: rgba(168,103,42,0.12);
+    --hcr-surface-3: #e2e6e2;
+    font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .hc-rail {
+      --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
+      --hcr-border: rgba(238,243,240,0.10);
+      --hcr-accent: #3fcaa8; --hcr-accent-soft: rgba(63,202,168,0.12);
+      --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
+      --hcr-surface-3: #1f2d27;
+    }
+  }
+  :root[data-theme="dark"] .hc-rail {
+    --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
+    --hcr-border: rgba(238,243,240,0.10);
+    --hcr-accent: #3fcaa8; --hcr-accent-soft: rgba(63,202,168,0.12);
+    --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
+    --hcr-surface-3: #1f2d27;
+  }
+  .hc-rail-brand { display: flex; align-items: center; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--hcr-border); margin-bottom: 4px; }
+  .hc-rail-brand .mark {
+    width: 27px; height: 27px; border-radius: 7px; flex-shrink: 0;
+    background: linear-gradient(160deg, var(--hcr-accent), color-mix(in srgb, var(--hcr-accent) 60%, black));
+    display: flex; align-items: center; justify-content: center;
+    color: #f5faf8; font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
+  }
+  .hc-rail-brand .name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; color: var(--hcr-ink); line-height: 1.2; }
+  .hc-rail-brand .sub { font-size: 10px; color: var(--hcr-muted); }
+  .hc-rail-group { display: flex; flex-direction: column; gap: 1px; }
+  .hc-rail-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--hcr-muted); margin: 6px 2px 3px; }
+  .hc-rail-item {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    font-size: 12.5px; font-weight: 500; color: var(--hcr-ink-2);
+    background: none; border: none; border-radius: 8px; padding: 7px 9px; cursor: pointer;
+  }
+  .hc-rail-item:hover { background: var(--hcr-surface-3); color: var(--hcr-ink); }
+  .hc-rail-item.active { background: var(--hcr-accent-soft); color: var(--hcr-accent); font-weight: 600; }
+  .hc-rail-tag {
+    font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
+    padding: 1px 6px; border-radius: 5px; margin-left: auto; flex-shrink: 0;
+  }
+  .hc-rail-tag.nb { background: var(--hcr-secondary-soft); color: var(--hcr-secondary); }
+  .hc-rail-tag.rn { background: var(--hcr-accent-soft); color: var(--hcr-accent); }
+  .hc-rail-tag.cl { background: var(--hcr-surface-3); color: var(--hcr-ink-2); }
   aside h2 {
     font-size: 11px;
     text-transform: uppercase;
@@ -486,6 +541,13 @@
   .rb-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid transparent; background: var(--rb-accent); color: var(--rb-accent-ink); padding: 8px 14px; }
   .rb-btn:hover { filter: brightness(1.07); }
 
+  .rb-buildup-row { display: grid; grid-template-columns: 130px 1fr 108px; align-items: center; gap: 9px; font-size: 11.5px; margin-bottom: 8px; color: var(--rb-ink-2); }
+  .rb-buildup-track { height: 6px; background: var(--rb-surface-3); border-radius: 3px; overflow: hidden; }
+  .rb-buildup-fill { height: 100%; border-radius: 3px; background: var(--rb-accent); }
+  .rb-buildup-val { font-family: 'IBM Plex Mono', monospace; text-align: right; color: var(--rb-ink); }
+  .rb-buildup-final .rb-buildup-val { font-weight: 700; }
+  .rb-buildup-op { font-size: 10.5px; color: var(--rb-muted); text-align: center; }
+
   @media (max-width: 900px) {
     .rb-scorecard-methods { grid-template-columns: 1fr; }
   }
@@ -500,11 +562,43 @@
 
 <div class="layout">
   <aside>
-    <button class="primary" onclick="showNewCaseForm()">+ New Case</button>
-    <button onclick="showInternationalComparison()">International comparison</button>
-    <button onclick="showPortfolioAnalysis()">Portfolio Analysis</button>
-    <button onclick="showPortfolioInsights()">Portfolio Insights</button>
-    <button onclick="showChatAssistant()">Ask a question</button>
+    <div class="hc-rail">
+      <div class="hc-rail-brand">
+        <div class="mark">H</div>
+        <div>
+          <div class="name">HealthCross</div>
+          <div class="sub">Underwriting Portal</div>
+        </div>
+      </div>
+
+      <div class="hc-rail-group">
+        <div class="hc-rail-label">New Business</div>
+        <button class="hc-rail-item" id="hc-rail-new-quote" onclick="hcRailNewQuote()">New Quote<span class="hc-rail-tag nb">NB</span></button>
+        <button class="hc-rail-item" id="hc-rail-rate-cards" onclick="hcRailRateCards()">Rate Cards<span class="hc-rail-tag nb">NB</span></button>
+        <button class="hc-rail-item" id="hc-rail-intl-comparison" onclick="hcRailIntlComparison()">International Comparison<span class="hc-rail-tag nb">NB</span></button>
+      </div>
+
+      <div class="hc-rail-group">
+        <div class="hc-rail-label">Renewal</div>
+        <button class="hc-rail-item" id="hc-rail-renewal-due" onclick="hcRailRenewalDueList()">Renewal Due List<span class="hc-rail-tag rn">RN</span></button>
+        <button class="hc-rail-item" id="hc-rail-renewal-bench" onclick="hcRailRenewalBench()">Renewal Bench<span class="hc-rail-tag rn">RN</span></button>
+        <button class="hc-rail-item" id="hc-rail-renewal-history" onclick="hcRailRenewalHistory()">Renewal History<span class="hc-rail-tag rn">RN</span></button>
+      </div>
+
+      <div class="hc-rail-group">
+        <div class="hc-rail-label">Claims Analysis</div>
+        <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
+        <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
+      </div>
+
+      <div class="hc-rail-group">
+        <div class="hc-rail-label">More</div>
+        <button class="hc-rail-item" id="hc-rail-all-cases" onclick="hcRailAllCases()">All Cases</button>
+        <button class="hc-rail-item" id="hc-rail-ask" onclick="hcRailAskQuestion()">Ask a Question</button>
+      </div>
+    </div>
+
+    <div id="hc-case-browser">
     <h2>Cases</h2>
     <div class="case-filters">
       <input type="text" id="caseFilterSearch" placeholder="Search company or broker" oninput="renderCaseList()">
@@ -528,6 +622,7 @@
       <button type="button" class="case-filters-clear" onclick="clearCaseFilters()">Clear filters</button>
     </div>
     <div class="case-list" id="caseList"></div>
+    </div>
   </aside>
 
   <main id="main"></main>
@@ -801,6 +896,167 @@ function renderCaseList() {
   list.innerHTML = `
     ${newBusiness.length ? `<h3 class="case-group-heading">New Business</h3>${newBusiness.map(_caseItemHtml).join('')}` : ''}
     ${renewals.length ? `<h3 class="case-group-heading">Renewal</h3>${renewals.map(_caseItemHtml).join('')}` : ''}
+  `;
+}
+
+/* ---------------- portal rail nav (3 pillars) ---------------- */
+
+function _hcRailSetActive(id) {
+  document.querySelectorAll('.hc-rail-item').forEach(el => el.classList.toggle('active', el.id === id));
+}
+
+function hcRailNewQuote() {
+  _hcRailSetActive('hc-rail-new-quote');
+  showNewCaseForm();
+}
+
+function hcRailIntlComparison() {
+  _hcRailSetActive('hc-rail-intl-comparison');
+  showInternationalComparison();
+}
+
+function hcRailClaimsExplorer() {
+  _hcRailSetActive('hc-rail-claims-explorer');
+  showPortfolioAnalysis();
+}
+
+function hcRailUtilization() {
+  _hcRailSetActive('hc-rail-utilization');
+  showPortfolioInsights();
+}
+
+function hcRailAskQuestion() {
+  _hcRailSetActive('hc-rail-ask');
+  showChatAssistant();
+}
+
+function hcRailAllCases() {
+  _hcRailSetActive('hc-rail-all-cases');
+  clearCaseFilters();
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>All Cases</h3>
+      <div class="hint">Pick any case from the list on the left to open its workspace - the full case list, with search and filters, lives there. Use "Renewal Due List" or "Renewal History" for the renewal-scoped views instead.</div>
+    </div>
+  `;
+}
+
+async function hcRailRateCards() {
+  _hcRailSetActive('hc-rail-rate-cards');
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>Rate Cards</h3>
+      <div class="hint">HealthCross's own New Business manual rate card (Product &times; Region &times; Network &times; age band) and benefit-variant pricing - shared across every case's New Business Quote. A fresh upload replaces the whole table, not merged.</div>
+      <div class="row" style="align-items:flex-end; gap:20px; flex-wrap:wrap; margin-top:10px;">
+        <div>
+          <label>Base rate card</label>
+          <input type="file" id="hc-rate-card-file" accept=".xls,.xlsx">
+          <button onclick="hcUploadRateCard('pricing')">Upload</button>
+          <span id="hc-rate-card-status" class="status-pending"></span>
+        </div>
+        <div>
+          <label>Benefit variant rates</label>
+          <input type="file" id="hc-variant-rate-file" accept=".xls,.xlsx">
+          <button onclick="hcUploadRateCard('variants')">Upload</button>
+          <span id="hc-variant-rate-status" class="status-pending"></span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+async function hcUploadRateCard(kind) {
+  const input = document.getElementById(kind === 'pricing' ? 'hc-rate-card-file' : 'hc-variant-rate-file');
+  const statusEl = document.getElementById(kind === 'pricing' ? 'hc-rate-card-status' : 'hc-variant-rate-status');
+  if (!input.files.length) { toast('Choose a file first', true); return; }
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  const path = kind === 'pricing' ? '/admin/rate-cards/upload' : '/admin/benefit-variant-rates/upload';
+  try {
+    const result = await api(path, { method: 'POST', body: form });
+    statusEl.textContent = `${result.rows_ingested} rows`;
+    toast('Rate card uploaded');
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function _hcRenewalCasesSorted() {
+  return allCases
+    .filter(c => c.business_type === 'existing')
+    .slice()
+    .sort((a, b) => (a.renewal_date || '9999-99-99').localeCompare(b.renewal_date || '9999-99-99'));
+}
+
+function _hcCaseTableHtml(cases, emptyText) {
+  if (!cases.length) return `<div class="hint">${emptyText}</div>`;
+  const rows = cases.map(c => `
+    <tr style="cursor:pointer;" onclick="selectCase(${c.id})">
+      <td>${escapeHtml(c.company_name)}</td>
+      <td>${escapeHtml(c.broker_name)}</td>
+      <td>${c.renewal_date || '-'}</td>
+      <td>${c.status}</td>
+      <td style="text-align:right;">${c.current_annual_premium != null ? `AED ${c.current_annual_premium.toLocaleString()}` : '-'}</td>
+    </tr>
+  `).join('');
+  return `<table><tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th><th style="text-align:right;">Current premium</th></tr>${rows}</table>`;
+}
+
+async function hcRailRenewalDueList() {
+  _hcRailSetActive('hc-rail-renewal-due');
+  await loadCases();
+  const cases = _hcRenewalCasesSorted();
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>Renewal Due List</h3>
+      <div class="hint">Every renewal case, soonest renewal date first. Click one to open its workspace.</div>
+      ${_hcCaseTableHtml(cases, 'No renewal cases yet.')}
+    </div>
+  `;
+}
+
+async function selectCaseAndOpenRenewalBench(id) {
+  await selectCase(id);
+  switchTab('renewal-bench');
+}
+
+async function hcRailRenewalBench() {
+  _hcRailSetActive('hc-rail-renewal-bench');
+  await loadCases();
+  const cases = _hcRenewalCasesSorted();
+  currentCase = null;
+  const rows = cases.map(c => `
+    <tr style="cursor:pointer;" onclick="selectCaseAndOpenRenewalBench(${c.id})">
+      <td>${escapeHtml(c.company_name)}</td>
+      <td>${escapeHtml(c.broker_name)}</td>
+      <td>${c.renewal_date || '-'}</td>
+      <td>${c.status}</td>
+      <td style="text-align:right;">${c.current_annual_premium != null ? `AED ${c.current_annual_premium.toLocaleString()}` : '-'}</td>
+    </tr>
+  `).join('');
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>Renewal Bench</h3>
+      <div class="hint">Pick a renewal case below to open its Renewal Bench tab directly - the Method A/B scorecard, renewal-vs-new-business comparison, large claims insights, and census movement.</div>
+      ${cases.length ? `<table><tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th><th style="text-align:right;">Current premium</th></tr>${rows}</table>` : '<div class="hint">No renewal cases yet.</div>'}
+    </div>
+  `;
+}
+
+async function hcRailRenewalHistory() {
+  _hcRailSetActive('hc-rail-renewal-history');
+  await loadCases();
+  const cases = _hcRenewalCasesSorted().filter(c => ['bound', 'declined', 'lapsed'].includes(c.status));
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="card">
+      <h3>Renewal History</h3>
+      <div class="hint">Renewal cases with a recorded outcome (bound, declined, or lapsed).</div>
+      ${_hcCaseTableHtml(cases, 'No decided renewal cases yet.')}
+    </div>
   `;
 }
 
@@ -1755,7 +2011,14 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="tab-bar">
-      ${TABS.map(t => `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('')}
+      ${TABS.filter(t => {
+        // New Business and Renewal are separate workflows - a renewal
+        // case has no New Business Quote to price, and a new-business
+        // case has no claims ledger/current premium for a Renewal Bench.
+        if (t.id === 'new-business') return c.business_type !== 'existing';
+        if (t.id === 'renewal-bench') return c.business_type === 'existing';
+        return true;
+      }).map(t => `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('')}
     </div>
 
     <div class="tab-panel" data-tab="census">
@@ -3464,6 +3727,21 @@ function _rbKpi(label, value, sub) {
   `;
 }
 
+// Steps: [{label, value, final}] - each step's own bar is scaled against
+// the LARGEST value in the sequence (usually required_premium, the last
+// step), so every intermediate build-up step is visually comparable on
+// the same track, not just the final result.
+function _rbBuildupHtml(steps) {
+  const maxVal = Math.max(...steps.map(s => s.value));
+  return steps.map(s => `
+    <div class="rb-buildup-row ${s.final ? 'rb-buildup-final' : ''}">
+      <div>${escapeHtml(s.label)}</div>
+      <div class="rb-buildup-track"><div class="rb-buildup-fill" style="width:${maxVal ? (s.value / maxVal * 100).toFixed(1) : 0}%;"></div></div>
+      <div class="rb-buildup-val">AED ${Math.round(s.value).toLocaleString()}</div>
+    </div>
+  `).join('');
+}
+
 function _renewalBenchScorecardHtml(r) {
   const b = r.method_b;
   const gapPositive = r.method_gap >= 0;
@@ -3478,9 +3756,15 @@ function _renewalBenchScorecardHtml(r) {
             <span class="rb-badge rb-badge-a">A</span>
           </div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, '')}
-            ${_rbKpi('Required premium', `AED ${r.required_premium.toLocaleString()}`, `+${(r.assumptions_used.inflation_pct * 100).toFixed(1)}% inflation, loading ${(r.assumptions_used.loading_pct * 100).toFixed(1)}%`)}
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} annualized claims &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
             ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
+          </div>
+          <div style="margin-top:12px;">
+            ${_rbBuildupHtml([
+              { label: 'Annualized claims', value: r.annualized_incurred_claims },
+              { label: `+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: r.trended_claims },
+              { label: `Required premium`, value: r.required_premium, final: true },
+            ])}
           </div>
         </div>
         <div class="rb-method-card">
@@ -3489,12 +3773,20 @@ function _renewalBenchScorecardHtml(r) {
             <span class="rb-badge rb-badge-b">B</span>
           </div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `claims + ${(b.assumptions_used.ibnr_pct * 100).toFixed(0)}% IBNR = AED ${b.claims_with_ibnr.toLocaleString()}`)}
-            ${_rbKpi('Required premium', `AED ${b.required_premium.toLocaleString()}`, `+${(b.assumptions_used.inflation_pct * 100).toFixed(1)}% inflation, loading ${(b.assumptions_used.loading_pct * 100).toFixed(1)}%`)}
+            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `same AED ${b.annualized_incurred_claims.toLocaleString()} annualized claims &divide; current premium`)}
             ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${b.current_annual_premium.toLocaleString()} current`)}
+          </div>
+          <div style="margin-top:12px;">
+            ${_rbBuildupHtml([
+              { label: 'Annualized claims', value: b.annualized_incurred_claims },
+              { label: `+ IBNR (${(b.assumptions_used.ibnr_pct * 100).toFixed(0)}%)`, value: b.claims_with_ibnr },
+              { label: `+ Inflation (${(b.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: b.trended_claims },
+              { label: `Required premium`, value: b.required_premium, final: true },
+            ])}
           </div>
         </div>
       </div>
+      <div class="rb-card-sub" style="margin-top:10px;">Both methods gross up trended claims by the same loading (TPA Fee + Commission + HC Fee + QIC Fee, ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% total) to reach Required Premium - see the Scorecard tab for that fee split.</div>
       <div class="rb-reconcile">
         <div class="txt">Method B requires <b>${gapPositive ? '+' : ''}AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the IBNR load's effect once trended and grossed up through the same loading.</div>
         <div class="delta">${r.method_gap_pct > 0 ? '+' : ''}${r.method_gap_pct}%</div>
