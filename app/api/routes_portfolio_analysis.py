@@ -31,6 +31,7 @@ from app.scoring.rules.portfolio_analysis import (
     group_claims_by_beneficiary,
     normalize_subgroup_key,
     recurring_high_cost_members,
+    renewal_due_accounts,
     resolve_group_product,
     resolve_master_client,
     summarize_by_group_size_band,
@@ -401,6 +402,26 @@ def portfolio_executive_summary(
     return executive_portfolio_summary(
         results, expense_ratio_pct=expense_ratio_pct, opex_records_by_client=opex_records_by_client
     )
+
+
+@router.get("/renewal-due-list")
+def portfolio_renewal_due_list(
+    within_days: int = Query(60, description="How many days out from today counts as 'due soon'"),
+    as_of: Optional[date] = Query(None, description="Reference date to measure the window from - defaults to today (real calendar time, not the stored data-as-of date, since a policy's own end date doesn't change with data staleness)"),
+    db: Session = Depends(get_db),
+):
+    """Real accounts due for renewal in the coming `within_days` days,
+    driven directly by the Membership export's own policy_end_date per
+    master client (see renewal_due_accounts) - distinct from a case's own
+    manually-set renewal_date in the case-management workflow.
+    """
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    subgroup_master_by_name: Dict[str, str] = {
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+    }
+    return renewal_due_accounts(members, subgroup_master_by_name, within_days=within_days, as_of=as_of)
 
 
 @router.get("/group-size-bands")

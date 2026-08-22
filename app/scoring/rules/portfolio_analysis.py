@@ -18,6 +18,7 @@ rather than silently mis-pricing it.
 """
 from collections import defaultdict
 from datetime import date as date_cls
+from datetime import timedelta
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
@@ -122,6 +123,49 @@ def resolve_master_client(member: dict, subgroup_master_by_name: Optional[Dict[s
         if key in subgroup_master_by_name:
             return subgroup_master_by_name[key]
     return member.get("master_contract") or contract
+
+
+def renewal_due_accounts(
+    members: List[dict],
+    subgroup_master_by_name: Optional[Dict[str, str]] = None,
+    within_days: int = 60,
+    as_of: Optional[date_cls] = None,
+) -> List[dict]:
+    """Every distinct master client (see resolve_master_client) whose own
+    policy_end_date falls within the next `within_days` days of `as_of` -
+    a real "coming renewals" list driven directly by the Membership
+    export's own policy dates, not a manually-maintained renewal_date on
+    a separate case record (see app/api/routes_cases.py's Case model for
+    that other, case-workflow-scoped notion of a renewal date).
+
+    A master client's own policy_end_date is read from whichever of its
+    members carries the latest one - most master clients share one term
+    across every member, but taking the max keeps this correct even if a
+    stray row has a missing or mismatched date. Cases already past their
+    own end date (in real arrears) or further out than the window are
+    both excluded - this is a due-soon list, not a full renewal calendar.
+    """
+    as_of = as_of or date_cls.today()
+    horizon = as_of + timedelta(days=within_days)
+
+    by_client: Dict[str, dict] = {}
+    for m in members:
+        master_client = resolve_master_client(m, subgroup_master_by_name)
+        if not master_client:
+            continue
+        entry = by_client.setdefault(master_client, {"master_client": master_client, "policy_end_date": None, "member_count": 0})
+        entry["member_count"] += 1
+        end_date = m.get("policy_end_date")
+        if end_date and (entry["policy_end_date"] is None or end_date > entry["policy_end_date"]):
+            entry["policy_end_date"] = end_date
+
+    due = [
+        {**v, "days_until_renewal": (v["policy_end_date"] - as_of).days}
+        for v in by_client.values()
+        if v["policy_end_date"] is not None and as_of <= v["policy_end_date"] <= horizon
+    ]
+    due.sort(key=lambda d: d["policy_end_date"])
+    return due
 
 
 def earned_premium_fraction(policy_start, policy_end, as_of: date_cls) -> float:

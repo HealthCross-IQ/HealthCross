@@ -14,6 +14,7 @@ from app.scoring.rules.portfolio_analysis import (
     ibnr_for_member,
     normalize_subgroup_key,
     recurring_high_cost_members,
+    renewal_due_accounts,
     resolve_client_opex_pct,
     resolve_group_product,
     resolve_master_client,
@@ -1408,3 +1409,43 @@ def test_summarize_population_mix_excludes_out_of_scope_members():
 
 def test_summarize_population_mix_returns_none_for_an_empty_book():
     assert summarize_population_mix([]) is None
+
+
+def test_renewal_due_accounts_includes_only_clients_within_the_window():
+    members = [
+        _member(beneficiary_id="M1", master_contract="Due Soon Co", policy_end_date=date(2026, 3, 15)),
+        _member(beneficiary_id="M2", master_contract="Due Soon Co", policy_end_date=date(2026, 3, 15)),
+        _member(beneficiary_id="M3", master_contract="Too Far Out Co", policy_end_date=date(2026, 12, 1)),
+        _member(beneficiary_id="M4", master_contract="Already Past Co", policy_end_date=date(2026, 1, 1)),
+    ]
+    due = renewal_due_accounts(members, within_days=60, as_of=date(2026, 2, 1))
+    assert [d["master_client"] for d in due] == ["Due Soon Co"]
+    assert due[0]["member_count"] == 2
+    assert due[0]["policy_end_date"] == date(2026, 3, 15)
+    assert due[0]["days_until_renewal"] == 42
+
+
+def test_renewal_due_accounts_sorts_by_soonest_first():
+    members = [
+        _member(beneficiary_id="M1", master_contract="Later Co", policy_end_date=date(2026, 3, 20)),
+        _member(beneficiary_id="M2", master_contract="Sooner Co", policy_end_date=date(2026, 2, 10)),
+    ]
+    due = renewal_due_accounts(members, within_days=60, as_of=date(2026, 2, 1))
+    assert [d["master_client"] for d in due] == ["Sooner Co", "Later Co"]
+
+
+def test_renewal_due_accounts_uses_the_latest_end_date_seen_per_client():
+    # A stray row with a missing/earlier date shouldn't pull the whole
+    # client's own renewal date earlier than its real shared term.
+    members = [
+        _member(beneficiary_id="M1", master_contract="Acme Holdings", policy_end_date=date(2026, 3, 15)),
+        _member(beneficiary_id="M2", master_contract="Acme Holdings", policy_end_date=None),
+    ]
+    due = renewal_due_accounts(members, within_days=60, as_of=date(2026, 2, 1))
+    assert due[0]["policy_end_date"] == date(2026, 3, 15)
+    assert due[0]["member_count"] == 2
+
+
+def test_renewal_due_accounts_skips_clients_with_no_end_date_at_all():
+    members = [_member(beneficiary_id="M1", master_contract="No Date Co", policy_end_date=None)]
+    assert renewal_due_accounts(members, within_days=60, as_of=date(2026, 2, 1)) == []

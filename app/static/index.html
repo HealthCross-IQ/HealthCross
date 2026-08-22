@@ -1006,16 +1006,38 @@ function _hcCaseTableHtml(cases, emptyText) {
 
 async function hcRailRenewalDueList() {
   _hcRailSetActive('hc-rail-renewal-due');
-  await loadCases();
-  const cases = _hcRenewalCasesSorted();
   currentCase = null;
-  document.getElementById('main').innerHTML = `
-    <div class="card">
-      <h3>Renewal Due List</h3>
-      <div class="hint">Every renewal case, soonest renewal date first. Click one to open its workspace.</div>
-      ${_hcCaseTableHtml(cases, 'No renewal cases yet.')}
-    </div>
-  `;
+  const daysInput = document.getElementById('renewal-due-window') ? document.getElementById('renewal-due-window').value : 60;
+  try {
+    const due = await api(`/portfolio-analysis/renewal-due-list?within_days=${daysInput}`);
+    const rows = due.map(d => `
+      <tr>
+        <td>${escapeHtml(d.master_client)}</td>
+        <td style="text-align:right;">${d.member_count}</td>
+        <td>${d.policy_end_date}</td>
+        <td style="text-align:right;">${d.days_until_renewal}</td>
+      </tr>
+    `).join('');
+    document.getElementById('main').innerHTML = `
+      <div class="card">
+        <h3>Renewal Due List</h3>
+        <div class="hint">Real accounts from the booked Membership export whose own policy end date falls within the window below - not a manually-set date on a case record. Soonest first.</div>
+        <div class="row" style="align-items:flex-end; margin-bottom:14px;">
+          <div><label>Within (days)</label><input type="number" id="renewal-due-window" value="${daysInput}" style="width:90px;"></div>
+          <button onclick="hcRailRenewalDueList()">Refresh</button>
+        </div>
+        ${due.length ? `<table><tr><th>Master client</th><th style="text-align:right;">Members</th><th>Policy end date</th><th style="text-align:right;">Days to renewal</th></tr>${rows}</table>` : `<div class="hint">No accounts due for renewal in the next ${daysInput} days.</div>`}
+      </div>
+    `;
+  } catch (err) {
+    document.getElementById('main').innerHTML = `
+      <div class="card">
+        <h3>Renewal Due List</h3>
+        <div class="hint">${escapeHtml(err.message)} - upload the book's Membership export on Portfolio Analysis first.</div>
+        <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button>
+      </div>
+    `;
+  }
 }
 
 async function selectCaseAndOpenRenewalBench(id) {

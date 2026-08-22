@@ -1155,3 +1155,30 @@ def test_filter_options_returns_only_values_actually_present(client, members_two
     assert options["network"] == ["MSH Comprehensive", "MSH Platinum"]
     assert options["gender"] == ["F", "M"]
     assert options["product"] == ["Gold"]
+
+
+def test_renewal_due_list_requires_members_uploaded_first(client):
+    resp = client.get("/portfolio-analysis/renewal-due-list")
+    assert resp.status_code == 400
+
+
+def test_renewal_due_list_returns_only_clients_due_within_the_window(client, tmp_path):
+    members_path = _write_xlsx(
+        tmp_path, "members_due.xlsx", MEMBERS_HEADER,
+        [
+            ["Due Sub", "Due Soon Co", "P1", "QC-A1", "M1", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-03-15", "2026-03-15", "2025-03-15", "2026-03-15", 1000, 1000, None, None, 100],
+            ["FarOut Sub", "Too Far Out Co", "P2", "QC-A2", "M2", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-12-01", "2026-12-01", "2025-12-01", "2026-12-01", 1000, 1000, None, None, 100],
+        ],
+    )
+    with open(members_path, "rb") as f:
+        resp = client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    assert resp.json()["rows_ingested"] == 2
+
+    resp = client.get("/portfolio-analysis/renewal-due-list", params={"within_days": 60, "as_of": "2026-02-01"})
+    assert resp.status_code == 200
+    due = resp.json()
+    assert [d["master_client"] for d in due] == ["Due Soon Co"]
+    assert due[0]["policy_end_date"] == "2026-03-15"
+    assert due[0]["days_until_renewal"] == 42
