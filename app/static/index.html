@@ -18,7 +18,10 @@
     --ink-2: #52514e;
     --ink-muted: #898781;
     --grid: #e1e0d9;
-    --accent: #2a78d6;
+    /* Brand: Dark Blue #1C2A48 (authority/CTA, light backgrounds) and
+       Light Blue #5CD9FF (accent/highlight, dark backgrounds) per the
+       HealthCross Brand Guidelines. */
+    --accent: #1c2a48;
     --accent-ink: #ffffff;
     --good: #0ca30c;
     --good-bg: #0ca30c1a;
@@ -28,11 +31,11 @@
     --serious-bg: #ec835a1a;
     --critical: #d03b3b;
     --critical-bg: #d03b3b1a;
-    --series-1: #2a78d6;
+    --series-1: #1c2a48;
     --series-2: #eb6834;
     --series-3: #1baf7a;
     --series-4: #eda100;
-    --series-1-wash: #2a78d61a;
+    --series-1-wash: #1c2a481a;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -44,17 +47,17 @@
       --ink-2: #c3c2b7;
       --ink-muted: #898781;
       --grid: #2c2c2a;
-      --accent: #3987e5;
+      --accent: #5cd9ff;
       --accent-ink: #0d0d0d;
       --good-bg: #0ca30c26;
       --warning-bg: #fab21926;
       --serious-bg: #ec835a26;
       --critical-bg: #d03b3b26;
-      --series-1: #3987e5;
+      --series-1: #5cd9ff;
       --series-2: #d95926;
       --series-3: #199e70;
       --series-4: #c98500;
-      --series-1-wash: #3987e526;
+      --series-1-wash: #5cd9ff26;
     }
   }
   * { box-sizing: border-box; }
@@ -102,7 +105,7 @@
   .hc-rail {
     --hcr-ink: #10201b; --hcr-ink-2: #46564e; --hcr-muted: #838f88;
     --hcr-border: rgba(16,32,27,0.12);
-    --hcr-accent: #0f6e5c; --hcr-accent-soft: rgba(15,110,92,0.10);
+    --hcr-accent: #1c2a48; --hcr-accent-soft: rgba(28,42,72,0.10);
     --hcr-secondary: #a8672a; --hcr-secondary-soft: rgba(168,103,42,0.12);
     --hcr-surface-3: #e2e6e2;
     font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
@@ -111,7 +114,7 @@
     :root:not([data-theme="light"]) .hc-rail {
       --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
       --hcr-border: rgba(238,243,240,0.10);
-      --hcr-accent: #3fcaa8; --hcr-accent-soft: rgba(63,202,168,0.12);
+      --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.12);
       --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
       --hcr-surface-3: #1f2d27;
     }
@@ -119,7 +122,7 @@
   :root[data-theme="dark"] .hc-rail {
     --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
     --hcr-border: rgba(238,243,240,0.10);
-    --hcr-accent: #3fcaa8; --hcr-accent-soft: rgba(63,202,168,0.12);
+    --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.12);
     --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
     --hcr-surface-3: #1f2d27;
   }
@@ -451,7 +454,7 @@
     --rb-bg: #f5f6f3; --rb-surface: #ffffff; --rb-surface-2: #eceef0; --rb-surface-3: #e2e6e2;
     --rb-ink: #10201b; --rb-ink-2: #46564e; --rb-muted: #838f88;
     --rb-border: rgba(16,32,27,0.12); --rb-border-strong: rgba(16,32,27,0.22);
-    --rb-accent: #0f6e5c; --rb-accent-ink: #f5faf8; --rb-accent-soft: rgba(15,110,92,0.10); --rb-accent-soft-2: rgba(15,110,92,0.18);
+    --rb-accent: #1c2a48; --rb-accent-ink: #ffffff; --rb-accent-soft: rgba(28,42,72,0.10); --rb-accent-soft-2: rgba(28,42,72,0.18);
     --rb-secondary: #a8672a; --rb-secondary-soft: rgba(168,103,42,0.12);
     --rb-good: #1f8a5f; --rb-good-soft: rgba(31,138,95,0.12);
     --rb-warning: #b9821f; --rb-warning-soft: rgba(185,130,31,0.14);
@@ -466,7 +469,7 @@
       --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
       --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
       --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
-      --rb-accent: #3fcaa8; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(63,202,168,0.12); --rb-accent-soft-2: rgba(63,202,168,0.22);
+      --rb-accent: #5cd9ff; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(92,217,255,0.12); --rb-accent-soft-2: rgba(92,217,255,0.22);
       --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
       --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
       --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
@@ -478,7 +481,7 @@
     --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
     --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
     --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
-    --rb-accent: #3fcaa8; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(63,202,168,0.12); --rb-accent-soft-2: rgba(63,202,168,0.22);
+    --rb-accent: #5cd9ff; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(92,217,255,0.12); --rb-accent-soft-2: rgba(92,217,255,0.22);
     --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
     --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
     --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
@@ -1438,10 +1441,10 @@ function printTabAsPdf(tabId, title) {
   :root {
     --bg: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec; --border: rgba(11,11,11,0.10);
     --ink: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781; --grid: #e1e0d9;
-    --accent: #2a78d6; --accent-ink: #ffffff;
+    --accent: #1c2a48; --accent-ink: #ffffff;
     --good: #0ca30c; --good-bg: #0ca30c1a; --warning: #fab219; --warning-bg: #fab2191a;
     --serious: #ec835a; --serious-bg: #ec835a1a; --critical: #d03b3b; --critical-bg: #d03b3b1a;
-    --series-1: #2a78d6; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-1-wash: #2a78d61a;
+    --series-1: #1c2a48; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-1-wash: #1c2a481a;
   }
   body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 24px auto; max-width: 900px; color: var(--ink); background: #fff; }
   h1 { font-size: 19px; margin: 0 0 16px; }
@@ -3781,30 +3784,27 @@ function _rbBuildupHtml(steps) {
 
 function _renewalBenchScorecardHtml(r) {
   const b = r.method_b;
+  const ibnr = r.ibnr_detail;
   const gapPositive = r.method_gap >= 0;
   return `
     <div class="rb-card">
       <div class="rb-card-title">Renewal scorecard</div>
-      <div class="rb-card-sub">Both methods share the SAME Incurred Claims base - Paid + Outstanding (this case's own trailing full months from the claims ledger) + IBNR. Method A (Gross Loss Ratio) grosses that up directly; Method B (Burning Cost) additionally weights it by a credibility factor before grossing up. Months used: ${r.months_used.join(', ')}.</div>
-      <div style="margin:12px 0 16px;">
-        ${_rbBuildupHtml([
-          { label: 'Paid + Outstanding', value: r.annualized_paid_and_outstanding },
-          { label: `+ IBNR (${(r.assumptions_used.ibnr_pct * 100).toFixed(0)}%)`, value: r.claims_with_ibnr, final: true },
-        ])}
-      </div>
+      <div class="rb-card-sub">Both methods reach an Incurred Claims figure (Paid + Outstanding + IBNR) from this case's own trailing full months in the claims ledger, but compute IBNR differently. Months used: ${r.months_used.join(', ')}.</div>
       <div class="rb-scorecard-methods">
         <div class="rb-method-card">
           <div class="rb-method-head">
             <span class="rb-method-name">Method A &middot; Gross Loss Ratio</span>
             <span class="rb-badge rb-badge-a">A</span>
           </div>
+          <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()}.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} claims (before IBNR) &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} incurred claims &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
             ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Incurred claims', value: r.claims_with_ibnr },
+              { label: 'Paid + Outstanding', value: r.annualized_paid_and_outstanding },
+              { label: `+ IBNR (dynamic)`, value: r.annualized_incurred_claims },
               { label: `+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: r.trended_claims },
               { label: `Required premium`, value: r.required_premium, final: true },
             ])}
@@ -3815,13 +3815,15 @@ function _renewalBenchScorecardHtml(r) {
             <span class="rb-method-name">Method B &middot; Burning Cost</span>
             <span class="rb-badge rb-badge-b">B</span>
           </div>
+          <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is a flat load on the same Paid+Outstanding base: AED ${b.annualized_paid_and_outstanding.toLocaleString()} &times; ${(b.ibnr_pct * 100).toFixed(0)}% = AED ${(b.annualized_incurred_claims - b.annualized_paid_and_outstanding).toLocaleString()}.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `same AED ${b.annualized_incurred_claims.toLocaleString()} claims (before IBNR) &divide; current premium`)}
+            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${b.annualized_incurred_claims.toLocaleString()} incurred claims &divide; current premium`)}
             ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${b.current_annual_premium.toLocaleString()} current`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Incurred claims', value: b.claims_with_ibnr },
+              { label: 'Paid + Outstanding', value: b.annualized_paid_and_outstanding },
+              { label: `+ IBNR (${(b.ibnr_pct * 100).toFixed(0)}% flat)`, value: b.annualized_incurred_claims },
               { label: `+ Inflation (${(b.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: b.trended_claims },
               { label: `× Credibility (${(b.assumptions_used.credibility_pct * 100).toFixed(0)}%)`, value: b.credible_claims },
               { label: `Required premium`, value: b.required_premium, final: true },
@@ -3831,11 +3833,11 @@ function _renewalBenchScorecardHtml(r) {
       </div>
       <div class="rb-card-sub" style="margin-top:10px;">Both methods gross up their own final claims figure by the same loading (TPA Fee + Commission + HC Fee + QIC Fee, ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% total) to reach Required Premium - see the Scorecard tab for that fee split.</div>
       <div class="rb-reconcile">
-        <div class="txt">Method B (Burning Cost) requires <b>AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the credibility weighting's effect once grossed up through the same loading.</div>
+        <div class="txt">Method B (Burning Cost) requires <b>AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the different IBNR convention and credibility weighting's combined effect once grossed up through the same loading.</div>
         <div class="delta">${r.method_gap_pct > 0 ? '+' : ''}${r.method_gap_pct}%</div>
       </div>
       <div class="rb-row" style="margin-top:14px;">
-        <div class="rb-input"><label>IBNR % (both methods)</label><input type="number" id="renewal-bench-ibnr-override" step="0.5" value="${(r.assumptions_used.ibnr_pct * 100).toFixed(1)}"></div>
+        <div class="rb-input"><label>IBNR % flat (Method B only)</label><input type="number" id="renewal-bench-ibnr-override" step="0.5" value="${(b.ibnr_pct * 100).toFixed(1)}"></div>
         <div class="rb-input"><label>Credibility % (Method B)</label><input type="number" id="renewal-bench-credibility-override" step="1" value="${(b.assumptions_used.credibility_pct * 100).toFixed(0)}"></div>
         <button class="rb-btn" onclick="recomputeRenewalBenchScorecard()">Recompute</button>
       </div>
