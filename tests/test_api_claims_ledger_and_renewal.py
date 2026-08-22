@@ -359,10 +359,13 @@ def test_renewal_rating_includes_method_b_alongside_method_a(client):
     resp = client.get(f"/cases/{case_id}/renewal-rating")
     assert resp.status_code == 200
     body = resp.json()
+    # Both methods share the SAME incurred-claims base (Paid+Outstanding+IBNR).
     assert body["annualized_incurred_claims"] == body["method_b"]["annualized_incurred_claims"]
+    assert body["claims_with_ibnr"] == body["method_b"]["claims_with_ibnr"]
+    assert body["assumptions_used"]["ibnr_pct"] == 0.10
     assert body["method_b"]["assumptions_used"]["ibnr_pct"] == 0.10
-    # Method B's IBNR load means it always requires MORE than Method A.
-    assert body["method_b"]["required_premium"] > body["required_premium"]
+    # Method B (Burning Cost)'s credibility weighting means it requires LESS than Method A.
+    assert body["method_b"]["required_premium"] < body["required_premium"]
     assert body["method_gap"] == round(body["method_b"]["required_premium"] - body["required_premium"], 2)
 
 
@@ -372,7 +375,20 @@ def test_renewal_rating_ibnr_pct_is_overridable(client):
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     resp = client.get(f"/cases/{case_id}/renewal-rating", params={"ibnr_pct": 0.25})
-    assert resp.json()["method_b"]["assumptions_used"]["ibnr_pct"] == 0.25
+    body = resp.json()
+    assert body["assumptions_used"]["ibnr_pct"] == 0.25
+    assert body["method_b"]["assumptions_used"]["ibnr_pct"] == 0.25
+
+
+def test_renewal_rating_credibility_pct_is_overridable(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-rating", params={"credibility_pct": 0.75})
+    body = resp.json()
+    assert body["method_b"]["assumptions_used"]["credibility_pct"] == 0.75
+    assert body["assumptions_used"]["credibility_pct"] == 1.0  # Method A is never credibility-shaded
 
 
 def test_renewal_benchmark_with_no_comparable_cases(client):

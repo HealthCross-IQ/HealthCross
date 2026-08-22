@@ -490,6 +490,15 @@
     background: var(--rb-surface); border: 1px solid var(--rb-border); border-radius: 14px;
     padding: 18px 20px; box-shadow: var(--rb-shadow); margin-bottom: 16px;
   }
+  .rb-quicknav {
+    position: sticky; top: 0; z-index: 4; display: flex; align-items: center; gap: 4px;
+    background: var(--rb-bg); padding: 8px 0 12px; margin-bottom: 4px; flex-wrap: wrap;
+  }
+  .rb-quicknav a {
+    font-size: 12px; font-weight: 600; color: var(--rb-ink-2); text-decoration: none;
+    padding: 6px 12px; border-radius: 7px; background: var(--rb-surface-2);
+  }
+  .rb-quicknav a:hover { background: var(--rb-accent-soft); color: var(--rb-accent); }
   .rb-card-title { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; color: var(--rb-ink); }
   .rb-card-sub { font-size: 11.5px; color: var(--rb-muted); margin: 0 0 14px; line-height: 1.5; }
 
@@ -2090,11 +2099,17 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="renewal-bench">
       <div class="rb-scope">
-        <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print / Save as PDF</button></div>
-        <div id="renewal-bench-scorecard-area"></div>
-        <div id="renewal-bench-nb-area"></div>
-        <div id="renewal-bench-claims-area"></div>
-        <div id="renewal-bench-census-area"></div>
+        <div class="rb-quicknav">
+          <a href="#rb-anchor-scorecard">Scorecard</a>
+          <a href="#rb-anchor-nb">vs. New Business</a>
+          <a href="#rb-anchor-claims">Large Claims</a>
+          <a href="#rb-anchor-census">Census Movement</a>
+          <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')" style="margin-left:auto;">Print / Save as PDF</button>
+        </div>
+        <div id="rb-anchor-scorecard"><div id="renewal-bench-scorecard-area"></div></div>
+        <div id="rb-anchor-nb"><div id="renewal-bench-nb-area"></div></div>
+        <div id="rb-anchor-claims"><div id="renewal-bench-claims-area"></div></div>
+        <div id="rb-anchor-census"><div id="renewal-bench-census-area"></div></div>
       </div>
     </div>
 
@@ -3770,20 +3785,26 @@ function _renewalBenchScorecardHtml(r) {
   return `
     <div class="rb-card">
       <div class="rb-card-title">Renewal scorecard</div>
-      <div class="rb-card-sub">Method A (standard - annualized claims, trended for inflation, grossed up for loading) vs. Method B (same base, plus an IBNR load before trending, to account for claims incurred but not yet reported). Months used: ${r.months_used.join(', ')}.</div>
+      <div class="rb-card-sub">Both methods share the SAME Incurred Claims base - Paid + Outstanding (this case's own trailing full months from the claims ledger) + IBNR. Method A (Gross Loss Ratio) grosses that up directly; Method B (Burning Cost) additionally weights it by a credibility factor before grossing up. Months used: ${r.months_used.join(', ')}.</div>
+      <div style="margin:12px 0 16px;">
+        ${_rbBuildupHtml([
+          { label: 'Paid + Outstanding', value: r.annualized_paid_and_outstanding },
+          { label: `+ IBNR (${(r.assumptions_used.ibnr_pct * 100).toFixed(0)}%)`, value: r.claims_with_ibnr, final: true },
+        ])}
+      </div>
       <div class="rb-scorecard-methods">
         <div class="rb-method-card">
           <div class="rb-method-head">
-            <span class="rb-method-name">Method A &middot; Standard</span>
+            <span class="rb-method-name">Method A &middot; Gross Loss Ratio</span>
             <span class="rb-badge rb-badge-a">A</span>
           </div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} annualized claims &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} claims (before IBNR) &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
             ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Annualized claims', value: r.annualized_incurred_claims },
+              { label: 'Incurred claims', value: r.claims_with_ibnr },
               { label: `+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: r.trended_claims },
               { label: `Required premium`, value: r.required_premium, final: true },
             ])}
@@ -3791,30 +3812,31 @@ function _renewalBenchScorecardHtml(r) {
         </div>
         <div class="rb-method-card">
           <div class="rb-method-head">
-            <span class="rb-method-name">Method B &middot; Burning Cost + IBNR</span>
+            <span class="rb-method-name">Method B &middot; Burning Cost</span>
             <span class="rb-badge rb-badge-b">B</span>
           </div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `same AED ${b.annualized_incurred_claims.toLocaleString()} annualized claims &divide; current premium`)}
+            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `same AED ${b.annualized_incurred_claims.toLocaleString()} claims (before IBNR) &divide; current premium`)}
             ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${b.current_annual_premium.toLocaleString()} current`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Annualized claims', value: b.annualized_incurred_claims },
-              { label: `+ IBNR (${(b.assumptions_used.ibnr_pct * 100).toFixed(0)}%)`, value: b.claims_with_ibnr },
+              { label: 'Incurred claims', value: b.claims_with_ibnr },
               { label: `+ Inflation (${(b.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: b.trended_claims },
+              { label: `× Credibility (${(b.assumptions_used.credibility_pct * 100).toFixed(0)}%)`, value: b.credible_claims },
               { label: `Required premium`, value: b.required_premium, final: true },
             ])}
           </div>
         </div>
       </div>
-      <div class="rb-card-sub" style="margin-top:10px;">Both methods gross up trended claims by the same loading (TPA Fee + Commission + HC Fee + QIC Fee, ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% total) to reach Required Premium - see the Scorecard tab for that fee split.</div>
+      <div class="rb-card-sub" style="margin-top:10px;">Both methods gross up their own final claims figure by the same loading (TPA Fee + Commission + HC Fee + QIC Fee, ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% total) to reach Required Premium - see the Scorecard tab for that fee split.</div>
       <div class="rb-reconcile">
-        <div class="txt">Method B requires <b>${gapPositive ? '+' : ''}AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the IBNR load's effect once trended and grossed up through the same loading.</div>
+        <div class="txt">Method B (Burning Cost) requires <b>AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the credibility weighting's effect once grossed up through the same loading.</div>
         <div class="delta">${r.method_gap_pct > 0 ? '+' : ''}${r.method_gap_pct}%</div>
       </div>
       <div class="rb-row" style="margin-top:14px;">
-        <div class="rb-input"><label>IBNR %</label><input type="number" id="renewal-bench-ibnr-override" step="0.5" value="${(b.assumptions_used.ibnr_pct * 100).toFixed(1)}"></div>
+        <div class="rb-input"><label>IBNR % (both methods)</label><input type="number" id="renewal-bench-ibnr-override" step="0.5" value="${(r.assumptions_used.ibnr_pct * 100).toFixed(1)}"></div>
+        <div class="rb-input"><label>Credibility % (Method B)</label><input type="number" id="renewal-bench-credibility-override" step="1" value="${(b.assumptions_used.credibility_pct * 100).toFixed(0)}"></div>
         <button class="rb-btn" onclick="recomputeRenewalBenchScorecard()">Recompute</button>
       </div>
     </div>
@@ -3834,9 +3856,10 @@ async function loadRenewalBenchScorecard() {
 
 async function recomputeRenewalBenchScorecard() {
   const ibnr = Number(document.getElementById('renewal-bench-ibnr-override').value) / 100;
+  const credibility = Number(document.getElementById('renewal-bench-credibility-override').value) / 100;
   const area = document.getElementById('renewal-bench-scorecard-area');
   try {
-    const r = await api(`/cases/${currentCase.id}/renewal-rating?ibnr_pct=${ibnr}`);
+    const r = await api(`/cases/${currentCase.id}/renewal-rating?ibnr_pct=${ibnr}&credibility_pct=${credibility}`);
     area.innerHTML = _renewalBenchScorecardHtml(r);
   } catch (err) {
     area.innerHTML = '';

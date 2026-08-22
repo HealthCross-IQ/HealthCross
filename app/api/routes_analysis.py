@@ -33,6 +33,7 @@ from app.scoring.rules.portfolio_analysis import (
     top_members_by_total_claims,
 )
 from app.scoring.rules.renewal_rating import (
+    DEFAULT_CREDIBILITY_PCT,
     DEFAULT_IBNR_PCT,
     MIN_CREDIBLE_CASE_COUNT,
     RenewalRatingAssumptions,
@@ -889,6 +890,7 @@ def _case_renewal_rating(
     inflation_pct: Optional[float] = None,
     loading_pct: Optional[float] = None,
     ibnr_pct: Optional[float] = None,
+    credibility_pct: Optional[float] = None,
 ) -> Optional[dict]:
     """Shared computation behind GET /{case_id}/renewal-rating and
     GET /{case_id}/renewal-benchmark (which needs every eligible case's
@@ -920,8 +922,12 @@ def _case_renewal_rating(
     if not full_months:
         return None
 
+    # This month-by-month figure is Paid + Outstanding only (whatever the
+    # ledger's own final_amount carries) - calculate_renewal_rating_two_methods
+    # folds in the IBNR load itself to reach a true incurred figure before
+    # either method sees it (see renewal_rating.py's module docstring).
     avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
-    annualized = avg_month * 12
+    annualized_paid_and_outstanding = avg_month * 12
 
     defaults = RenewalRatingAssumptions()
     effective_loading_pct = (
@@ -931,13 +937,16 @@ def _case_renewal_rating(
     )
     effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
     two_methods = calculate_renewal_rating_two_methods(
-        annualized, case.current_annual_premium,
+        annualized_paid_and_outstanding, case.current_annual_premium,
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
         ibnr_pct=ibnr_pct if ibnr_pct is not None else DEFAULT_IBNR_PCT,
+        credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
     )
     result = two_methods["method_a"]
+    result["annualized_paid_and_outstanding"] = round(annualized_paid_and_outstanding, 2)
     result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
     result["method_b"] = two_methods["method_b"]
+    result["method_b"]["annualized_paid_and_outstanding"] = result["annualized_paid_and_outstanding"]
     result["method_b"]["months_used"] = result["months_used"]
     result["method_gap"] = two_methods["gap"]
     result["method_gap_pct"] = two_methods["gap_pct"]
@@ -951,18 +960,23 @@ def get_renewal_rating(
     inflation_pct: Optional[float] = None,
     loading_pct: Optional[float] = None,
     ibnr_pct: Optional[float] = Query(
-        None, description="Method B's IBNR load on the same annualized claims base, applied before inflation - defaults to 10%"
+        None, description="IBNR load turning Paid+Outstanding into a true Incurred figure - applies equally to both methods, defaults to 10%"
+    ),
+    credibility_pct: Optional[float] = Query(
+        None, description="Method B (Burning Cost) only - credibility weight on the trended incurred claims before grossing up, defaults to 90%"
     ),
 ):
     """The renewal-increase calculation (app/scoring/rules/renewal_rating.py):
-    actual loss ratio (annualized incurred claims from the ledger over the
-    case's current_annual_premium), trended for inflation, then grossed up
-    for the commission/OPEX loading. Requires both a claims ledger upload
-    and current_annual_premium set on the case (PATCH /cases/{id}).
+    Incurred claims (Paid + Outstanding from the ledger, plus an IBNR
+    load) over the case's current_annual_premium for the actual loss
+    ratio, trended for inflation, then grossed up for the commission/OPEX
+    loading. Requires both a claims ledger upload and current_annual_premium
+    set on the case (PATCH /cases/{id}).
 
-    The response's own "method_b" key carries the same figures computed
-    with an added IBNR load (see calculate_renewal_rating_two_methods) -
-    the Renewal Bench's second scorecard method, alongside this one.
+    The response's own "method_b" key carries the SAME incurred-claims
+    figure additionally weighted by credibility_pct (see
+    calculate_renewal_rating_two_methods) - the Renewal Bench's
+    "Burning Cost" scorecard method, alongside this one.
     """
     case = _get_case_or_404(db, case_id)
     if not case.claims_ledger_entries:
@@ -972,7 +986,7 @@ def get_renewal_rating(
             status_code=400,
             detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
         )
-    result = _case_renewal_rating(case, inflation_pct, loading_pct, ibnr_pct)
+    result = _case_renewal_rating(case, inflation_pct, loading_pct, ibnr_pct, credibility_pct)
     if result is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
     return result
