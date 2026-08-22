@@ -1041,10 +1041,57 @@ def summarize_burning_cost_overall(member_results: List[dict]) -> Optional[dict]
 DEFAULT_EXPENSE_RATIO_PCT = 0.33  # matches the case-level renewal loading default (see renewal_rating.py)
 
 
+def resolve_client_opex_pct(
+    master_client: Optional[str],
+    policy_start_date: Optional[date_cls],
+    opex_records_by_client: Optional[Dict[str, List[dict]]],
+    default_opex_pct: float,
+) -> float:
+    """Which OPEX/Loading % applies to one member, given their own master
+    client and policy_start_date.
+
+    A client's real loading sometimes changes from one renewal to the
+    next, so the uploaded Client Master sheet (see
+    app/ingestion/client_master.py) can carry several dated records for
+    the SAME client - each its own {start_date, end_date, opex_pct} -
+    rather than one flat figure. This picks whichever record's own
+    [start_date, end_date] window actually covers this member's policy
+    period, so an earlier and later renewal's loading are never blended
+    into one figure for that member.
+
+    Falls back to default_opex_pct whenever no record applies: the
+    client has no records at all, none of its records' date windows
+    cover this member's own policy_start_date, or the member has no
+    policy_start_date to match against in the first place - EXCEPT when
+    the client has exactly one record with no dates on it at all, which
+    is read as "this client's one flat figure, no date-based logic
+    needed" (the common case - most clients won't have renewal-by-
+    renewal loading changes on file).
+    """
+    if not master_client or not opex_records_by_client:
+        return default_opex_pct
+    records = opex_records_by_client.get(master_client)
+    if not records:
+        return default_opex_pct
+    if len(records) == 1 and records[0].get("start_date") is None and records[0].get("end_date") is None:
+        return records[0]["opex_pct"]
+    if not policy_start_date:
+        return default_opex_pct
+    for record in records:
+        start = record.get("start_date")
+        end = record.get("end_date")
+        if start is not None and policy_start_date < start:
+            continue
+        if end is not None and policy_start_date > end:
+            continue
+        return record["opex_pct"]
+    return default_opex_pct
+
+
 def executive_portfolio_summary(
     member_results: List[dict],
     expense_ratio_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
-    opex_by_client: Optional[Dict[str, float]] = None,
+    opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
 ) -> dict:
     """The top-of-page "Level 1 - Executive Portfolio" KPI set: Total
     Groups, Total Members, Written Premium, Earned Premium, Incurred
@@ -1064,15 +1111,18 @@ def executive_portfolio_summary(
     admin + HC/management fees, as a fraction of premium) -
     underwriting's own reminder that a healthy-looking loss ratio can
     still mean an unprofitable book once acquisition/administration cost
-    is added on top. `opex_by_client` (master_client -> real OPEX/Loading
-    %, from the uploaded Client Master sheet - see
-    app/ingestion/client_master.py) gives each client's own REAL expense
-    ratio where it's on file; `expense_ratio_pct` (defaults to 33%, the
-    same default loading used for a single case's own renewal rating -
-    see renewal_rating.py's DEFAULT_LOADING_PCT) is only the FALLBACK for
-    a client with no real figure uploaded. The reported expense_ratio_pct
-    is the resulting premium-weighted BLEND across every member, not a
-    flat assumption, whenever any real OPEX is on file at all.
+    is added on top. `opex_records_by_client` (master_client -> list of
+    {start_date, end_date, opex_pct}, from the uploaded Client Master
+    sheet - see app/ingestion/client_master.py) gives each client's own
+    REAL expense ratio where it's on file, resolved per member by
+    resolve_client_opex_pct (so a client whose loading changed between
+    renewals uses the right one for each member's own policy period);
+    `expense_ratio_pct` (defaults to 33%, the same default loading used
+    for a single case's own renewal rating - see renewal_rating.py's
+    DEFAULT_LOADING_PCT) is only the FALLBACK for a member with no real
+    figure resolved. The reported expense_ratio_pct is the resulting
+    premium-weighted BLEND across every member, not a flat assumption,
+    whenever any real OPEX is on file at all.
 
     Claim Frequency (claims per earned member-year) and Claim Severity
     (average AED cost per claim) are the SAME whole-book totals
@@ -1100,8 +1150,10 @@ def executive_portfolio_summary(
         premium = r.get("actual_premium")
         if premium is not None:
             earned_premium += premium
-            member_opex = opex_by_client.get(master_client) if opex_by_client and master_client else None
-            weighted_expense += premium * (member_opex if member_opex is not None else expense_ratio_pct)
+            member_opex = resolve_client_opex_pct(
+                master_client, r.get("policy_start_date"), opex_records_by_client, expense_ratio_pct
+            )
+            weighted_expense += premium * member_opex
         actual_claims_total += r.get("actual_claims") or 0.0
         ibnr_total += r.get("ibnr") or 0.0
         claim_count += r.get("claim_count") or 0

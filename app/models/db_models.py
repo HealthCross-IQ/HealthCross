@@ -631,11 +631,17 @@ class ClientMasterInfo(Base):
     real OPEX/Loading % (commission + TPA + admin + HC/management fees,
     as a fraction of premium), used in place of the flat
     DEFAULT_EXPENSE_RATIO_PCT assumption for Combined Ratio wherever a
-    client's own real figure is on file. Product/start_date are carried
-    along for reference/display only - Product itself is still sourced
-    from GroupProductMapping/the membership export's own PRODUCTNAME
-    where those are more authoritative. Wholesale-replaced on each fresh
-    upload, like the other client-level mapping tables.
+    client's own real figure is on file. A client's real loading can
+    change from one renewal to the next, so the SAME master_client_name
+    can appear on more than one row here, each its own dated record
+    (start_date/end_date) - see resolve_client_opex_pct, which picks
+    whichever record's own date window actually covers a given member's
+    policy period, so an earlier and later renewal's loading are never
+    blended into one figure. Product is carried along for reference/
+    display only - it's still sourced from GroupProductMapping/the
+    membership export's own PRODUCTNAME where those are more
+    authoritative. Wholesale-replaced on each fresh upload, like the
+    other client-level mapping tables.
     """
 
     __tablename__ = "client_master_info"
@@ -645,6 +651,7 @@ class ClientMasterInfo(Base):
     opex_pct = Column(Float, nullable=True)
     product = Column(String, nullable=True)
     start_date = Column(Date, nullable=True)
+    end_date = Column(Date, nullable=True)
     source_filename = Column(String, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
