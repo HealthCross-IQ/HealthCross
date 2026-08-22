@@ -400,6 +400,41 @@ def test_large_claims_resolves_client_name_to_master_client(
     assert member_client_names == {"Acme Holdings"}
 
 
+def test_large_claims_master_client_filter_scopes_to_one_client(client, tmp_path):
+    # Neither patient has a matching PortfolioMember row uploaded, so each
+    # claim's client_name falls back to its own raw CLIENT_NAME - enough
+    # to test that master_client excludes the other client's claim
+    # without needing a membership upload at all.
+    claims_path = _write_xlsx(
+        tmp_path,
+        "two_client_claims.xlsx",
+        CLAIMS_HEADER,
+        [
+            ["ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+             "J309", "Allergic rhinitis", 100.0, 90.0],
+            ["ZZZ0001", "CLMZ1", "Paid Claims", "Other Co", "Other Holdings", "QC-Z",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+             "J309", "Allergic rhinitis", 200.0, 180.0],
+        ],
+    )
+    with open(claims_path, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("claims.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/large-claims", params={"master_client": "Acme Holdings"})
+    assert resp.status_code == 200
+    assert {c["client_name"] for c in resp.json()["top_claims"]} == {"Acme Holdings"}
+
+    resp = client.get("/portfolio-analysis/large-claims", params={"master_client": "Other Holdings"})
+    assert resp.status_code == 200
+    assert {c["client_name"] for c in resp.json()["top_claims"]} == {"Other Holdings"}
+
+    resp = client.get("/portfolio-analysis/large-claims", params={"master_client": "Nonexistent Co"})
+    assert resp.status_code == 400  # no claims match that client at all
+
+
 def test_upload_group_product_mapping_ingests_rows(client, mapping_xlsx):
     with open(mapping_xlsx, "rb") as f:
         resp = client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})

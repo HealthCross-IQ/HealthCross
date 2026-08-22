@@ -4105,7 +4105,7 @@ function portfolioAnalysisPanelHtml() {
       <div class="row" id="pa-filters-row" style="align-items:flex-end; flex-wrap:wrap;">
         ${paFiltersRowHtml()}
       </div>
-      <div class="hint">Master client shows one row per master policy, combining all its subgroups - pick one from the Master client filter, then switch Group by to "Client (Subgroup)" to see that master's own subgroups broken out. Use the policy year filter when a client has already renewed - some members may still show last year's policy alongside this year's in the same upload. Stack any of the filters above together (e.g. Product=Gold + Network=MSH Platinum) to drill into a specific slice - they combine with whatever's chosen for Group by. Filter dropdowns only list values actually present in your uploaded book. "Print / Save as PDF (Management)" reflects whatever filters are currently set above.</div>
+      <div class="hint">Master client shows one row per master policy, combining all its subgroups - pick one from the Master client filter, then switch Group by to "Client (Subgroup)" to see that master's own subgroups broken out. Use the policy year filter when a client has already renewed - some members may still show last year's policy alongside this year's in the same upload. Stack any of the filters above together (e.g. Product=Gold + Network=MSH Platinum) to drill into a specific slice - they combine with whatever's chosen for Group by. Filter dropdowns only list values actually present in your uploaded book. "Print / Save as PDF (Management)" reflects whatever filters are currently set above - leave the Master client filter empty for a whole-book portfolio-level report, or pick one client there for a client-level report scoped to just that master group (its own Large Claims, and each policy year shown separately if it has already renewed).</div>
     </div>
     <div id="pa-result-area">${paLastSummary ? paSummaryHtml(paLastSummary) : ''}</div>
     <div class="card">
@@ -4373,7 +4373,8 @@ async function printPortfolioManagementReport() {
   }
 
   paReadFilterInputs();
-  let execSummary, productSummary, networkSummary, largeClaims;
+  const isClientLevel = !!paFilters.master_client;
+  let execSummary, productSummary, networkSummary, largeClaims, policyYearBreakdown;
   try {
     [execSummary, productSummary, networkSummary] = await Promise.all([
       api(`/portfolio-analysis/executive-summary?${paBuildFilterParams().toString()}`),
@@ -4386,8 +4387,24 @@ async function printPortfolioManagementReport() {
     return;
   }
   try {
-    largeClaims = await api('/portfolio-analysis/large-claims');
-  } catch (err) { largeClaims = null; /* no claims uploaded - section omitted */ }
+    // Client-level report: scope Large Claims to this one master client's
+    // own claims too, instead of the whole book - the endpoint doesn't
+    // take the full filter set (it has no Product/Network of its own to
+    // filter by), just master_client.
+    const largeClaimsParams = isClientLevel ? `?master_client=${encodeURIComponent(paFilters.master_client)}` : '';
+    largeClaims = await api(`/portfolio-analysis/large-claims${largeClaimsParams}`);
+  } catch (err) { largeClaims = null; /* no claims uploaded (or none for this client) - section omitted */ }
+
+  // A client-level report on a client that's already renewed can blend
+  // last year's and this year's members into one set of figures unless
+  // asked otherwise - break each policy year out separately instead of
+  // silently averaging them together, same as the on-screen "Client
+  // (Master)" filter already does for the summary table.
+  if (isClientLevel && !paPolicyYear) {
+    try {
+      policyYearBreakdown = await api(`/portfolio-analysis/summary?${paBuildFilterParams({ group_by: 'policy_year' }).toString()}`);
+    } catch (err) { policyYearBreakdown = null; }
+  }
 
   const activeFilters = Object.entries(paFilters).filter(([, v]) => v);
   const filterLabels = { product: 'Product', network: 'Network', region: 'Region', nationality_zone: 'Nationality zone', gender: 'Gender', relation: 'Relation', master_client: 'Client (Master)' };
@@ -4395,6 +4412,24 @@ async function printPortfolioManagementReport() {
     ? activeFilters.map(([k, v]) => `${filterLabels[k] || k}: ${escapeHtml(v)}`).join(' &middot; ')
     : 'Whole book - no filters applied';
   const scopeLine = `${filterSummary}${paPolicyYear ? ' &middot; Policy year: ' + escapeHtml(paPolicyYear) : ''}`;
+
+  const policyYearRows = (policyYearBreakdown && policyYearBreakdown.rows.length > 1) ? policyYearBreakdown.rows : null;
+  const policyYearHtml = policyYearRows ? `
+    <section class="rcs-section">
+      <h3>By Policy Year</h3>
+      <p class="rcs-desc">This client has more than one policy year on file (some members already renewed) - each year's own experience is shown separately here rather than blended into one figure.</p>
+      <table class="rcs-data">
+        <tr><th>Policy Year</th><th class="rcs-num">Members</th><th class="rcs-num">Earned Premium</th><th class="rcs-num">Incurred Claims</th><th class="rcs-num">LR (incl. IBNR)</th></tr>
+        ${policyYearRows.map(r => `
+          <tr>
+            <td>${escapeHtml(String(r.policy_year ?? '-'))}</td>
+            <td class="rcs-num">${r.member_count.toLocaleString()}</td>
+            <td class="rcs-num">${r.actual_premium.toLocaleString()}</td>
+            <td class="rcs-num">${(r.actual_claims + (r.ibnr || 0)).toLocaleString()}</td>
+            <td class="rcs-num"><b>${r.loss_ratio_incl_ibnr != null ? (r.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
+          </tr>`).join('')}
+      </table>
+    </section>` : '';
 
   const lrPct = execSummary.loss_ratio != null ? execSummary.loss_ratio * 100 : null;
   const crPct = execSummary.combined_ratio != null ? execSummary.combined_ratio * 100 : null;
@@ -4409,7 +4444,10 @@ async function printPortfolioManagementReport() {
   }
   keyFindings.push(`<strong>${execSummary.total_groups.toLocaleString()}</strong> groups and <strong>${execSummary.total_members.toLocaleString()}</strong> members in scope, at an average premium of <strong>AED ${execSummary.average_premium_per_member != null ? execSummary.average_premium_per_member.toLocaleString() : '-'}</strong> per member.`);
   if (largeClaims && largeClaims.recurring_high_cost_members.length) {
-    keyFindings.push(`<strong>${largeClaims.recurring_high_cost_members.length}</strong> member${largeClaims.recurring_high_cost_members.length === 1 ? '' : 's'} show a recurring high-cost claims pattern (3+ separate claims at or above AED 50,000) - whole book, not scoped to the filters above.`);
+    keyFindings.push(`<strong>${largeClaims.recurring_high_cost_members.length}</strong> member${largeClaims.recurring_high_cost_members.length === 1 ? '' : 's'} show a recurring high-cost claims pattern (3+ separate claims at or above AED 50,000)${isClientLevel ? '' : ' - whole book, not scoped to the filters above'}.`);
+  }
+  if (policyYearRows) {
+    keyFindings.push(`This client has <strong>${policyYearRows.length}</strong> policy years on file - see "By Policy Year" below for each year's own figures rather than one blended total.`);
   }
   const keyFindingsHtml = `
     <div class="rcs-findings-box">
@@ -4454,8 +4492,8 @@ async function printPortfolioManagementReport() {
       <tr><td>&ge; AED ${b.threshold.toLocaleString()}</td><td class="rcs-num">${b.claim_count.toLocaleString()}</td><td class="rcs-num">${b.total_value.toLocaleString()}</td></tr>`).join('');
     largeClaimsHtml = `
       <section class="rcs-section">
-        <h3>Large Claims &amp; High-Cost Members <span class="rcs-muted-label">(whole book)</span></h3>
-        <p class="rcs-desc">Independent of the filters set above - the claims book has no per-segment breakout, so this section always covers the entire uploaded book.</p>
+        <h3>Large Claims &amp; High-Cost Members <span class="rcs-muted-label">${isClientLevel ? '(this client)' : '(whole book)'}</span></h3>
+        <p class="rcs-desc">${isClientLevel ? 'Scoped to this client\'s own claims only.' : 'Independent of the filters set above - the claims book has no per-segment breakout beyond Client (Master), so this section covers the entire uploaded book unless a Client (Master) filter is set.'}</p>
         <table class="rcs-data" style="margin-bottom:16px;">
           <tr><th>Threshold</th><th class="rcs-num">Claim count</th><th class="rcs-num">Total value (AED)</th></tr>
           ${thresholdRows}
@@ -4467,7 +4505,7 @@ async function printPortfolioManagementReport() {
       </section>`;
   }
 
-  const title = 'Portfolio Management Report';
+  const title = isClientLevel ? `Portfolio Management Report - ${paFilters.master_client}` : 'Portfolio Management Report';
   const generatedOn = new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
 
   const html = `<!doctype html>
@@ -4519,8 +4557,8 @@ async function printPortfolioManagementReport() {
 <div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 2 &middot; Executive Summary</div><div class="rcs-doc">
   <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>Generated ${generatedOn}</div></div>
   <div class="rcs-client-block">
-    <div class="rcs-eyebrow">Whole Book &middot; Level 1</div>
-    <h1>Portfolio Management Report</h1>
+    <div class="rcs-eyebrow">${isClientLevel ? 'Client-Level &middot; Master Group' : 'Whole Book &middot; Level 1'}</div>
+    <h1>${isClientLevel ? escapeHtml(paFilters.master_client) : 'Portfolio Management Report'}</h1>
     <div class="rcs-sub">Scope: ${scopeLine}</div>
   </div>
   <div class="kpi-grid">
@@ -4534,6 +4572,7 @@ async function printPortfolioManagementReport() {
     <div class="kpi"><span class="label">Avg. premium / member</span><span class="value">${execSummary.average_premium_per_member != null ? 'AED ' + execSummary.average_premium_per_member.toLocaleString() : '-'}</span></div>
   </div>
   ${keyFindingsHtml}
+  ${policyYearHtml}
   <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
 </div></div>
 

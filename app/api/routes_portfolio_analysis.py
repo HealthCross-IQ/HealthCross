@@ -691,9 +691,12 @@ def large_claims(
     recurring_min_claim_count: int = Query(
         3, description="A member must have at least this many claim lines at or above recurring_claim_threshold to count as 'recurring'"
     ),
+    master_client: Optional[str] = Query(
+        None, description="Restrict to one master client's own claims (for a client-level report) - matches the resolved master client name, same as elsewhere"
+    ),
     db: Session = Depends(get_db),
 ):
-    """Large-loss analysis over the whole uploaded claims book - the usual
+    """Large-loss analysis over the uploaded claims book - the usual
     actuarial cut before drilling into loss ratio by segment, since one or
     two catastrophic cases can distort a small or medium-sized group's
     numbers on their own. Four views:
@@ -711,10 +714,14 @@ def large_claims(
       catastrophic claim (see recurring_high_cost_members's own
       docstring for why these are worth telling apart).
 
-    Independent of any rate card or membership upload - purely a claims
-    analysis - so it works even before those are set up.
+    Whole-book by default (independent of any rate card or membership
+    upload - purely a claims analysis, works even before those are set
+    up) - pass master_client to scope every view above to one master
+    client's own claims instead, for a client-level report.
     """
     claims = _claim_dicts_for_large_claims(db)
+    if master_client:
+        claims = [c for c in claims if c.get("client_name") == master_client]
     if not claims:
         raise HTTPException(status_code=400, detail="No claims uploaded yet")
 
