@@ -387,15 +387,20 @@ def portfolio_executive_summary(
     executive_portfolio_summary for what each one means and how Combined
     Ratio's expense_ratio_pct assumption works. Uses each client's own
     real OPEX/Loading % from the uploaded Client Master sheet wherever
-    it's on file, falling back to expense_ratio_pct otherwise.
+    it's on file (per member, matched by that member's own policy period -
+    see resolve_client_opex_pct - for a client whose loading changed
+    between renewals), falling back to expense_ratio_pct otherwise.
     """
     results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
-    opex_by_client = {
-        cm.master_client_name: cm.opex_pct
-        for cm in db.query(models.ClientMasterInfo).all()
-        if cm.opex_pct is not None
-    }
-    return executive_portfolio_summary(results, expense_ratio_pct=expense_ratio_pct, opex_by_client=opex_by_client)
+    opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
+    for cm in db.query(models.ClientMasterInfo).all():
+        if cm.opex_pct is not None:
+            opex_records_by_client[cm.master_client_name].append(
+                {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
+            )
+    return executive_portfolio_summary(
+        results, expense_ratio_pct=expense_ratio_pct, opex_records_by_client=opex_records_by_client
+    )
 
 
 @router.get("/group-size-bands")

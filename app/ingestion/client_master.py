@@ -5,8 +5,13 @@ client's own real OPEX/Loading % (commission + TPA + admin + HC/
 management fees, as a fraction of premium). Used in place of the flat
 DEFAULT_EXPENSE_RATIO_PCT assumption for Combined Ratio wherever a
 client's own real figure is on file - see
-app/scoring/rules/portfolio_analysis.py's executive_portfolio_summary.
-Product/Start Date are carried along for reference/display only.
+app/scoring/rules/portfolio_analysis.py's executive_portfolio_summary
+and resolve_client_opex_pct. A client's real loading can change from one
+renewal to the next, so the SAME client can appear on more than one row
+here, each with its own Start Date/End Date - whichever row's own date
+window covers a given member's own policy period is the one that
+applies to that member. Product is carried along for reference/display
+only.
 """
 from typing import BinaryIO, Dict, List, Optional
 
@@ -22,6 +27,7 @@ CLIENT_MASTER_ALIASES: Dict[str, List[str]] = {
     "opex_pct": ["opex", "opex %", "opex%", "opex pct", "loading", "loading %", "expense ratio", "expense ratio %"],
     "product": ["product", "product name"],
     "start_date": ["start date", "eff date", "effective date", "policy start date"],
+    "end_date": ["end date", "exp date", "expiry date", "expiration date", "policy end date"],
 }
 
 
@@ -63,6 +69,8 @@ def parse_client_master(file: BinaryIO, filename: str) -> List[dict]:
 
     if "start_date" in df.columns:
         df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
+    if "end_date" in df.columns:
+        df["end_date"] = pd.to_datetime(df["end_date"], errors="coerce")
 
     rows = []
     for _, row in df.iterrows():
@@ -70,6 +78,7 @@ def parse_client_master(file: BinaryIO, filename: str) -> List[dict]:
         if pd.isna(master_client_name) or not str(master_client_name).strip():
             continue
         start_date = row.get("start_date") if "start_date" in df.columns else None
+        end_date = row.get("end_date") if "end_date" in df.columns else None
         product = row.get("product") if "product" in df.columns else None
         rows.append(
             {
@@ -77,6 +86,7 @@ def parse_client_master(file: BinaryIO, filename: str) -> List[dict]:
                 "opex_pct": _parse_opex_pct(row.get("opex_pct")) if "opex_pct" in df.columns else None,
                 "product": str(product).strip() if pd.notna(product) else None,
                 "start_date": start_date.date() if pd.notna(start_date) else None,
+                "end_date": end_date.date() if pd.notna(end_date) else None,
                 "source_filename": filename,
             }
         )
