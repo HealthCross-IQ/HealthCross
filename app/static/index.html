@@ -4237,6 +4237,18 @@ function paLargeClaimsHtml(data) {
 }
 
 async function printPortfolioManagementReport() {
+  // window.open() must happen synchronously, in direct response to the
+  // click - opening it only after the awaited fetches below finish is no
+  // longer "tied" to the click as far as the browser's own pop-up blocker
+  // is concerned, so it gets silently killed with no error and no visible
+  // failure at all. Opening a blank tab up front and writing into it once
+  // the data arrives keeps it inside that one trusted user gesture.
+  const win = window.open('', '_blank');
+  if (!win) {
+    toast('Your browser blocked the report pop-up - allow pop-ups for this site and try again', true);
+    return;
+  }
+
   paReadFilterInputs();
   let execSummary, productSummary, networkSummary, largeClaims;
   try {
@@ -4246,6 +4258,7 @@ async function printPortfolioManagementReport() {
       api(`/portfolio-analysis/summary?${paBuildFilterParams({ group_by: 'network' }).toString()}`),
     ]);
   } catch (err) {
+    win.close();
     toast(err.message, true);
     return;
   }
@@ -4291,13 +4304,16 @@ async function printPortfolioManagementReport() {
         <td class="rcs-num">${(r.ibnr || 0).toLocaleString()}</td>
         <td class="rcs-num">${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
         <td class="rcs-num"><b>${r.loss_ratio_incl_ibnr != null ? (r.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
+        <td class="rcs-num">${r.claim_frequency != null ? r.claim_frequency.toFixed(2) : '-'}</td>
+        <td class="rcs-num">${r.claim_severity != null ? r.claim_severity.toLocaleString(undefined, {maximumFractionDigits: 0}) : '-'}</td>
       </tr>`).join('');
     return `
       <section class="rcs-section">
-        <h3>Loss Ratio (incl. IBNR) by ${escapeHtml(label)}</h3>
+        <h3>Loss Ratio (incl. IBNR), Frequency &amp; Severity by ${escapeHtml(label)}</h3>
+        <p class="rcs-desc">Frequency = claims per earned member-year (how often members claim). Severity = average AED cost per claim. A poor loss ratio driven by high frequency (many ordinary claims) calls for a different response than one driven by high severity (a few expensive ones).</p>
         <table class="rcs-data">
-          <tr><th>${escapeHtml(label)}</th><th class="rcs-num">Members</th><th class="rcs-num">Earned Premium</th><th class="rcs-num">Incurred Claims</th><th class="rcs-num">IBNR</th><th class="rcs-num">LR (actual)</th><th class="rcs-num">LR (incl. IBNR)</th></tr>
-          ${rows || '<tr><td colspan="7" class="rcs-desc">No data in this scope.</td></tr>'}
+          <tr><th>${escapeHtml(label)}</th><th class="rcs-num">Members</th><th class="rcs-num">Earned Premium</th><th class="rcs-num">Incurred Claims</th><th class="rcs-num">IBNR</th><th class="rcs-num">LR (actual)</th><th class="rcs-num">LR (incl. IBNR)</th><th class="rcs-num">Frequency</th><th class="rcs-num">Severity (AED)</th></tr>
+          ${rows || '<tr><td colspan="9" class="rcs-desc">No data in this scope.</td></tr>'}
         </table>
       </section>`;
   };
@@ -4409,7 +4425,6 @@ async function printPortfolioManagementReport() {
 <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
-  const win = window.open('', '_blank');
   win.document.write(html);
   win.document.close();
 }
