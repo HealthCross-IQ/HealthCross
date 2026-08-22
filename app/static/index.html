@@ -4018,11 +4018,12 @@ function portfolioAnalysisPanelHtml() {
           <input type="text" id="pa-policy-year-filter" placeholder="e.g. 2026" value="${escapeHtml(paPolicyYear)}" style="width:100px;">
         </div>
         <div><button class="primary" onclick="paRunAnalysis()">Run analysis</button></div>
+        <div><button onclick="printPortfolioManagementReport()">Print / Save as PDF (Management)</button></div>
       </div>
       <div class="row" id="pa-filters-row" style="align-items:flex-end; flex-wrap:wrap;">
         ${paFiltersRowHtml()}
       </div>
-      <div class="hint">Master client shows one row per master policy, combining all its subgroups - pick one from the Master client filter, then switch Group by to "Client (Subgroup)" to see that master's own subgroups broken out. Use the policy year filter when a client has already renewed - some members may still show last year's policy alongside this year's in the same upload. Stack any of the filters above together (e.g. Product=Gold + Network=MSH Platinum) to drill into a specific slice - they combine with whatever's chosen for Group by. Filter dropdowns only list values actually present in your uploaded book.</div>
+      <div class="hint">Master client shows one row per master policy, combining all its subgroups - pick one from the Master client filter, then switch Group by to "Client (Subgroup)" to see that master's own subgroups broken out. Use the policy year filter when a client has already renewed - some members may still show last year's policy alongside this year's in the same upload. Stack any of the filters above together (e.g. Product=Gold + Network=MSH Platinum) to drill into a specific slice - they combine with whatever's chosen for Group by. Filter dropdowns only list values actually present in your uploaded book. "Print / Save as PDF (Management)" reflects whatever filters are currently set above.</div>
     </div>
     <div id="pa-result-area">${paLastSummary ? paSummaryHtml(paLastSummary) : ''}</div>
     <div class="card">
@@ -4233,6 +4234,184 @@ function paLargeClaimsHtml(data) {
       ${recurringRows || '<tr><td colspan="4" class="hint">None.</td></tr>'}
     </table></div>
   `;
+}
+
+async function printPortfolioManagementReport() {
+  paReadFilterInputs();
+  let execSummary, productSummary, networkSummary, largeClaims;
+  try {
+    [execSummary, productSummary, networkSummary] = await Promise.all([
+      api(`/portfolio-analysis/executive-summary?${paBuildFilterParams().toString()}`),
+      api(`/portfolio-analysis/summary?${paBuildFilterParams({ group_by: 'product' }).toString()}`),
+      api(`/portfolio-analysis/summary?${paBuildFilterParams({ group_by: 'network' }).toString()}`),
+    ]);
+  } catch (err) {
+    toast(err.message, true);
+    return;
+  }
+  try {
+    largeClaims = await api('/portfolio-analysis/large-claims');
+  } catch (err) { largeClaims = null; /* no claims uploaded - section omitted */ }
+
+  const activeFilters = Object.entries(paFilters).filter(([, v]) => v);
+  const filterLabels = { product: 'Product', network: 'Network', region: 'Region', nationality_zone: 'Nationality zone', gender: 'Gender', relation: 'Relation', master_client: 'Client (Master)' };
+  const filterSummary = activeFilters.length
+    ? activeFilters.map(([k, v]) => `${filterLabels[k] || k}: ${escapeHtml(v)}`).join(' &middot; ')
+    : 'Whole book - no filters applied';
+  const scopeLine = `${filterSummary}${paPolicyYear ? ' &middot; Policy year: ' + escapeHtml(paPolicyYear) : ''}`;
+
+  const lrPct = execSummary.loss_ratio != null ? execSummary.loss_ratio * 100 : null;
+  const crPct = execSummary.combined_ratio != null ? execSummary.combined_ratio * 100 : null;
+  const keyFindings = [];
+  if (lrPct != null) {
+    if (lrPct >= 100) keyFindings.push(`Loss ratio (incl. IBNR) is running <strong>above</strong> premium income at <strong>${lrPct.toFixed(1)}%</strong>.`);
+    else if (lrPct <= 65) keyFindings.push(`Loss ratio (incl. IBNR) is favorable at <strong>${lrPct.toFixed(1)}%</strong>.`);
+    else keyFindings.push(`Loss ratio (incl. IBNR) stands at <strong>${lrPct.toFixed(1)}%</strong>.`);
+  }
+  if (crPct != null) {
+    keyFindings.push(`Combined ratio (loss ratio + ${(execSummary.expense_ratio_pct * 100).toFixed(0)}% assumed expense load) is <strong>${crPct.toFixed(1)}%</strong>${crPct >= 100 ? ' - the book is running at an underwriting loss once acquisition/administration cost is included' : ''}.`);
+  }
+  keyFindings.push(`<strong>${execSummary.total_groups.toLocaleString()}</strong> groups and <strong>${execSummary.total_members.toLocaleString()}</strong> members in scope, at an average premium of <strong>AED ${execSummary.average_premium_per_member != null ? execSummary.average_premium_per_member.toLocaleString() : '-'}</strong> per member.`);
+  if (largeClaims && largeClaims.recurring_high_cost_members.length) {
+    keyFindings.push(`<strong>${largeClaims.recurring_high_cost_members.length}</strong> member${largeClaims.recurring_high_cost_members.length === 1 ? '' : 's'} show a recurring high-cost claims pattern (3+ separate claims at or above AED 50,000) - whole book, not scoped to the filters above.`);
+  }
+  const keyFindingsHtml = `
+    <div class="rcs-findings-box">
+      <div class="rcs-findings-title">Key Findings</div>
+      <ul class="rcs-findings-list">${keyFindings.map(f => `<li>${f}</li>`).join('')}</ul>
+    </div>`;
+
+  const groupByLabelHtml = (label, summary) => {
+    const rows = summary.rows.map(r => `
+      <tr>
+        <td>${escapeHtml(String(r[summary.group_by]))}</td>
+        <td class="rcs-num">${r.member_count.toLocaleString()}</td>
+        <td class="rcs-num">${r.actual_premium.toLocaleString()}</td>
+        <td class="rcs-num">${r.actual_claims.toLocaleString()}</td>
+        <td class="rcs-num">${(r.ibnr || 0).toLocaleString()}</td>
+        <td class="rcs-num">${r.loss_ratio_vs_actual != null ? (r.loss_ratio_vs_actual * 100).toFixed(1) + '%' : '-'}</td>
+        <td class="rcs-num"><b>${r.loss_ratio_incl_ibnr != null ? (r.loss_ratio_incl_ibnr * 100).toFixed(1) + '%' : '-'}</b></td>
+      </tr>`).join('');
+    return `
+      <section class="rcs-section">
+        <h3>Loss Ratio (incl. IBNR) by ${escapeHtml(label)}</h3>
+        <table class="rcs-data">
+          <tr><th>${escapeHtml(label)}</th><th class="rcs-num">Members</th><th class="rcs-num">Earned Premium</th><th class="rcs-num">Incurred Claims</th><th class="rcs-num">IBNR</th><th class="rcs-num">LR (actual)</th><th class="rcs-num">LR (incl. IBNR)</th></tr>
+          ${rows || '<tr><td colspan="7" class="rcs-desc">No data in this scope.</td></tr>'}
+        </table>
+      </section>`;
+  };
+
+  let largeClaimsHtml = '';
+  if (largeClaims) {
+    const topClaimsRows = largeClaims.top_claims.slice(0, 10).map(c => `
+      <tr>
+        <td>${escapeHtml(c.client_name || c.group_name || '-')}</td>
+        <td>${escapeHtml(c.diagnosis_description || '-')}</td>
+        <td>${c.date_of_treatment || '-'}</td>
+        <td class="rcs-num">${c.final_amount.toLocaleString()}</td>
+      </tr>`).join('');
+    const thresholdRows = largeClaims.threshold_buckets.map(b => `
+      <tr><td>&ge; AED ${b.threshold.toLocaleString()}</td><td class="rcs-num">${b.claim_count.toLocaleString()}</td><td class="rcs-num">${b.total_value.toLocaleString()}</td></tr>`).join('');
+    largeClaimsHtml = `
+      <section class="rcs-section">
+        <h3>Large Claims &amp; High-Cost Members <span class="rcs-muted-label">(whole book)</span></h3>
+        <p class="rcs-desc">Independent of the filters set above - the claims book has no per-segment breakout, so this section always covers the entire uploaded book.</p>
+        <table class="rcs-data" style="margin-bottom:16px;">
+          <tr><th>Threshold</th><th class="rcs-num">Claim count</th><th class="rcs-num">Total value (AED)</th></tr>
+          ${thresholdRows}
+        </table>
+        <table class="rcs-data">
+          <tr><th>Client</th><th>Diagnosis</th><th>Date</th><th class="rcs-num">Amount (AED)</th></tr>
+          ${topClaimsRows || '<tr><td colspan="4" class="rcs-desc">No data.</td></tr>'}
+        </table>
+      </section>`;
+  }
+
+  const title = 'Portfolio Management Report';
+  const generatedOn = new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'});
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f8f7f4; color: #14213d; font-variant-numeric: tabular-nums; padding: 30px 16px; }
+  .rcs-paper { max-width: 860px; margin: 0 auto 24px; }
+  .rcs-page-tag { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #837e6d; margin-bottom: 6px; }
+  .rcs-doc { background: #fdfcf9; border: 1px solid rgba(20,33,61,0.10); border-radius: 2px; box-shadow: 0 1px 3px rgba(20,33,61,0.06); padding: 40px 44px; page-break-after: always; }
+  .rcs-doc-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #14213d; padding-bottom: 14px; margin-bottom: 22px; }
+  .rcs-brand { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+  .rcs-brand span { color: #837e6d; font-family: 'IBM Plex Mono', monospace; font-weight: 400; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-top: 3px; }
+  .rcs-meta { text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #837e6d; line-height: 1.7; }
+  .rcs-client-block { margin-bottom: 20px; }
+  .rcs-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #b3752c; margin-bottom: 7px; }
+  .rcs-client-block h1 { font-family: 'Fraunces', serif; font-size: 24px; margin: 0 0 5px; font-weight: 600; letter-spacing: -0.01em; }
+  .rcs-client-block .rcs-sub { font-size: 12px; color: #4a4738; }
+  .rcs-hero-row { display: flex; align-items: flex-end; gap: 26px; margin-bottom: 22px; flex-wrap: wrap; }
+  .rcs-hero-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #837e6d; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
+  .rcs-hero-value { font-family: 'IBM Plex Mono', monospace; font-size: 26px; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
+  .rcs-hero-value.rcs-muted { color: #837e6d; font-weight: 400; }
+  .rcs-findings-box { border-left: 2px solid #b3752c; padding: 2px 0 2px 18px; margin-bottom: 24px; }
+  .rcs-findings-title { font-family: 'Fraunces', serif; font-style: italic; font-weight: 500; font-size: 14px; color: #14213d; margin-bottom: 9px; }
+  .rcs-findings-list { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.6; color: #33301f; }
+  .rcs-findings-list li { padding: 7px 0; border-top: 1px solid #e7e3d6; }
+  .rcs-findings-list li:first-child { border-top: none; padding-top: 0; }
+  .rcs-findings-list strong { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: #14213d; }
+  section.rcs-section { margin-bottom: 24px; }
+  section.rcs-section h3 { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 0 0 4px; }
+  .rcs-desc { font-size: 11px; color: #837e6d; margin: 0 0 11px; line-height: 1.5; }
+  .rcs-muted-label { font-weight: 400; color: #837e6d; font-size: 9.5px; }
+  table.rcs-data { width: 100%; border-collapse: collapse; font-size: 11.5px; }
+  table.rcs-data th { text-align: left; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #837e6d; font-weight: 500; padding: 0 9px 7px 0; border-bottom: 1.5px solid #14213d; }
+  table.rcs-data td { padding: 8px 9px 8px 0; border-bottom: 1px solid #e7e3d6; font-family: 'IBM Plex Mono', monospace; }
+  table.rcs-data td:first-child { font-family: 'IBM Plex Sans', sans-serif; }
+  .rcs-num { text-align: right; }
+  .kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 20px; }
+  .kpi-grid .kpi { border-top: 2px solid #14213d; padding-top: 8px; }
+  .kpi-grid .kpi .label { display: block; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; color: #837e6d; margin-bottom: 5px; }
+  .kpi-grid .kpi .value { display: block; font-family: 'IBM Plex Mono', monospace; font-size: 17px; font-weight: 600; }
+  .rcs-doc-footer { border-top: 1px solid #e7e3d6; padding-top: 12px; margin-top: 26px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #837e6d; display: flex; justify-content: space-between; }
+  @media print { .rcs-doc { border: none; box-shadow: none; } body { background: #fff; padding: 0; } }
+</style></head><body>
+
+<div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 2 &middot; Executive Summary</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>Generated ${generatedOn}</div></div>
+  <div class="rcs-client-block">
+    <div class="rcs-eyebrow">Whole Book &middot; Level 1</div>
+    <h1>Portfolio Management Report</h1>
+    <div class="rcs-sub">Scope: ${scopeLine}</div>
+  </div>
+  <div class="kpi-grid">
+    <div class="kpi"><span class="label">Total groups</span><span class="value">${execSummary.total_groups.toLocaleString()}</span></div>
+    <div class="kpi"><span class="label">Total members</span><span class="value">${execSummary.total_members.toLocaleString()}</span></div>
+    <div class="kpi"><span class="label">Written premium</span><span class="value">AED ${execSummary.written_premium.toLocaleString()}</span></div>
+    <div class="kpi"><span class="label">Earned premium</span><span class="value">AED ${execSummary.earned_premium.toLocaleString()}</span></div>
+    <div class="kpi"><span class="label">Incurred claims</span><span class="value">AED ${execSummary.incurred_claims.toLocaleString()}</span></div>
+    <div class="kpi"><span class="label">Loss ratio</span><span class="value">${lrPct != null ? lrPct.toFixed(1) + '%' : '-'}</span></div>
+    <div class="kpi"><span class="label">Combined ratio</span><span class="value">${crPct != null ? crPct.toFixed(1) + '%' : '-'}</span></div>
+    <div class="kpi"><span class="label">Avg. premium / member</span><span class="value">${execSummary.average_premium_per_member != null ? 'AED ' + execSummary.average_premium_per_member.toLocaleString() : '-'}</span></div>
+  </div>
+  ${keyFindingsHtml}
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
+</div></div>
+
+<div class="rcs-paper"><div class="rcs-page-tag">Page 2 of 2 &middot; Loss Ratio &amp; Large Claims</div><div class="rcs-doc">
+  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Portfolio Management Report<br>${escapeHtml(scopeLine.replace(/<[^>]+>/g, ''))}</div></div>
+  ${groupByLabelHtml('Product', productSummary)}
+  ${groupByLabelHtml('Network', networkSummary)}
+  ${largeClaimsHtml}
+  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>Internal - not for distribution to broker or client</span></div>
+</div></div>
+
+<script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
 
 async function paLoadAgeGenderBurningCost() {

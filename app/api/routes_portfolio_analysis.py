@@ -612,10 +612,31 @@ def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
     """Every uploaded claim line's own group_name/client_name/provider_name
     are already denormalized onto PortfolioClaimEntry itself (a book-wide
     export carries its own group identity per row - see
-    app/ingestion/portfolio_claims.py) - so, unlike _run_analysis, this
-    never needs to join against PortfolioMember or a rate card at all.
-    Large-claims analysis is purely about the claim lines themselves.
+    app/ingestion/portfolio_claims.py), but that denormalized client_name
+    is the raw SUBGROUP name on the claims export, not the master policy -
+    the same subgroup fragmentation _run_analysis resolves away via
+    resolve_master_client for every other view. `client_name` here is
+    overridden with the resolved master client name (falling back to the
+    claim's own raw client_name only for a patient_id with no matching
+    PortfolioMember row), so large-claims/high-cost-member analysis rolls
+    up by master client just like everything else, instead of splintering
+    one group across its own subgroups.
     """
+    subgroup_master_by_name: Dict[str, str] = {
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+    }
+    master_client_by_beneficiary: Dict[str, str] = {
+        m.beneficiary_id: resolve_master_client(
+            {"contract": m.contract, "master_contract": m.master_contract, "master_client_name": m.master_client_name},
+            subgroup_master_by_name,
+        )
+        for m in db.query(
+            models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
+            models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name,
+        ).all()
+        if m.beneficiary_id
+    }
+
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
         models.PortfolioClaimEntry.group_name,
@@ -629,7 +650,7 @@ def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
         {
             "patient_id": patient_id,
             "group_name": group_name,
-            "client_name": client_name,
+            "client_name": master_client_by_beneficiary.get(patient_id) or client_name,
             "provider_name": provider_name,
             "diagnosis_description": diagnosis_description,
             "date_of_treatment": date_of_treatment,

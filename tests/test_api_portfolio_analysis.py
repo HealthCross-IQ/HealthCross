@@ -362,6 +362,44 @@ def test_large_claims_returns_top_claims_top_members_thresholds_and_recurring(cl
     assert body["recurring_high_cost_members"][0]["large_claim_count"] == 3
 
 
+def test_large_claims_resolves_client_name_to_master_client(
+    client, tmp_path, members_unreliable_master_field_xlsx, master_mapping_for_unreliable_xlsx,
+):
+    with open(members_unreliable_master_field_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(master_mapping_for_unreliable_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/subgroup-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
+
+    claims_path = _write_xlsx(
+        tmp_path,
+        "claims_two_subgroups.xlsx",
+        CLAIMS_HEADER,
+        [
+            ["ACM0001", "CLM1", "Paid Claims", "Acme Sub A", "Acme Sub A", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis", 65000.0, 60000.0],
+            ["ACM0002", "CLM2", "Paid Claims", "Acme Sub B", "Acme Sub B", "QC1-ACM-B",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-07-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis", 75000.0, 70000.0],
+        ],
+    )
+    with open(claims_path, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("claims.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/large-claims")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    # Both subgroups map to the same master client - large-claims should roll
+    # up under "Acme Holdings", not splinter into "Acme Sub A"/"Acme Sub B".
+    client_names = {c["client_name"] for c in body["top_claims"]}
+    assert client_names == {"Acme Holdings"}
+    member_client_names = {m["client_name"] for m in body["top_members"]}
+    assert member_client_names == {"Acme Holdings"}
+
+
 def test_upload_group_product_mapping_ingests_rows(client, mapping_xlsx):
     with open(mapping_xlsx, "rb") as f:
         resp = client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
