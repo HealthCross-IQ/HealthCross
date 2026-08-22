@@ -2104,7 +2104,6 @@ function renderCaseWorkspace() {
       <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('benefits', 'Table of Benefits')">Print / Save as PDF</button></div>
       <div id="benefits-summary-area"></div>
       <div style="margin:10px 0;"><button onclick="addManualBenefitPlan()">+ Add category manually</button></div>
-      <div id="premium-by-category-area"></div>
       <div id="benefits-comparison-area"></div>
     </div>
 
@@ -2144,6 +2143,10 @@ function renderCaseWorkspace() {
       <div class="rb-scope">
         <div id="renewal-bench-header-area"></div>
         <div id="renewal-bench-kpi-area"></div>
+        <div class="rb-grid-2">
+          <div id="renewal-bench-existing-premium-area"></div>
+          <div id="premium-by-category-area"></div>
+        </div>
         <div class="rb-grid-2">
           <div id="renewal-bench-donut-area"></div>
           <div id="renewal-bench-trend-area"></div>
@@ -3174,31 +3177,37 @@ async function loadPremiumByCategory() {
     const p = await api(`/cases/${currentCase.id}/premium-by-category`);
     _setUploadStatus('quote', `${p.categories.length} categor${p.categories.length === 1 ? 'y' : 'ies'} uploaded`);
     area.innerHTML = `
-      <div class="card">
-        <h3>Premium per category</h3>
-        <table>
-          <tr><th>Category</th><th>Plan</th><th>Network</th><th>Members</th><th>Gross premium</th><th>Premium / member</th></tr>
+      <div class="rb-card">
+        <div class="rb-card-title">Portal-quoted premium (per category)</div>
+        <div class="rb-card-sub">The alternate insurer's quote uploaded on the Benefits tab, for comparison against the existing/computed premium alongside it.</div>
+        <table class="rb-table">
+          <tr><th>Category</th><th>Plan</th><th>Network</th><th class="num">Members</th><th class="num">Gross premium</th><th class="num">Premium / member</th></tr>
           ${p.categories.map(c => `
             <tr>
               <td>${escapeHtml(c.category || '-')}</td>
               <td>${escapeHtml(c.plan_name || '-')}</td>
               <td>${escapeHtml(c.network || '-')}</td>
-              <td>${c.member_count ?? '-'}</td>
-              <td>${c.gross_premium != null ? c.gross_premium.toLocaleString() : '-'}</td>
-              <td>${c.premium_per_member != null ? c.premium_per_member.toLocaleString() : '-'}</td>
+              <td class="num">${c.member_count ?? '-'}</td>
+              <td class="num">AED ${c.gross_premium != null ? c.gross_premium.toLocaleString() : '-'}</td>
+              <td class="num">${c.premium_per_member != null ? 'AED ' + c.premium_per_member.toLocaleString() : '-'}</td>
             </tr>
           `).join('')}
           <tr>
             <th>Blended total</th><th></th><th></th>
-            <th>${p.total_members}</th>
-            <th>${p.total_gross_premium.toLocaleString()}</th>
-            <th>${p.blended_premium_per_member != null ? p.blended_premium_per_member.toLocaleString() : '-'}</th>
+            <th class="num">${p.total_members}</th>
+            <th class="num">AED ${p.total_gross_premium.toLocaleString()}</th>
+            <th class="num">${p.blended_premium_per_member != null ? 'AED ' + p.blended_premium_per_member.toLocaleString() : '-'}</th>
           </tr>
         </table>
       </div>
     `;
   } catch (err) {
-    area.innerHTML = '';
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Portal-quoted premium (per category)</div>
+        <div class="rb-card-sub">No alternate quote uploaded yet - see the Benefits tab.</div>
+      </div>
+    `;
   }
 }
 
@@ -3951,6 +3960,39 @@ function _rbClaimsTrendHtml(trend) {
   `;
 }
 
+function _rbExistingPremiumHtml(existing) {
+  if (!existing) return '';
+  const rows = existing.categories.map(c => `
+    <tr>
+      <td>${escapeHtml(c.category)}</td>
+      <td class="num">${c.rated_member_count} / ${c.member_count}</td>
+      <td class="num">${c.avg_rate != null ? 'AED ' + Math.round(c.avg_rate).toLocaleString() : '-'}</td>
+      <td class="num">AED ${Math.round(c.total_premium).toLocaleString()}</td>
+    </tr>
+  `).join('');
+  const showDiscrepancy = existing.discrepancy_pct != null && Math.abs(existing.discrepancy_pct) >= 2;
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Existing premium (computed)</div>
+      <div class="rb-card-sub">Bottom-up from the active list's own existing rate x current headcount, by category - not a manually-typed figure.</div>
+      <div class="rb-kpi-strip" style="grid-template-columns:1fr 1fr; margin-bottom:14px;">
+        ${_rbKpi('Total existing premium', `AED ${Math.round(existing.total_existing_premium).toLocaleString()}`, `${existing.rated_members} of ${existing.total_members} members rated (${existing.coverage_pct != null ? existing.coverage_pct : 0}%)`)}
+        ${_rbKpi('On case record', existing.current_annual_premium_on_case != null ? `AED ${Math.round(existing.current_annual_premium_on_case).toLocaleString()}` : 'Not set', 'current_annual_premium')}
+      </div>
+      ${existing.categories.length ? `<table class="rb-table"><tr><th>Category</th><th class="num">Rated / Members</th><th class="num">Avg rate</th><th class="num">Total</th></tr>${rows}</table>` : ''}
+      ${showDiscrepancy ? `
+        <div class="rb-insight sev-critical" style="margin-top:14px;">
+          <div class="rb-insight-icon">⚠</div>
+          <div>
+            <span class="rb-insight-tag">Discrepancy</span>
+            <div class="rb-insight-text">The computed total differs from the case's own current annual premium by <b>${existing.discrepancy_pct > 0 ? '+' : ''}${existing.discrepancy_pct}%</b> - worth checking whether member rates or the case's current_annual_premium is out of date.</div>
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  `;
+}
+
 const RB_DONUT_COLORS = ['var(--rb-accent)', 'var(--rb-secondary)', 'var(--rb-good)', 'var(--rb-warning)', 'var(--rb-critical)'];
 
 function _rbDonutHtml(breakdown) {
@@ -3992,20 +4034,23 @@ let _rbLastSummary = null;
 async function loadRenewalBenchSummary() {
   const headerArea = document.getElementById('renewal-bench-header-area');
   const kpiArea = document.getElementById('renewal-bench-kpi-area');
+  const existingPremiumArea = document.getElementById('renewal-bench-existing-premium-area');
   const donutArea = document.getElementById('renewal-bench-donut-area');
   const trendArea = document.getElementById('renewal-bench-trend-area');
-  if (!headerArea && !kpiArea && !donutArea && !trendArea) return;
+  if (!headerArea && !kpiArea && !existingPremiumArea && !donutArea && !trendArea) return;
   try {
     const r = await api(`/cases/${currentCase.id}/renewal-bench-summary`);
     _rbLastSummary = r;
     if (headerArea) headerArea.innerHTML = _rbHeaderHtml(r.case_identity);
     if (kpiArea) kpiArea.innerHTML = _rbKpiStripHtml(r.kpis);
+    if (existingPremiumArea) existingPremiumArea.innerHTML = _rbExistingPremiumHtml(r.existing_premium);
     if (donutArea) donutArea.innerHTML = _rbDonutHtml(r.claims_cost_breakdown);
     if (trendArea) trendArea.innerHTML = _rbClaimsTrendHtml(r.claims_trend);
     renderRenewalBenchPremiumAndDrivers(r);
   } catch (err) {
     if (headerArea) headerArea.innerHTML = '';
     if (kpiArea) kpiArea.innerHTML = '';
+    if (existingPremiumArea) existingPremiumArea.innerHTML = '';
     if (donutArea) donutArea.innerHTML = '';
     if (trendArea) trendArea.innerHTML = '';
   }

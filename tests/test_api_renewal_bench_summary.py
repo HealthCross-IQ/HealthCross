@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from app.models import db_models as models
 
 
@@ -151,3 +153,21 @@ def test_renewal_bench_summary_claims_trend_reflects_real_report_history(client)
         {"year": 2024, "total_paid": 200_000},
         {"year": 2025, "total_paid": 260_000},
     ]
+
+
+def test_renewal_bench_summary_flags_a_discrepancy_between_computed_and_current_premium(client):
+    case_id = _base_case(client)  # current_annual_premium set to 3,000,000, 20 members
+    db = client.db_session_local()
+    for m in db.query(models.CensusRecord).filter_by(case_id=case_id).all():
+        m.category = "A"
+        m.existing_annual_rate = 100_000  # 20 members x 100,000 = 2,000,000 computed total
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/renewal-bench-summary")
+    existing = resp.json()["existing_premium"]
+
+    assert existing["total_existing_premium"] == 2_000_000.0
+    assert existing["coverage_pct"] == 100.0
+    assert existing["current_annual_premium_on_case"] == 3_000_000.0
+    assert existing["discrepancy_pct"] == pytest.approx(-33.33, abs=0.01)

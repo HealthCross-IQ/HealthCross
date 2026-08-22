@@ -1,6 +1,7 @@
 from app.scoring.rules.renewal_bench_metrics import (
     case_claim_kpis,
     census_change_pct_from_snapshots,
+    existing_premium_breakdown,
     renewal_drivers,
 )
 
@@ -119,3 +120,41 @@ def test_renewal_drivers_rejects_loading_pct_out_of_range():
 
     with pytest.raises(ValueError):
         renewal_drivers(100_000, 107_500, 500_000, 1.0)
+
+
+def test_existing_premium_breakdown_sums_rates_by_category():
+    members = [
+        {"category": "A", "existing_annual_rate": 10_000},
+        {"category": "A", "existing_annual_rate": 12_000},
+        {"category": "B", "existing_annual_rate": 8_000},
+        {"category": "B", "existing_annual_rate": None},
+        {"category": None, "existing_annual_rate": 5_000},
+    ]
+    result = existing_premium_breakdown(members)
+
+    assert result["total_members"] == 5
+    assert result["rated_members"] == 4
+    assert result["coverage_pct"] == 80.0
+    assert result["total_existing_premium"] == 35_000.0
+    assert result["categories"] == [
+        {"category": "A", "member_count": 2, "rated_member_count": 2, "total_premium": 22_000.0, "avg_rate": 11_000.0},
+        {"category": "B", "member_count": 2, "rated_member_count": 1, "total_premium": 8_000.0, "avg_rate": 8_000.0},
+        {"category": "Unspecified", "member_count": 1, "rated_member_count": 1, "total_premium": 5_000.0, "avg_rate": 5_000.0},
+    ]
+
+
+def test_existing_premium_breakdown_handles_empty_census():
+    result = existing_premium_breakdown([])
+    assert result["total_members"] == 0
+    assert result["coverage_pct"] is None
+    assert result["total_existing_premium"] == 0.0
+    assert result["categories"] == []
+
+
+def test_existing_premium_breakdown_handles_no_rates_set_at_all():
+    members = [{"category": "A", "existing_annual_rate": None}, {"category": "A", "existing_annual_rate": None}]
+    result = existing_premium_breakdown(members)
+    assert result["rated_members"] == 0
+    assert result["coverage_pct"] == 0.0
+    assert result["total_existing_premium"] == 0.0
+    assert result["categories"][0]["avg_rate"] is None

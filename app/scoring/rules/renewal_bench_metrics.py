@@ -8,6 +8,59 @@ one opaque percentage - matching the approved Renewal Bench mockup.
 from typing import List, Optional
 
 
+def existing_premium_breakdown(members: List[dict]) -> dict:
+    """Total existing premium built bottom-up from the CURRENT active/
+    membership list's own per-member existing_annual_rate - headcount x
+    rate, by category - rather than relying on a single manually-typed
+    current_annual_premium figure. This is what the Renewal Bench's
+    "Existing" leg (alongside Renewal-required and the Portal-generated
+    quote) is built from, and what auto-populates a case's own
+    current_annual_premium the first time member rates are saved (see
+    app.api.routes_analysis's update_member_rates/import_member_rate_card)
+    - a case can still override it manually afterward.
+
+    Each member dict needs "category" (nullable) and
+    "existing_annual_rate" (nullable - a member without a rate set yet
+    simply doesn't contribute to total_existing_premium, but still counts
+    toward total_members so coverage_pct reflects how much of the census
+    actually has a rate on file).
+    """
+    by_category: dict = {}
+    total_members = len(members)
+    rated_members = 0
+    total_existing_premium = 0.0
+
+    for m in members:
+        category = m.get("category") or "Unspecified"
+        bucket = by_category.setdefault(category, {"member_count": 0, "rated_member_count": 0, "total_premium": 0.0})
+        bucket["member_count"] += 1
+        rate = m.get("existing_annual_rate")
+        if rate is not None:
+            bucket["rated_member_count"] += 1
+            bucket["total_premium"] += rate
+            rated_members += 1
+            total_existing_premium += rate
+
+    categories = [
+        {
+            "category": category,
+            "member_count": bucket["member_count"],
+            "rated_member_count": bucket["rated_member_count"],
+            "total_premium": round(bucket["total_premium"], 2),
+            "avg_rate": round(bucket["total_premium"] / bucket["rated_member_count"], 2) if bucket["rated_member_count"] else None,
+        }
+        for category, bucket in sorted(by_category.items())
+    ]
+
+    return {
+        "categories": categories,
+        "total_members": total_members,
+        "rated_members": rated_members,
+        "coverage_pct": round(rated_members / total_members * 100, 1) if total_members else None,
+        "total_existing_premium": round(total_existing_premium, 2),
+    }
+
+
 def case_claim_kpis(
     claims: List[dict],
     census_member_count: int,

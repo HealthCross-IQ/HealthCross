@@ -39,6 +39,7 @@ from app.scoring.rules.portfolio_analysis import (
 from app.scoring.rules.renewal_bench_metrics import (
     case_claim_kpis,
     census_change_pct_from_snapshots,
+    existing_premium_breakdown,
     renewal_drivers,
 )
 from app.scoring.rules.renewal_rating import (
@@ -1203,6 +1204,22 @@ def get_renewal_bench_summary(
     )
     claims_trend = [{"year": r.report_period_start.year, "total_paid": r.total_paid} for r in reports]
 
+    existing_premium = existing_premium_breakdown(
+        [{"category": c.category, "existing_annual_rate": c.existing_annual_rate} for c in case.census_records]
+    )
+    # A cross-check, not a silent override: current_annual_premium is the
+    # figure actually used everywhere above (loss ratio, drivers, etc) - if
+    # the bottom-up rates x headcount total disagrees with it by more than
+    # 2%, that's worth flagging to the underwriter as a data-quality signal
+    # rather than quietly trusting whichever number happened to be typed in.
+    existing_premium["current_annual_premium_on_case"] = case.current_annual_premium
+    if existing_premium["total_existing_premium"] and case.current_annual_premium:
+        existing_premium["discrepancy_pct"] = round(
+            (existing_premium["total_existing_premium"] / case.current_annual_premium - 1) * 100, 2
+        )
+    else:
+        existing_premium["discrepancy_pct"] = None
+
     return {
         "case_identity": {
             "company_name": case.company_name,
@@ -1216,6 +1233,7 @@ def get_renewal_bench_summary(
         "kpis": kpis,
         "claims_cost_breakdown": claims_cost_breakdown,
         "claims_trend": claims_trend,
+        "existing_premium": existing_premium,
         "drivers": drivers,
     }
 
@@ -1525,10 +1543,35 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
             renewal_increase_pct = renewal["renewal_increase_pct"]
 
     members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
-    response = {"case_renewal_increase_pct": renewal_increase_pct, "members": members}
+    existing_premium = existing_premium_breakdown(
+        [{"category": m.category, "existing_annual_rate": m.existing_annual_rate} for m in case.census_records]
+    )
+    response = {
+        "case_renewal_increase_pct": renewal_increase_pct,
+        "members": members,
+        "existing_premium": existing_premium,
+    }
     if extra:
         response.update(extra)
     return response
+
+
+def _maybe_auto_populate_current_premium(case: models.Case, db: Session) -> None:
+    """The first time member rates make a bottom-up existing-premium total
+    computable, auto-populate case.current_annual_premium from it rather
+    than requiring it be typed in separately - see existing_premium_breakdown.
+    Never overwrites an already-set current_annual_premium (a manual entry
+    or an earlier auto-populate stands until the case itself is updated via
+    PATCH /cases/{id}), and only populates when every rated member actually
+    contributes (total_existing_premium > 0)."""
+    if case.current_annual_premium is not None:
+        return
+    computed = existing_premium_breakdown(
+        [{"category": m.category, "existing_annual_rate": m.existing_annual_rate} for m in case.census_records]
+    )
+    if computed["total_existing_premium"]:
+        case.current_annual_premium = computed["total_existing_premium"]
+        db.commit()
 
 
 @router.get("/{case_id}/member-rates")
@@ -1561,6 +1604,7 @@ def update_member_rates(case_id: int, rates: List[schemas.MemberRateIn], db: Ses
         member.new_annual_rate_override = rate.new_annual_rate_override
 
     db.commit()
+    _maybe_auto_populate_current_premium(case, db)
     return _member_rates_response(case)
 
 
@@ -1601,6 +1645,7 @@ async def import_member_rate_card(case_id: int, file: UploadFile = File(...), db
             })
 
     db.commit()
+    _maybe_auto_populate_current_premium(case, db)
     return _member_rates_response(case, extra={
         "matched_count": matched_count,
         "unmatched": unmatched,

@@ -775,6 +775,62 @@ def test_member_rates_404s_for_missing_case(client):
     assert resp.status_code == 404
 
 
+def test_member_rates_response_includes_existing_premium_breakdown(client):
+    case_id = _create_case(client)
+    _insert_census(
+        client,
+        case_id,
+        [
+            {"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee", "category": "A"},
+            {"employee_ref": "E2", "age": 35, "gender": "F", "relation": "spouse", "category": "A"},
+        ],
+    )
+    resp = client.get(f"/cases/{case_id}/member-rates")
+    existing = resp.json()["existing_premium"]
+    assert existing["total_members"] == 2
+    assert existing["rated_members"] == 0  # no rates set yet
+    assert existing["total_existing_premium"] == 0.0
+
+
+def test_member_rates_patch_auto_populates_current_annual_premium_when_unset(client):
+    case_id = _create_case(client)
+    _insert_census(
+        client,
+        case_id,
+        [
+            {"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee", "category": "A"},
+            {"employee_ref": "E2", "age": 35, "gender": "F", "relation": "spouse", "category": "A"},
+        ],
+    )
+    members = client.get(f"/cases/{case_id}/member-rates").json()["members"]
+    assert client.get(f"/cases/{case_id}").json()["current_annual_premium"] is None
+
+    patch_resp = client.patch(
+        f"/cases/{case_id}/member-rates",
+        json=[
+            {"census_record_id": members[0]["census_record_id"], "existing_annual_rate": 10_000},
+            {"census_record_id": members[1]["census_record_id"], "existing_annual_rate": 12_000},
+        ],
+    )
+    assert patch_resp.json()["existing_premium"]["total_existing_premium"] == 22_000.0
+    # Auto-populated from the bottom-up rates total, since current_annual_premium was unset.
+    assert client.get(f"/cases/{case_id}").json()["current_annual_premium"] == 22_000.0
+
+
+def test_member_rates_patch_never_overwrites_an_already_set_current_annual_premium(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 500_000})
+    _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
+    census_record_id = client.get(f"/cases/{case_id}/member-rates").json()["members"][0]["census_record_id"]
+
+    client.patch(
+        f"/cases/{case_id}/member-rates",
+        json=[{"census_record_id": census_record_id, "existing_annual_rate": 10_000}],
+    )
+    # 10,000 (the bottom-up total) must NOT silently replace the manually-set 500,000.
+    assert client.get(f"/cases/{case_id}").json()["current_annual_premium"] == 500_000
+
+
 def _rate_card_xlsx_bytes():
     import openpyxl
 
