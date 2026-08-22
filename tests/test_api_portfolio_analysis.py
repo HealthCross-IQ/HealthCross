@@ -558,6 +558,41 @@ def test_executive_summary_uses_real_client_opex_from_client_master_upload(clien
     assert resp.json()["expense_ratio_pct"] == 0.20
 
 
+def test_executive_summary_uses_the_client_master_row_matching_the_members_own_policy_period(
+    client, tmp_path, rate_card_xlsx,
+):
+    # Same client, uploaded with TWO dated OPEX records (a lower loading
+    # for its 2025 policy year, a higher one after it renewed into 2026) -
+    # the member's own policy_start_date should pick the record that
+    # actually covers it, not just whichever row came first.
+    members_path = _write_xlsx(
+        tmp_path, "members_dated_opex.xlsx", MEMBERS_HEADER,
+        [["Acme Holdings", "Acme Holdings", "P1", "QC-A1", "A1", "1990-01-01", "M", "Single", "India", "Principal",
+          "Dubai", "QIC/HC/BR/A", "PLATINUM", "2026-01-01", "2027-01-01", "2026-01-01", "2027-01-01", 1000, 1000, None, None, 100]],
+    )
+    with open(members_path, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    client_master_path = _write_xlsx(
+        tmp_path, "client_master_dated.xlsx", ["Client Name (Master)", "OPEX", "Start Date", "End Date"],
+        [
+            ["Acme Holdings", 0.20, "2025-01-01", "2025-12-31"],
+            ["Acme Holdings", 0.28, "2026-01-01", "2026-12-31"],
+        ],
+    )
+    with open(client_master_path, "rb") as f:
+        resp = client.post("/portfolio-analysis/client-master/upload", files={"file": ("client_master.xlsx", f, "application/octet-stream")})
+    assert resp.json()["rows_ingested"] == 2
+
+    resp = client.get("/portfolio-analysis/executive-summary")
+    assert resp.status_code == 200
+    # This member's own policy_start_date (2026-01-01) falls in the SECOND
+    # record's window - 0.28, not the first record's 0.20.
+    assert resp.json()["expense_ratio_pct"] == 0.28
+
+
 def test_group_size_bands_pools_groups_by_headcount_band(client, tmp_path, rate_card_xlsx):
     members_path = _write_xlsx(
         tmp_path,

@@ -14,6 +14,7 @@ from app.scoring.rules.portfolio_analysis import (
     ibnr_for_member,
     normalize_subgroup_key,
     recurring_high_cost_members,
+    resolve_client_opex_pct,
     resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
@@ -445,14 +446,43 @@ def test_executive_portfolio_summary_uses_real_client_opex_where_uploaded():
             _member(beneficiary_id="M2", contract="No Opex Co", master_contract="No Opex Co"), {}, RATE_CARDS, [], {},
         ),
     ]
-    summary = executive_portfolio_summary(results, opex_by_client={"Has Opex Co": 0.20})
+    summary = executive_portfolio_summary(
+        results, opex_records_by_client={"Has Opex Co": [{"start_date": None, "end_date": None, "opex_pct": 0.20}]}
+    )
     assert summary["expense_ratio_pct"] == round((0.20 + 0.33) / 2, 4)
 
 
 def test_executive_portfolio_summary_blends_opex_when_no_client_has_a_real_figure():
     results = [analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {})]
-    summary = executive_portfolio_summary(results, opex_by_client={})
+    summary = executive_portfolio_summary(results, opex_records_by_client={})
     assert summary["expense_ratio_pct"] == DEFAULT_EXPENSE_RATIO_PCT
+
+
+def test_resolve_client_opex_pct_picks_the_record_covering_the_members_policy_period():
+    # Same client renewed with a DIFFERENT loading each year - each
+    # member's own policy_start_date should pick the record that
+    # actually covers their own policy period, not just the first/last one.
+    records = {
+        "Acme Holdings": [
+            {"start_date": date(2024, 1, 1), "end_date": date(2024, 12, 31), "opex_pct": 0.30},
+            {"start_date": date(2025, 1, 1), "end_date": date(2025, 12, 31), "opex_pct": 0.22},
+        ]
+    }
+    assert resolve_client_opex_pct("Acme Holdings", date(2024, 6, 1), records, DEFAULT_EXPENSE_RATIO_PCT) == 0.30
+    assert resolve_client_opex_pct("Acme Holdings", date(2025, 6, 1), records, DEFAULT_EXPENSE_RATIO_PCT) == 0.22
+
+
+def test_resolve_client_opex_pct_falls_back_to_default_outside_any_covered_window():
+    records = {"Acme Holdings": [{"start_date": date(2025, 1, 1), "end_date": date(2025, 12, 31), "opex_pct": 0.22}]}
+    assert resolve_client_opex_pct("Acme Holdings", date(2026, 6, 1), records, DEFAULT_EXPENSE_RATIO_PCT) == DEFAULT_EXPENSE_RATIO_PCT
+
+
+def test_resolve_client_opex_pct_uses_the_single_undated_record_regardless_of_policy_start():
+    # The common case - a client with just one flat OPEX figure, no dates
+    # at all, should apply regardless of the member's own policy period.
+    records = {"Acme Holdings": [{"start_date": None, "end_date": None, "opex_pct": 0.25}]}
+    assert resolve_client_opex_pct("Acme Holdings", date(2026, 6, 1), records, DEFAULT_EXPENSE_RATIO_PCT) == 0.25
+    assert resolve_client_opex_pct("Acme Holdings", None, records, DEFAULT_EXPENSE_RATIO_PCT) == 0.25
 
 
 def test_summarize_by_group_size_band_pools_groups_by_headcount():

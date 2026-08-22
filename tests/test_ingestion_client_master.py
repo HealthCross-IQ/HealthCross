@@ -62,5 +62,25 @@ def test_accepts_loading_as_a_column_alias(tmp_path):
         rows = parse_client_master(f, "client_master3.xlsx")
     assert rows == [{
         "master_client_name": "Acme Holdings", "opex_pct": 0.28,
-        "product": None, "start_date": None, "source_filename": "client_master3.xlsx",
+        "product": None, "start_date": None, "end_date": None, "source_filename": "client_master3.xlsx",
     }]
+
+
+def test_parses_end_date_and_supports_multiple_dated_rows_for_the_same_client(tmp_path):
+    # A client whose real loading changed between renewals - two rows
+    # for the SAME client, each its own Start Date/End Date window.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(["Client Name (Master)", "OPEX", "Start Date", "End Date"])
+    ws.append(["Acme Holdings", 0.20, "2025-01-01", "2025-12-31"])
+    ws.append(["Acme Holdings", 0.28, "2026-01-01", "2026-12-31"])
+    path = tmp_path / "client_master4.xlsx"
+    wb.save(path)
+    with open(path, "rb") as f:
+        rows = parse_client_master(f, "client_master4.xlsx")
+    assert len(rows) == 2
+    assert rows[0]["opex_pct"] == 0.20
+    assert rows[0]["start_date"] == date(2025, 1, 1)
+    assert rows[0]["end_date"] == date(2025, 12, 31)
+    assert rows[1]["opex_pct"] == 0.28
+    assert rows[1]["end_date"] == date(2026, 12, 31)
