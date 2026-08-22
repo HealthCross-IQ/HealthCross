@@ -4,6 +4,9 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>HealthCross Underwriting Intelligence</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
@@ -386,6 +389,106 @@
   }
   .pa-panel table td { padding: 8px 10px; }
   .pa-panel table tbody tr:hover td { background: var(--surface-2); }
+
+  /* ---------- Renewal Bench (scoped - its own palette/type, doesn't
+     affect the rest of the app) ---------- */
+  .rb-scope {
+    --rb-bg: #f5f6f3; --rb-surface: #ffffff; --rb-surface-2: #eceef0; --rb-surface-3: #e2e6e2;
+    --rb-ink: #10201b; --rb-ink-2: #46564e; --rb-muted: #838f88;
+    --rb-border: rgba(16,32,27,0.12); --rb-border-strong: rgba(16,32,27,0.22);
+    --rb-accent: #0f6e5c; --rb-accent-ink: #f5faf8; --rb-accent-soft: rgba(15,110,92,0.10); --rb-accent-soft-2: rgba(15,110,92,0.18);
+    --rb-secondary: #a8672a; --rb-secondary-soft: rgba(168,103,42,0.12);
+    --rb-good: #1f8a5f; --rb-good-soft: rgba(31,138,95,0.12);
+    --rb-warning: #b9821f; --rb-warning-soft: rgba(185,130,31,0.14);
+    --rb-critical: #b23b3b; --rb-critical-soft: rgba(178,59,59,0.10);
+    --rb-shadow: 0 1px 2px rgba(16,32,27,0.05), 0 8px 24px -12px rgba(16,32,27,0.18);
+    font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
+    font-variant-numeric: tabular-nums;
+    color: var(--rb-ink);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .rb-scope {
+      --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
+      --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
+      --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
+      --rb-accent: #3fcaa8; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(63,202,168,0.12); --rb-accent-soft-2: rgba(63,202,168,0.22);
+      --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
+      --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
+      --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
+      --rb-critical: #e5837e; --rb-critical-soft: rgba(229,131,126,0.14);
+      --rb-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+    }
+  }
+  :root[data-theme="dark"] .rb-scope {
+    --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
+    --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
+    --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
+    --rb-accent: #3fcaa8; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(63,202,168,0.12); --rb-accent-soft-2: rgba(63,202,168,0.22);
+    --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
+    --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
+    --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
+    --rb-critical: #e5837e; --rb-critical-soft: rgba(229,131,126,0.14);
+    --rb-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
+  }
+
+  .rb-card {
+    background: var(--rb-surface); border: 1px solid var(--rb-border); border-radius: 14px;
+    padding: 18px 20px; box-shadow: var(--rb-shadow); margin-bottom: 16px;
+  }
+  .rb-card-title { font-family: 'Fraunces', serif; font-size: 16px; font-weight: 600; margin: 0 0 4px; letter-spacing: -0.01em; color: var(--rb-ink); }
+  .rb-card-sub { font-size: 11.5px; color: var(--rb-muted); margin: 0 0 14px; line-height: 1.5; }
+
+  .rb-kpi-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .rb-kpi-card { background: var(--rb-surface-2); border-radius: 10px; padding: 13px 15px; }
+  .rb-kpi-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--rb-muted); font-weight: 600; margin-bottom: 7px; }
+  .rb-kpi-value { font-family: 'IBM Plex Mono', monospace; font-size: 19px; font-weight: 600; color: var(--rb-ink); }
+  .rb-kpi-sub { font-size: 10.5px; color: var(--rb-muted); margin-top: 5px; }
+
+  .rb-scorecard-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .rb-method-card { background: var(--rb-surface-2); border: 1px solid var(--rb-border); border-radius: 12px; padding: 16px 18px; }
+  .rb-method-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .rb-method-name { font-size: 12.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; color: var(--rb-ink-2); }
+  .rb-badge { font-size: 10px; font-weight: 600; padding: 2px 8px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.03em; }
+  .rb-badge-a { background: var(--rb-accent-soft); color: var(--rb-accent); }
+  .rb-badge-b { background: var(--rb-secondary-soft); color: var(--rb-secondary); }
+  .rb-reconcile { margin-top: 14px; display: flex; align-items: center; gap: 14px; background: var(--rb-surface); border: 1px solid var(--rb-border); border-radius: 10px; padding: 12px 16px; }
+  .rb-reconcile .txt { font-size: 12px; color: var(--rb-ink-2); flex: 1; }
+  .rb-reconcile .txt b { color: var(--rb-ink); font-family: 'IBM Plex Mono', monospace; }
+  .rb-reconcile .delta { font-family: 'IBM Plex Mono', monospace; font-weight: 700; font-size: 14px; color: var(--rb-warning); white-space: nowrap; }
+
+  .rb-nb-compare { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; }
+  .rb-nb-col .lbl { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--rb-muted); font-weight: 600; margin-bottom: 6px; }
+  .rb-nb-col .amt { font-family: 'IBM Plex Mono', monospace; font-size: 20px; font-weight: 700; color: var(--rb-ink); }
+  .rb-nb-col .cap { font-size: 11px; color: var(--rb-muted); margin-top: 3px; }
+  .rb-nb-col.delta .amt { color: var(--rb-secondary); }
+  .rb-nb-source { margin-top: 14px; font-size: 11.5px; color: var(--rb-muted); background: var(--rb-surface-2); border-radius: 8px; padding: 9px 12px; }
+
+  .rb-insight-list { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+  .rb-insight { display: flex; gap: 12px; padding: 12px 14px; border-radius: 10px; background: var(--rb-surface-2); border-left: 3px solid var(--rb-border-strong); }
+  .rb-insight.sev-critical { border-left-color: var(--rb-critical); background: var(--rb-critical-soft); }
+  .rb-insight.sev-info { border-left-color: var(--rb-accent); background: var(--rb-accent-soft); }
+  .rb-insight-icon { font-size: 16px; flex-shrink: 0; line-height: 1.3; }
+  .rb-insight-tag { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--rb-ink-2); display: block; margin-bottom: 3px; }
+  .rb-insight-text { font-size: 12.5px; color: var(--rb-ink); line-height: 1.5; }
+  .rb-insight-text b { font-family: 'IBM Plex Mono', monospace; font-weight: 700; }
+
+  .rb-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .rb-table th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--rb-muted); font-weight: 600; padding: 0 8px 8px 0; border-bottom: 1.5px solid var(--rb-border-strong); }
+  .rb-table td { padding: 9px 8px 9px 0; border-bottom: 1px solid var(--rb-border); color: var(--rb-ink); }
+  .rb-table td.num, .rb-table th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  .rb-table tr:last-child td { border-bottom: none; }
+  .rb-row-up { color: var(--rb-critical); }
+  .rb-row-down { color: var(--rb-good); }
+
+  .rb-row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; }
+  .rb-input { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--rb-ink-2); }
+  .rb-input input { font: inherit; padding: 7px 9px; border-radius: 7px; border: 1px solid var(--rb-border-strong); background: var(--rb-surface); color: var(--rb-ink); width: 100px; }
+  .rb-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid transparent; background: var(--rb-accent); color: var(--rb-accent-ink); padding: 8px 14px; }
+  .rb-btn:hover { filter: brightness(1.07); }
+
+  @media (max-width: 900px) {
+    .rb-scorecard-methods { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
@@ -1511,6 +1614,7 @@ const TABS = [
   { id: 'member-rates', label: 'Member Rates' },
   { id: 'scorecard', label: 'Scorecard' },
   { id: 'new-business', label: 'New Business Quote' },
+  { id: 'renewal-bench', label: 'Renewal Bench' },
 ];
 
 function switchTab(id) {
@@ -1699,6 +1803,16 @@ function renderCaseWorkspace() {
       <div id="new-business-rating-area"></div>
     </div>
 
+    <div class="tab-panel" data-tab="renewal-bench">
+      <div class="rb-scope">
+        <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print / Save as PDF</button></div>
+        <div id="renewal-bench-scorecard-area"></div>
+        <div id="renewal-bench-nb-area"></div>
+        <div id="renewal-bench-claims-area"></div>
+        <div id="renewal-bench-census-area"></div>
+      </div>
+    </div>
+
     <div class="tab-panel" data-tab="scorecard">
       <div class="card">
         <h3>Compute risk scorecard</h3>
@@ -1747,6 +1861,10 @@ function renderCaseWorkspace() {
   loadRenewalBenchmark();
   loadNewBusinessRating();
   loadMemberRates();
+  loadRenewalBenchScorecard();
+  loadRenewalBenchNbComparison();
+  loadRenewalBenchLargeClaims();
+  loadRenewalBenchCensusMovement();
 }
 
 function _completenessPillHtml(label, done, required, extra, missingText) {
@@ -2158,7 +2276,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -2169,7 +2287,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -2367,7 +2485,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -2378,7 +2496,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   if (uploadedKinds.size) toast('Quick upload complete');
@@ -3332,6 +3450,209 @@ function renewalBenchmarkHtml(r) {
       ${book.low_credibility ? `<span class="tier-pill dir-review" style="margin-top:10px;">Small sample - only ${book.comparable_case_count} comparable case${book.comparable_case_count === 1 ? '' : 's'} so far, treat as directional</span>` : ''}
     </div>
   `;
+}
+
+/* ---------------- renewal bench ---------------- */
+
+function _rbKpi(label, value, sub) {
+  return `
+    <div class="rb-kpi-card">
+      <div class="rb-kpi-label">${escapeHtml(label)}</div>
+      <div class="rb-kpi-value">${value}</div>
+      ${sub ? `<div class="rb-kpi-sub">${sub}</div>` : ''}
+    </div>
+  `;
+}
+
+function _renewalBenchScorecardHtml(r) {
+  const b = r.method_b;
+  const gapPositive = r.method_gap >= 0;
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Renewal scorecard</div>
+      <div class="rb-card-sub">Method A (standard - annualized claims, trended for inflation, grossed up for loading) vs. Method B (same base, plus an IBNR load before trending, to account for claims incurred but not yet reported). Months used: ${r.months_used.join(', ')}.</div>
+      <div class="rb-scorecard-methods">
+        <div class="rb-method-card">
+          <div class="rb-method-head">
+            <span class="rb-method-name">Method A &middot; Standard</span>
+            <span class="rb-badge rb-badge-a">A</span>
+          </div>
+          <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, '')}
+            ${_rbKpi('Required premium', `AED ${r.required_premium.toLocaleString()}`, `+${(r.assumptions_used.inflation_pct * 100).toFixed(1)}% inflation, loading ${(r.assumptions_used.loading_pct * 100).toFixed(1)}%`)}
+            ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
+          </div>
+        </div>
+        <div class="rb-method-card">
+          <div class="rb-method-head">
+            <span class="rb-method-name">Method B &middot; Burning Cost + IBNR</span>
+            <span class="rb-badge rb-badge-b">B</span>
+          </div>
+          <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
+            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `claims + ${(b.assumptions_used.ibnr_pct * 100).toFixed(0)}% IBNR = AED ${b.claims_with_ibnr.toLocaleString()}`)}
+            ${_rbKpi('Required premium', `AED ${b.required_premium.toLocaleString()}`, `+${(b.assumptions_used.inflation_pct * 100).toFixed(1)}% inflation, loading ${(b.assumptions_used.loading_pct * 100).toFixed(1)}%`)}
+            ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${b.current_annual_premium.toLocaleString()} current`)}
+          </div>
+        </div>
+      </div>
+      <div class="rb-reconcile">
+        <div class="txt">Method B requires <b>${gapPositive ? '+' : ''}AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the IBNR load's effect once trended and grossed up through the same loading.</div>
+        <div class="delta">${r.method_gap_pct > 0 ? '+' : ''}${r.method_gap_pct}%</div>
+      </div>
+      <div class="rb-row" style="margin-top:14px;">
+        <div class="rb-input"><label>IBNR %</label><input type="number" id="renewal-bench-ibnr-override" step="0.5" value="${(b.assumptions_used.ibnr_pct * 100).toFixed(1)}"></div>
+        <button class="rb-btn" onclick="recomputeRenewalBenchScorecard()">Recompute</button>
+      </div>
+    </div>
+  `;
+}
+
+async function loadRenewalBenchScorecard() {
+  const area = document.getElementById('renewal-bench-scorecard-area');
+  if (!area) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-rating`);
+    area.innerHTML = _renewalBenchScorecardHtml(r);
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function recomputeRenewalBenchScorecard() {
+  const ibnr = Number(document.getElementById('renewal-bench-ibnr-override').value) / 100;
+  const area = document.getElementById('renewal-bench-scorecard-area');
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-rating?ibnr_pct=${ibnr}`);
+    area.innerHTML = _renewalBenchScorecardHtml(r);
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadRenewalBenchNbComparison() {
+  const area = document.getElementById('renewal-bench-nb-area');
+  if (!area) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-vs-new-business`);
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Renewal vs. New Business module rate</div>
+        <div class="rb-card-sub">Compares this renewal's own required premium against what the current New Business rate card would charge this same case's own census/category mix - generated automatically from the Benefits tab's Product/Network/TPA picks, no manual re-entry.</div>
+        <div class="rb-nb-compare">
+          <div class="rb-nb-col">
+            <div class="lbl">Renewal required (Method A)</div>
+            <div class="amt">AED ${r.renewal_required_premium.toLocaleString()}</div>
+          </div>
+          <div class="rb-nb-col">
+            <div class="lbl">Renewal required (Method B)</div>
+            <div class="amt">AED ${r.renewal_required_premium_method_b.toLocaleString()}</div>
+          </div>
+          ${r.new_business_module_premium != null ? `
+            <div class="rb-nb-col">
+              <div class="lbl">New Business module rate</div>
+              <div class="amt">AED ${r.new_business_module_premium.toLocaleString()}</div>
+              <div class="cap">quote #${r.new_business_quote_id}</div>
+            </div>
+            <div class="rb-nb-col delta">
+              <div class="lbl">Gap vs. renewal (A)</div>
+              <div class="amt">${r.gap > 0 ? '+' : ''}AED ${r.gap.toLocaleString()}</div>
+              <div class="cap">${r.gap_pct > 0 ? '+' : ''}${r.gap_pct}%</div>
+            </div>
+          ` : ''}
+        </div>
+        ${r.new_business_module_premium == null ? `<div class="rb-nb-source">No New Business module premium available yet - upload a rate card and pick each Benefits category's Product/Network/TPA to generate one automatically.</div>` : ''}
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadRenewalBenchLargeClaims() {
+  const area = document.getElementById('renewal-bench-claims-area');
+  if (!area) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/large-claims`);
+    const topClaimsRows = r.top_claims.slice(0, 10).map(c => `
+      <tr>
+        <td>${escapeHtml(c.patient_id || '-')}</td>
+        <td>${escapeHtml(c.diagnosis_description || '-')}</td>
+        <td>${c.date_of_treatment || '-'}</td>
+        <td class="num">AED ${(c.final_amount || 0).toLocaleString()}</td>
+      </tr>
+    `).join('');
+    const recurringRows = r.recurring_high_cost_members.map(m => `
+      <tr>
+        <td>${escapeHtml(m.patient_id || '-')}</td>
+        <td class="num">${m.large_claim_count}</td>
+        <td class="num">AED ${(m.total_claimed || 0).toLocaleString()}</td>
+      </tr>
+    `).join('');
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Large claims &amp; high-exposure insights</div>
+        <div class="rb-kpi-strip" style="margin-bottom:16px;">
+          ${_rbKpi('Total incurred', `AED ${r.total_incurred.toLocaleString()}`, '')}
+        </div>
+        <div class="rb-insight-list" style="margin-bottom:18px;">
+          ${r.one_off_claim ? `
+            <div class="rb-insight sev-critical">
+              <div class="rb-insight-icon">⚠</div>
+              <div>
+                <span class="rb-insight-tag">One-off claim</span>
+                <div class="rb-insight-text">A single claim (<b>${escapeHtml(r.one_off_claim.diagnosis_description || 'unspecified')}</b>) makes up <b>${r.one_off_claim.share_of_total_pct}%</b> of total incurred (AED ${(r.one_off_claim.final_amount || 0).toLocaleString()}) - worth underwriting separately from broad claims activity.</div>
+              </div>
+            </div>
+          ` : `
+            <div class="rb-insight sev-info">
+              <div class="rb-insight-icon">✓</div>
+              <div>
+                <span class="rb-insight-tag">One-off claim</span>
+                <div class="rb-insight-text">No single claim reaches 15% of total incurred - losses aren't concentrated in one event.</div>
+              </div>
+            </div>
+          `}
+        </div>
+        <div class="rb-card-title" style="font-size:13px;">Top claims</div>
+        <table class="rb-table"><tr><th>Patient</th><th>Diagnosis</th><th>Date</th><th class="num">Amount</th></tr>${topClaimsRows || '<tr><td colspan="4">No claims</td></tr>'}</table>
+        <div class="rb-card-title" style="font-size:13px; margin-top:18px;">Recurring high-cost members</div>
+        <div class="rb-card-sub">Members with multiple large claims above the threshold - a driver of loss ratio distinct from a single one-off event.</div>
+        <table class="rb-table"><tr><th>Patient</th><th class="num">Large claim count</th><th class="num">Total claimed</th></tr>${recurringRows || '<tr><td colspan="3">None</td></tr>'}</table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+async function loadRenewalBenchCensusMovement() {
+  const area = document.getElementById('renewal-bench-census-area');
+  if (!area) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/census-movement`);
+    const rows = r.rows.map(row => `
+      <tr>
+        <td>${escapeHtml(row.relation)}</td>
+        <td class="num">${row.expiring_count}</td>
+        <td class="num">${row.renewal_count}</td>
+        <td class="num ${row.change > 0 ? 'rb-row-up' : row.change < 0 ? 'rb-row-down' : ''}">${row.change > 0 ? '+' : ''}${row.change}</td>
+        <td class="num">${row.premium_impact != null ? `AED ${row.premium_impact.toLocaleString()}` : '-'}</td>
+      </tr>
+    `).join('');
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Census movement</div>
+        <div class="rb-card-sub">Expiring census (captured just before the most recent census re-upload) vs. the current/renewal census, by relation - ${r.premium_impact_basis}</div>
+        <table class="rb-table"><tr><th>Relation</th><th class="num">Expiring</th><th class="num">Renewal</th><th class="num">Change</th><th class="num">Premium impact</th></tr>${rows}</table>
+        <div class="rb-kpi-strip" style="margin-top:16px;">
+          ${_rbKpi('Total change', `${r.total_change > 0 ? '+' : ''}${r.total_change}`, `${r.total_expiring} &rarr; ${r.total_renewal}`)}
+          ${r.total_premium_impact != null ? _rbKpi('Total premium impact', `${r.total_premium_impact > 0 ? '+' : ''}AED ${r.total_premium_impact.toLocaleString()}`, '') : ''}
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 /* ---------------- scorecard ---------------- */
