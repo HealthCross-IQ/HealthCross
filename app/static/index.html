@@ -315,6 +315,77 @@
     box-shadow: 0 4px 16px rgba(0,0,0,0.14);
     display: none;
   }
+
+  /* Portfolio Analysis tab - scoped restyle only (KPI tiles, upload
+     widgets, tables). Everything here is namespaced under .pa-panel so it
+     doesn't touch any other tab's look. */
+  .pa-panel .card {
+    box-shadow: 0 1px 3px rgba(11,11,11,0.05);
+    transition: box-shadow 0.15s ease;
+  }
+  .pa-panel .card h3 {
+    padding-bottom: 11px;
+    margin-bottom: 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .pa-panel .kpi-grid { grid-template-columns: repeat(auto-fit, minmax(168px, 1fr)); gap: 12px; }
+  .pa-panel .kpi {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-top: 3px solid var(--accent);
+    border-radius: 10px;
+    padding: 13px 15px;
+    box-shadow: 0 1px 2px rgba(11,11,11,0.03);
+    min-width: 0;
+  }
+  .pa-panel .kpi .label {
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-muted); margin-bottom: 6px; display: block;
+  }
+  .pa-panel .kpi .value {
+    font-size: 18px; font-weight: 700; line-height: 1.3;
+    display: block; word-break: break-word; overflow-wrap: break-word;
+  }
+
+  .pa-upload-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+  .pa-upload-slot {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .pa-upload-slot label { margin: 0; font-size: 12.5px; font-weight: 600; color: var(--ink); }
+  .pa-upload-slot input[type=file] {
+    font-size: 11.5px;
+    color: var(--ink-2);
+    max-width: 100%;
+  }
+  .pa-upload-slot input[type=date] {
+    padding: 7px 9px; border-radius: 7px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--ink); font: inherit; font-size: 13px;
+  }
+  .pa-upload-actions { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+  .pa-upload-actions button { padding: 6px 12px; font-size: 12.5px; }
+
+  .pa-panel table { font-size: 12.5px; }
+  .pa-panel table th {
+    background: var(--surface-2);
+    padding: 8px 10px;
+  }
+  .pa-panel table td { padding: 8px 10px; }
+  .pa-panel table tbody tr:hover td { background: var(--surface-2); }
 </style>
 </head>
 <body>
@@ -3883,6 +3954,7 @@ let paLastSummary = null;
 let paLastAgeGender = null;
 let paLastDemographic = null;
 let paLastLargeClaims = null;
+let paLastGroupSizeBands = null;
 let paGroupBy = 'product';
 let paPolicyYear = '';
 let paSearchTerm = '';
@@ -3955,41 +4027,51 @@ function paBuildFilterParams(base) {
 }
 
 function portfolioAnalysisPanelHtml() {
-  return `
+  return `<div class="pa-panel">
     <div class="card" id="pa-executive-summary-area"></div>
     <div class="card">
       <h3>Portfolio Analysis</h3>
       <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone/Client/Gender/Relation/Policy year. Each upload wholesale-replaces the previous one.</div>
-      <div class="row" style="align-items:flex-end; flex-wrap:wrap;">
-        <div>
+      <div class="pa-upload-grid">
+        <div class="pa-upload-slot">
           <label>Membership export</label>
           <input type="file" id="pa-file-members" accept=".xlsx">
-          <button onclick="paUploadFile('members')">Upload</button>
-          <span id="pa-status-members" class="status-pending"></span>
+          <div class="pa-upload-actions">
+            <button onclick="paUploadFile('members')">Upload</button>
+            <span id="pa-status-members" class="status-pending"></span>
+          </div>
         </div>
-        <div>
+        <div class="pa-upload-slot">
           <label>Claims export (.xlsx or .xlsb)</label>
           <input type="file" id="pa-file-claims" accept=".xlsx,.xlsb">
-          <button onclick="paUploadFile('claims')">Upload</button>
-          <span id="pa-status-claims" class="status-pending"></span>
+          <div class="pa-upload-actions">
+            <button onclick="paUploadFile('claims')">Upload</button>
+            <span id="pa-status-claims" class="status-pending"></span>
+          </div>
         </div>
-        <div>
+        <div class="pa-upload-slot">
           <label>Group &rarr; Product mapping</label>
           <input type="file" id="pa-file-mapping" accept=".xlsx,.csv">
-          <button onclick="paUploadFile('group-product-mapping')">Upload</button>
-          <span id="pa-status-mapping" class="status-pending"></span>
+          <div class="pa-upload-actions">
+            <button onclick="paUploadFile('group-product-mapping')">Upload</button>
+            <span id="pa-status-mapping" class="status-pending"></span>
+          </div>
         </div>
-        <div>
+        <div class="pa-upload-slot">
           <label>Subgroup &rarr; Master Group mapping</label>
           <input type="file" id="pa-file-subgroup-mapping" accept=".xlsx,.csv">
-          <button onclick="paUploadFile('subgroup-mapping')">Upload</button>
-          <span id="pa-status-subgroup-mapping" class="status-pending"></span>
+          <div class="pa-upload-actions">
+            <button onclick="paUploadFile('subgroup-mapping')">Upload</button>
+            <span id="pa-status-subgroup-mapping" class="status-pending"></span>
+          </div>
         </div>
-        <div>
+        <div class="pa-upload-slot">
           <label>Data as of (production/extract date)</label>
           <input type="date" id="pa-data-as-of">
-          <button onclick="paSetDataAsOf()">Save date</button>
-          <span id="pa-status-as-of" class="status-pending"></span>
+          <div class="pa-upload-actions">
+            <button onclick="paSetDataAsOf()">Save date</button>
+            <span id="pa-status-as-of" class="status-pending"></span>
+          </div>
         </div>
       </div>
       <div class="hint">Set this to the date the Members/Claims export was actually produced (e.g. "as of 15/07/2026") - earned premium proration measures elapsed policy time against this date by default, instead of whatever day you happen to click "Run analysis". Included automatically with your next Membership/Claims upload, or set it directly with "Save date" any time.</div>
@@ -4039,12 +4121,18 @@ function portfolioAnalysisPanelHtml() {
       <div id="pa-age-gender-area">${paLastAgeGender ? paAgeGenderHtml(paLastAgeGender) : ''}</div>
     </div>
     <div class="card">
+      <h3>Group size distribution &amp; loss ratio by group-size band</h3>
+      <div class="hint">Pools loss ratio by group-size credibility band (1-10 / 11-50 / 51-100 / 100+ lives) - a small group's own claims are too thin to be meaningful on their own, so its experience leans on the pooled experience of every other similarly-sized group instead. Also shows the book's own shape - how many groups/members fall into each band, and the average group size within it.</div>
+      <div class="row"><button onclick="paLoadGroupSizeBands()">Load</button></div>
+      <div id="pa-group-size-bands-area">${paLastGroupSizeBands ? paGroupSizeBandsHtml(paLastGroupSizeBands) : ''}</div>
+    </div>
+    <div class="card">
       <h3>Large claims &amp; high-cost members</h3>
       <div class="hint">The usual large-loss cut before drilling into loss ratio by segment - one or two catastrophic claims can distort a small or medium group's numbers on their own. Independent of the rate card/members upload - works from the claims book alone.</div>
       <div class="row"><button onclick="paLoadLargeClaims()">Load</button></div>
       <div id="pa-large-claims-area">${paLastLargeClaims ? paLargeClaimsHtml(paLastLargeClaims) : ''}</div>
     </div>
-  `;
+  </div>`;
 }
 
 async function showPortfolioAnalysis() {
@@ -4073,8 +4161,10 @@ async function paLoadExecutiveSummary() {
         <div class="kpi"><span class="label">Loss ratio</span><span class="value">${s.loss_ratio != null ? (s.loss_ratio * 100).toFixed(1) + '%' : '-'}</span></div>
         <div class="kpi"><span class="label">Combined ratio</span><span class="value">${s.combined_ratio != null ? (s.combined_ratio * 100).toFixed(1) + '%' : '-'}</span></div>
         <div class="kpi"><span class="label">Avg. premium / member</span><span class="value">${s.average_premium_per_member != null ? 'AED ' + s.average_premium_per_member.toLocaleString() : '-'}</span></div>
+        <div class="kpi"><span class="label">Claim frequency</span><span class="value">${s.claim_frequency != null ? s.claim_frequency.toFixed(2) : '-'}</span></div>
+        <div class="kpi"><span class="label">Claim severity</span><span class="value">${s.claim_severity != null ? 'AED ' + s.claim_severity.toLocaleString() : '-'}</span></div>
       </div>
-      <div class="hint" style="margin:0;">Combined ratio = Loss ratio + an assumed ${(s.expense_ratio_pct * 100).toFixed(0)}% expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Incurred claims = Paid + Outstanding + IBNR.</div>
+      <div class="hint" style="margin:0;">Combined ratio = Loss ratio + an assumed ${(s.expense_ratio_pct * 100).toFixed(0)}% expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Incurred claims = Paid + Outstanding + IBNR. Claim frequency = claims per earned member-year; Claim severity = average AED cost per claim - a poor loss ratio can be read as "too many claims" vs. "a few expensive ones" before drilling into any one segment.</div>
     `;
   } catch (err) {
     area.innerHTML = '';
@@ -4169,6 +4259,39 @@ async function paRunAnalysis() {
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+async function paLoadGroupSizeBands() {
+  paReadFilterInputs();
+  try {
+    const params = paBuildFilterParams();
+    const data = await api(`/portfolio-analysis/group-size-bands?${params.toString()}`);
+    paLastGroupSizeBands = data.rows;
+    document.getElementById('pa-group-size-bands-area').innerHTML = paGroupSizeBandsHtml(paLastGroupSizeBands);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paGroupSizeBandsHtml(rows) {
+  const bandRows = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.band)} lives</td>
+      <td>${r.group_count.toLocaleString()}</td>
+      <td>${r.member_count.toLocaleString()}</td>
+      <td>${r.average_group_size != null ? r.average_group_size.toLocaleString() : '-'}</td>
+      <td>${r.actual_premium.toLocaleString()}</td>
+      <td>${r.incurred_claims.toLocaleString()}</td>
+      <td><b>${r.loss_ratio != null ? (r.loss_ratio * 100).toFixed(1) + '%' : '-'}</b></td>
+    </tr>`).join('');
+  return `
+    <div style="overflow-x:auto;">
+      <table>
+        <tr><th>Group size</th><th>Groups</th><th>Members</th><th>Avg. group size</th><th>Earned premium</th><th>Incurred claims</th><th>Loss ratio</th></tr>
+        ${bandRows || '<tr><td colspan="7" class="hint">No data.</td></tr>'}
+      </table>
+    </div>
+  `;
 }
 
 async function paLoadLargeClaims() {

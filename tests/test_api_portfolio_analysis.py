@@ -477,6 +477,8 @@ def test_executive_summary_returns_level_1_kpis(client, members_xlsx, claims_xls
     assert body["expense_ratio_pct"] == 0.33
     assert body["combined_ratio"] == round(body["loss_ratio"] + 0.33, 4)
     assert body["average_premium_per_member"] == 12000.0
+    assert body["claim_count"] == 1
+    assert body["claim_severity"] == 90.0  # claims_xlsx's single Final Amount in AED
 
 
 def test_executive_summary_expense_ratio_is_overridable(client, members_xlsx, rate_card_xlsx):
@@ -488,6 +490,41 @@ def test_executive_summary_expense_ratio_is_overridable(client, members_xlsx, ra
     resp = client.get("/portfolio-analysis/executive-summary", params={"expense_ratio_pct": 0.25})
     assert resp.status_code == 200
     assert resp.json()["expense_ratio_pct"] == 0.25
+
+
+def test_group_size_bands_pools_groups_by_headcount_band(client, tmp_path, rate_card_xlsx):
+    members_path = _write_xlsx(
+        tmp_path,
+        "members_bands.xlsx",
+        MEMBERS_HEADER,
+        [
+            ["Small Co", "Small Co", "P1", "QC-S1", "S1", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01", 1000, 1000, None, None, 100],
+            ["Small Co", "Small Co", "P1", "QC-S1", "S2", "1990-01-01", "F", "Single", "India", "Spouse",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01", 1000, 1000, None, None, 100],
+        ] + [
+            ["Big Co", "Big Co", "P2", "QC-B1", f"B{i}", "1990-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/A", "PLATINUM", "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01", 1000, 1000, None, None, 100]
+            for i in range(15)
+        ],
+    )
+    with open(members_path, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/group-size-bands")
+    assert resp.status_code == 200
+    rows = {r["band"]: r for r in resp.json()["rows"]}
+    assert rows["1-10"]["group_count"] == 1  # Small Co (2 members)
+    assert rows["1-10"]["member_count"] == 2
+    assert rows["11-50"]["group_count"] == 1  # Big Co (15 members)
+    assert rows["11-50"]["member_count"] == 15
+
+
+def test_group_size_bands_requires_members_uploaded_first(client):
+    resp = client.get("/portfolio-analysis/group-size-bands")
+    assert resp.status_code == 400
 
 
 def test_summary_rejects_an_invalid_group_by(client, members_xlsx, rate_card_xlsx):

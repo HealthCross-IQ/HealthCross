@@ -17,6 +17,7 @@ from app.scoring.rules.portfolio_analysis import (
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_overall,
+    summarize_by_group_size_band,
     summarize_population_mix,
     summarize_portfolio,
     top_claims_by_value,
@@ -425,6 +426,67 @@ def test_executive_portfolio_summary_expense_ratio_is_overridable():
     summary = executive_portfolio_summary(results, expense_ratio_pct=0.25)
     assert summary["expense_ratio_pct"] == 0.25
     assert summary["combined_ratio"] == round(summary["loss_ratio"] + 0.25, 4)
+
+
+def test_summarize_by_group_size_band_pools_groups_by_headcount():
+    # "Small Co" has 2 members (band 1-10), "Big Co" has 3 members split
+    # across two subgroups sharing the same master_contract (band 1-10
+    # too, since 3 members still falls in that band) - own claims are
+    # pooled per band, not per group.
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="S1", contract="Small Co", master_contract="Small Co"),
+            {}, RATE_CARDS, [], {"S1": [{"date_of_treatment": None, "final_amount": 1000.0, "claim_status": "Paid Claims"}]},
+        ),
+        analyze_portfolio_member(_member(beneficiary_id="S2", contract="Small Co", master_contract="Small Co"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="B1", contract="Big Co", master_contract="Big Co"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="B2", contract="Big Co", master_contract="Big Co"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="B3", contract="Big Co", master_contract="Big Co"), {}, RATE_CARDS, [], {}),
+    ]
+    rows = summarize_by_group_size_band(results)
+    band = next(r for r in rows if r["band"] == "1-10")
+    assert band["group_count"] == 2  # Small Co + Big Co
+    assert band["member_count"] == 5
+    assert band["average_group_size"] == 2.5
+    assert band["actual_claims"] == 1000.0
+    assert band["actual_premium"] == 5 * 2500.0  # 5 members x _member()'s own actual_gross_premium
+
+
+def test_summarize_by_group_size_band_assigns_the_correct_band_by_size():
+    def _group(name, size):
+        return [
+            analyze_portfolio_member(
+                _member(beneficiary_id=f"{name}{i}", contract=name, master_contract=name), {}, RATE_CARDS, [], {},
+            )
+            for i in range(size)
+        ]
+
+    results = _group("A", 5) + _group("B", 30) + _group("C", 75) + _group("D", 150)
+    rows = {r["band"]: r for r in summarize_by_group_size_band(results)}
+    assert rows["1-10"]["group_count"] == 1
+    assert rows["1-10"]["member_count"] == 5
+    assert rows["11-50"]["group_count"] == 1
+    assert rows["11-50"]["member_count"] == 30
+    assert rows["51-100"]["group_count"] == 1
+    assert rows["51-100"]["member_count"] == 75
+    assert rows["100+"]["group_count"] == 1
+    assert rows["100+"]["member_count"] == 150
+
+
+def test_summarize_by_group_size_band_includes_out_of_scope_members_own_premium_and_claims():
+    # Group headcount/premium/claims pooling shouldn't quietly drop an
+    # out-of-scope member's own contribution - same fix as
+    # executive_portfolio_summary's own out-of-scope regression.
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", network_type_raw="MSH Intl Network", contract="Acme", master_contract="Acme"),
+            {}, RATE_CARDS, [], {},
+        ),
+    ]
+    rows = summarize_by_group_size_band(results)
+    band = next(r for r in rows if r["band"] == "1-10")
+    assert band["member_count"] == 1
+    assert band["actual_premium"] == 2500.0
 
 
 def _claim(**overrides):

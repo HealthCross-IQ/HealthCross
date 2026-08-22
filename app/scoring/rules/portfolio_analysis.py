@@ -950,7 +950,8 @@ DEFAULT_EXPENSE_RATIO_PCT = 0.33  # matches the case-level renewal loading defau
 def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: float = DEFAULT_EXPENSE_RATIO_PCT) -> dict:
     """The top-of-page "Level 1 - Executive Portfolio" KPI set: Total
     Groups, Total Members, Written Premium, Earned Premium, Incurred
-    Claims, Loss Ratio, Combined Ratio, Average Premium per Member.
+    Claims, Loss Ratio, Combined Ratio, Average Premium per Member, Claim
+    Frequency, Claim Severity.
 
     Total Groups/Members count every member on the book (in AND out of
     the rate card's scope - group/member counts aren't a pricing
@@ -970,12 +971,22 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
     DEFAULT_LOADING_PCT) since Portfolio Analysis has no per-account fee
     split of its own the way a single case does; override via
     expense_ratio_pct for a more precise book-wide assumption.
+
+    Claim Frequency (claims per earned member-year) and Claim Severity
+    (average AED cost per claim) are the SAME whole-book totals
+    summarize_portfolio computes per Product/Network/client row - this is
+    just the one number for the entire book, so a poor loss ratio can be
+    read as "too many claims" vs. "a few expensive ones" before drilling
+    into any one segment.
     """
     groups = set()
     total_members = 0
     written_premium = 0.0
     earned_premium = 0.0
-    incurred_claims = 0.0
+    actual_claims_total = 0.0
+    ibnr_total = 0.0
+    claim_count = 0
+    earned_member_years = 0.0
     for r in member_results:
         total_members += 1
         master_client = r.get("master_client")
@@ -985,9 +996,15 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
             written_premium += r["written_premium"]
         if r.get("actual_premium") is not None:
             earned_premium += r["actual_premium"]
-        incurred_claims += (r.get("actual_claims") or 0.0) + (r.get("ibnr") or 0.0)
+        actual_claims_total += r.get("actual_claims") or 0.0
+        ibnr_total += r.get("ibnr") or 0.0
+        claim_count += r.get("claim_count") or 0
+        earned_member_years += r.get("earned_premium_fraction") or 0.0
 
+    incurred_claims = actual_claims_total + ibnr_total
     loss_ratio = incurred_claims / earned_premium if earned_premium else None
+    claim_frequency = claim_count / earned_member_years if earned_member_years else None
+    claim_severity = actual_claims_total / claim_count if claim_count else None
     return {
         "total_groups": len(groups),
         "total_members": total_members,
@@ -998,7 +1015,93 @@ def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: f
         "expense_ratio_pct": expense_ratio_pct,
         "combined_ratio": round(loss_ratio + expense_ratio_pct, 4) if loss_ratio is not None else None,
         "average_premium_per_member": round(written_premium / total_members, 2) if total_members else None,
+        "claim_count": claim_count,
+        "claim_frequency": round(claim_frequency, 4) if claim_frequency is not None else None,
+        "claim_severity": round(claim_severity, 2) if claim_severity is not None else None,
     }
+
+
+#: (min_size, max_size or None for open-ended, label) - the same rough
+#: credibility bands underwriting uses to decide how much weight a small
+#: group's OWN claims experience gets versus the wider portfolio's pooled
+#: experience: a 1-10-life group is priced almost entirely off the
+#: portfolio/manual rate, while a 100+-life group's own claims carry real
+#: credibility on their own.
+GROUP_SIZE_BANDS = (
+    (1, 10, "1-10"),
+    (11, 50, "11-50"),
+    (51, 100, "51-100"),
+    (101, None, "100+"),
+)
+
+
+def _group_size_band(member_count: int) -> str:
+    for lo, hi, label in GROUP_SIZE_BANDS:
+        if member_count >= lo and (hi is None or member_count <= hi):
+            return label
+    return "Unknown"
+
+
+def summarize_by_group_size_band(member_results: List[dict]) -> List[dict]:
+    """Pools every master client's own loss ratio into the credibility
+    bands underwriting actually uses (see GROUP_SIZE_BANDS) - a small
+    group's own claims experience is too thin to be statistically
+    meaningful on its own, so actuaries lean on the POOLED experience of
+    every other similarly-sized group instead. Also doubles as "Group
+    Size Distribution": each row's group_count/member_count/
+    average_group_size describe the book's own shape (how many small vs.
+    large groups it actually has), not just their loss ratio.
+
+    Group size (member count) and every rolled-up figure here count
+    EVERY member on the book, in and out of the rate card's scope - same
+    as executive_portfolio_summary - since a group's headcount and its
+    own premium/claims are real regardless of whether its network type
+    happens to be priced by this rate card.
+    """
+    group_member_counts: Dict[str, int] = defaultdict(int)
+    for r in member_results:
+        master_client = r.get("master_client")
+        if master_client:
+            group_member_counts[master_client] += 1
+
+    band_by_group: Dict[str, str] = {mc: _group_size_band(n) for mc, n in group_member_counts.items()}
+
+    buckets: Dict[str, dict] = defaultdict(
+        lambda: {"groups": set(), "member_count": 0, "actual_premium": 0.0, "actual_claims": 0.0, "ibnr": 0.0}
+    )
+    for r in member_results:
+        master_client = r.get("master_client")
+        band = band_by_group.get(master_client, "Unknown") if master_client else "Unknown"
+        bucket = buckets[band]
+        if master_client:
+            bucket["groups"].add(master_client)
+        bucket["member_count"] += 1
+        if r.get("actual_premium") is not None:
+            bucket["actual_premium"] += r["actual_premium"]
+        bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["ibnr"] += r.get("ibnr") or 0.0
+
+    band_order = [label for _, _, label in GROUP_SIZE_BANDS] + ["Unknown"]
+    rows = []
+    for band in band_order:
+        if band not in buckets:
+            continue
+        bucket = buckets[band]
+        group_count = len(bucket["groups"])
+        incurred_claims = bucket["actual_claims"] + bucket["ibnr"]
+        loss_ratio = incurred_claims / bucket["actual_premium"] if bucket["actual_premium"] else None
+        rows.append({
+            "band": band,
+            "group_count": group_count,
+            "member_count": bucket["member_count"],
+            "average_group_size": round(bucket["member_count"] / group_count, 1) if group_count else None,
+            "actual_premium": round(bucket["actual_premium"], 2),
+            "actual_claims": round(bucket["actual_claims"], 2),
+            "ibnr": round(bucket["ibnr"], 2),
+            "incurred_claims": round(incurred_claims, 2),
+            "loss_ratio": round(loss_ratio, 4) if loss_ratio is not None else None,
+        })
+    return rows
 
 
 def summarize_population_mix(member_results: List[dict]) -> Optional[dict]:

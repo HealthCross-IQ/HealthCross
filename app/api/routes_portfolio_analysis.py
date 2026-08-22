@@ -32,6 +32,7 @@ from app.scoring.rules.portfolio_analysis import (
     recurring_high_cost_members,
     resolve_group_product,
     resolve_master_client,
+    summarize_by_group_size_band,
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_by_product_network,
     summarize_burning_cost_by_product_network_age_gender,
@@ -366,6 +367,25 @@ def portfolio_executive_summary(
     """
     results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     return executive_portfolio_summary(results, expense_ratio_pct=expense_ratio_pct)
+
+
+@router.get("/group-size-bands")
+def portfolio_group_size_bands(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """Pools loss ratio by group-size credibility band (1-10/11-50/51-100/
+    100+ lives) - the same "small groups lean on portfolio experience,
+    large groups' own claims carry real credibility" logic underwriting
+    already applies informally, made explicit. Also serves as the Group
+    Size Distribution view (group_count/member_count/average_group_size
+    per band) - see summarize_by_group_size_band for the full rationale.
+    """
+    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    return {"rows": summarize_by_group_size_band(results)}
 
 
 @router.get("/insights")
