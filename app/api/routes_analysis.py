@@ -34,6 +34,12 @@ from app.scoring.rules.portfolio_analysis import (
     recurring_high_cost_members,
     top_claims_by_value,
     top_members_by_total_claims,
+    utilization_by_encounter_type,
+)
+from app.scoring.rules.renewal_bench_metrics import (
+    case_claim_kpis,
+    census_change_pct_from_snapshots,
+    renewal_drivers,
 )
 from app.scoring.rules.renewal_rating import (
     DEFAULT_CREDIBILITY_PCT,
@@ -1114,14 +1120,115 @@ def get_renewal_vs_new_business(case_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/{case_id}/renewal-bench-summary")
+def get_renewal_bench_summary(
+    case_id: int,
+    db: Session = Depends(get_db),
+    underwriter_adjustment_pct: float = Query(0.0, description="Manual underwriter override, in percentage points - the Recommended Renewal Premium hero card's own editable field"),
+    authority_threshold_pct: float = Query(15.0, description="How many percentage points of underwriter_adjustment_pct count as 'within authority' before needing escalation - a visible, overridable assumption, not a hidden rule"),
+):
+    """Everything the Renewal Bench tab's header/KPI-strip/donut/Recommended-
+    Premium/Drivers-waterfall sections need in one call, alongside the
+    existing /renewal-rating (scorecard), /renewal-vs-new-business, and
+    /large-claims/ /census-movement endpoints this tab already uses -
+    matching the approved Renewal Bench mockup's "one continuous page"
+    layout. Same eligibility as /renewal-rating: a claims ledger and
+    current_annual_premium must both be on file.
+
+    The Renewal Drivers waterfall and Recommended Renewal Premium hero
+    card are built from Method A ("Gross Loss Ratio") only, since Method A
+    is credibility_pct=1.0 by construction (see renewal_rating.py) - the
+    full, un-shaded, dynamic-IBNR figure the mockup's own "Standard"-tagged
+    method uses. Method B remains visible in the Scorecard section for
+    comparison, same as today.
+    """
+    case = _get_case_or_404(db, case_id)
+    if not case.claims_ledger_entries:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+    if not case.current_annual_premium:
+        raise HTTPException(
+            status_code=400,
+            detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
+        )
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
+
+    claims = _case_claim_dicts(case)
+    census_member_count = len(case.census_records)
+    census_ages = [c.age for c in case.census_records if c.age is not None]
+    kpis = case_claim_kpis(
+        claims, census_member_count=census_member_count, census_ages=census_ages, months_count=len(renewal["months_used"])
+    )
+    kpis["actual_loss_ratio"] = renewal["actual_loss_ratio"]
+
+    claims_cost_breakdown = utilization_by_encounter_type(claims)
+
+    snapshots = [
+        {"relation": s.relation, "member_count": s.member_count}
+        for s in db.query(models.CensusSnapshot).filter_by(case_id=case_id).all()
+    ]
+    current_relation_counts: dict = {}
+    for c in case.census_records:
+        rel = c.relation or "Unspecified"
+        current_relation_counts[rel] = current_relation_counts.get(rel, 0) + 1
+    census_change_pct = census_change_pct_from_snapshots(snapshots, current_relation_counts, case.current_annual_premium)
+
+    loading_pct = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
+    drivers = renewal_drivers(
+        annualized_incurred_claims=renewal["annualized_incurred_claims"],
+        trended_claims=renewal["trended_claims"],
+        current_annual_premium=case.current_annual_premium,
+        loading_pct=loading_pct,
+        census_change_pct=census_change_pct,
+        underwriter_adjustment_pct=underwriter_adjustment_pct,
+        authority_threshold_pct=authority_threshold_pct,
+    )
+
+    existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
+    product = (existing_plans[0].nb_product or existing_plans[0].plan_name) if existing_plans else None
+    network = (existing_plans[0].nb_network or existing_plans[0].network_type) if existing_plans else None
+    days_to_renewal = (case.renewal_date - date.today()).days if case.renewal_date else None
+
+    # Total paid by policy year, from whatever ClaimsReport history actually
+    # exists on this case (see /claims-report-comparison) - NOT a fabricated
+    # multi-year loss-ratio series, since a per-year premium isn't tracked
+    # historically (only the current one, current_annual_premium). Real
+    # claims $ trend, however many years are actually on file - the
+    # frontend shows "not enough history yet" rather than a fake chart
+    # when fewer than 2 points come back.
+    reports = sorted(
+        (r for r in case.claims_reports if r.report_period_start and r.total_paid is not None),
+        key=lambda r: r.report_period_start,
+    )
+    claims_trend = [{"year": r.report_period_start.year, "total_paid": r.total_paid} for r in reports]
+
+    return {
+        "case_identity": {
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "member_count": census_member_count,
+            "product": product,
+            "network": network,
+            "renewal_date": case.renewal_date,
+            "days_to_renewal": days_to_renewal,
+        },
+        "kpis": kpis,
+        "claims_cost_breakdown": claims_cost_breakdown,
+        "claims_trend": claims_trend,
+        "drivers": drivers,
+    }
+
+
 def _case_claim_dicts(case: models.Case) -> List[dict]:
     """This case's own claims ledger, reshaped into the same generic claim
-    dict (patient_id/diagnosis_description/date_of_treatment/final_amount)
-    Portfolio Analysis's own large-claims functions already expect (see
+    dict (patient_id/diagnosis_description/date_of_treatment/final_amount/
+    ip_op_maternity) Portfolio Analysis's own large-claims and
+    utilization-by-encounter-type functions already expect (see
     app/scoring/rules/portfolio_analysis.py) - a case's claims ledger is
     the exact same per-claim-line shape as the book-wide claims export,
     just scoped to one case already, so those functions are reused as-is
-    rather than reimplementing large-claims logic a second time.
+    rather than reimplementing large-claims/utilization logic a second time.
     """
     return [
         {
@@ -1130,6 +1237,7 @@ def _case_claim_dicts(case: models.Case) -> List[dict]:
             "diagnosis_description": c.diagnosis_description,
             "date_of_treatment": c.date_of_treatment,
             "final_amount": c.final_amount,
+            "ip_op_maternity": c.ip_op_maternity,
         }
         for c in case.claims_ledger_entries
     ]

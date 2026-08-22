@@ -18,11 +18,9 @@
     --ink-2: #52514e;
     --ink-muted: #898781;
     --grid: #e1e0d9;
-    /* Brand: Dark Blue #1C2A48 (authority/CTA, light backgrounds) and
-       Light Blue #5CD9FF (accent/highlight, dark backgrounds) per the
-       HealthCross Brand Guidelines. */
-    --accent: #1c2a48;
-    --accent-ink: #ffffff;
+    /* Brand: Light Blue #5CD9FF - HealthCross Brand Guidelines. */
+    --accent: #5cd9ff;
+    --accent-ink: #06121c;
     --good: #0ca30c;
     --good-bg: #0ca30c1a;
     --warning: #fab219;
@@ -31,11 +29,11 @@
     --serious-bg: #ec835a1a;
     --critical: #d03b3b;
     --critical-bg: #d03b3b1a;
-    --series-1: #1c2a48;
+    --series-1: #5cd9ff;
     --series-2: #eb6834;
     --series-3: #1baf7a;
     --series-4: #eda100;
-    --series-1-wash: #1c2a481a;
+    --series-1-wash: #5cd9ff26;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -105,7 +103,7 @@
   .hc-rail {
     --hcr-ink: #10201b; --hcr-ink-2: #46564e; --hcr-muted: #838f88;
     --hcr-border: rgba(16,32,27,0.12);
-    --hcr-accent: #1c2a48; --hcr-accent-soft: rgba(28,42,72,0.10);
+    --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.16);
     --hcr-secondary: #a8672a; --hcr-secondary-soft: rgba(168,103,42,0.12);
     --hcr-surface-3: #e2e6e2;
     font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
@@ -454,7 +452,7 @@
     --rb-bg: #f5f6f3; --rb-surface: #ffffff; --rb-surface-2: #eceef0; --rb-surface-3: #e2e6e2;
     --rb-ink: #10201b; --rb-ink-2: #46564e; --rb-muted: #838f88;
     --rb-border: rgba(16,32,27,0.12); --rb-border-strong: rgba(16,32,27,0.22);
-    --rb-accent: #1c2a48; --rb-accent-ink: #ffffff; --rb-accent-soft: rgba(28,42,72,0.10); --rb-accent-soft-2: rgba(28,42,72,0.18);
+    --rb-accent: #5cd9ff; --rb-accent-ink: #06121c; --rb-accent-soft: rgba(92,217,255,0.16); --rb-accent-soft-2: rgba(92,217,255,0.26);
     --rb-secondary: #a8672a; --rb-secondary-soft: rgba(168,103,42,0.12);
     --rb-good: #1f8a5f; --rb-good-soft: rgba(31,138,95,0.12);
     --rb-warning: #b9821f; --rb-warning-soft: rgba(185,130,31,0.14);
@@ -563,6 +561,48 @@
   @media (max-width: 900px) {
     .rb-scorecard-methods { grid-template-columns: 1fr; }
   }
+
+  .rb-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .rb-header-title { font-family: 'Fraunces', serif; font-size: 20px; font-weight: 600; color: var(--rb-ink); margin: 0 0 5px; }
+  .rb-header-meta { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 12px; color: var(--rb-ink-2); }
+  .rb-header-meta b { color: var(--rb-ink); font-weight: 600; }
+  .rb-pill { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
+  .rb-pill-warning { background: var(--rb-warning-soft); color: var(--rb-warning); }
+  .rb-pill-good { background: var(--rb-good-soft); color: var(--rb-good); }
+
+  .rb-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .rb-grid-2 { grid-template-columns: 1fr; } }
+
+  .rb-donut-wrap { display: flex; align-items: center; gap: 22px; flex-wrap: wrap; }
+  .rb-donut-center { font-family: 'IBM Plex Mono', monospace; }
+  .rb-donut-center .amt { font-size: 13px; font-weight: 700; color: var(--rb-ink); text-align: center; }
+  .rb-donut-center .lbl { font-size: 8.5px; color: var(--rb-muted); text-transform: uppercase; text-align: center; letter-spacing: 0.04em; }
+  .rb-legend { display: flex; flex-direction: column; gap: 7px; flex: 1; min-width: 160px; }
+  .rb-legend-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--rb-ink-2); }
+  .rb-legend-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .rb-legend-row b { color: var(--rb-ink); margin-left: auto; font-family: 'IBM Plex Mono', monospace; padding-left: 10px; }
+
+  .rb-hero { background: linear-gradient(160deg, var(--rb-accent), color-mix(in srgb, var(--rb-accent) 65%, black)); color: var(--rb-accent-ink); border-radius: 14px; padding: 20px 22px; box-shadow: var(--rb-shadow); margin-bottom: 16px; }
+  .rb-hero .lbl { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; opacity: 0.85; margin-bottom: 6px; }
+  .rb-hero .amt { font-family: 'IBM Plex Mono', monospace; font-size: 30px; font-weight: 700; }
+  .rb-hero .sub { font-size: 12px; opacity: 0.85; margin-top: 5px; }
+  .rb-hero-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 14px; margin-top: 16px; flex-wrap: wrap; }
+  .rb-hero-input { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; opacity: 0.9; }
+  .rb-hero-input input { font: inherit; padding: 7px 9px; border-radius: 7px; border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.14); color: inherit; width: 90px; }
+  .rb-hero-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid rgba(255,255,255,0.4); background: rgba(255,255,255,0.16); color: inherit; padding: 8px 14px; }
+  .rb-hero-btn:hover { background: rgba(255,255,255,0.26); }
+
+  .rb-driver-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .rb-driver-block { flex: 1; min-width: 90px; background: var(--rb-surface-2); border-radius: 10px; padding: 12px 10px; text-align: center; border-top: 3px solid var(--rb-border-strong); }
+  .rb-driver-block.pos { border-top-color: var(--rb-critical); }
+  .rb-driver-block.neg { border-top-color: var(--rb-good); }
+  .rb-driver-block.total { background: var(--rb-accent); color: var(--rb-accent-ink); border-top-color: transparent; }
+  .rb-driver-block .val { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 700; }
+  .rb-driver-block.pos .val { color: var(--rb-critical); }
+  .rb-driver-block.neg .val { color: var(--rb-good); }
+  .rb-driver-block .lbl { font-size: 10px; color: var(--rb-muted); margin-top: 4px; line-height: 1.3; }
+  .rb-driver-block.total .lbl { color: inherit; opacity: 0.85; }
+  .rb-driver-op { font-size: 15px; font-weight: 600; color: var(--rb-muted); flex-shrink: 0; }
 </style>
 </head>
 <body>
@@ -1441,10 +1481,10 @@ function printTabAsPdf(tabId, title) {
   :root {
     --bg: #f9f9f7; --surface: #fcfcfb; --surface-2: #f0efec; --border: rgba(11,11,11,0.10);
     --ink: #0b0b0b; --ink-2: #52514e; --ink-muted: #898781; --grid: #e1e0d9;
-    --accent: #1c2a48; --accent-ink: #ffffff;
+    --accent: #5cd9ff; --accent-ink: #06121c;
     --good: #0ca30c; --good-bg: #0ca30c1a; --warning: #fab219; --warning-bg: #fab2191a;
     --serious: #ec835a; --serious-bg: #ec835a1a; --critical: #d03b3b; --critical-bg: #d03b3b1a;
-    --series-1: #1c2a48; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-1-wash: #1c2a481a;
+    --series-1: #5cd9ff; --series-2: #eb6834; --series-3: #1baf7a; --series-4: #eda100; --series-1-wash: #5cd9ff26;
   }
   body { font-family: system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 24px auto; max-width: 900px; color: var(--ink); background: #fff; }
   h1 { font-size: 19px; margin: 0 0 16px; }
@@ -2102,17 +2142,20 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="renewal-bench">
       <div class="rb-scope">
-        <div class="rb-quicknav">
-          <a href="#rb-anchor-scorecard">Scorecard</a>
-          <a href="#rb-anchor-nb">vs. New Business</a>
-          <a href="#rb-anchor-claims">Large Claims</a>
-          <a href="#rb-anchor-census">Census Movement</a>
-          <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')" style="margin-left:auto;">Print / Save as PDF</button>
+        <div id="renewal-bench-header-area"></div>
+        <div id="renewal-bench-kpi-area"></div>
+        <div class="rb-grid-2">
+          <div id="renewal-bench-donut-area"></div>
+          <div id="renewal-bench-trend-area"></div>
         </div>
-        <div id="rb-anchor-scorecard"><div id="renewal-bench-scorecard-area"></div></div>
-        <div id="rb-anchor-nb"><div id="renewal-bench-nb-area"></div></div>
-        <div id="rb-anchor-claims"><div id="renewal-bench-claims-area"></div></div>
-        <div id="rb-anchor-census"><div id="renewal-bench-census-area"></div></div>
+        <div id="renewal-bench-census-area"></div>
+        <div id="renewal-bench-claims-area"></div>
+        <div id="renewal-bench-scorecard-area"></div>
+        <div class="rb-grid-2">
+          <div id="renewal-bench-premium-area"></div>
+          <div id="renewal-bench-nb-area"></div>
+        </div>
+        <div style="text-align:right; margin-top:4px;"><button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print / Save as PDF</button></div>
       </div>
     </div>
 
@@ -2164,6 +2207,7 @@ function renderCaseWorkspace() {
   loadRenewalBenchmark();
   loadNewBusinessRating();
   loadMemberRates();
+  loadRenewalBenchSummary();
   loadRenewalBenchScorecard();
   loadRenewalBenchNbComparison();
   loadRenewalBenchLargeClaims();
@@ -2579,7 +2623,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -2590,7 +2634,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -2788,7 +2832,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -2799,7 +2843,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   if (uploadedKinds.size) toast('Quick upload complete');
@@ -3845,6 +3889,194 @@ function _renewalBenchScorecardHtml(r) {
   `;
 }
 
+function _rbHeaderHtml(identity) {
+  const dueSoon = identity.days_to_renewal != null && identity.days_to_renewal <= 30;
+  return `
+    <div class="rb-header">
+      <div>
+        <div class="rb-header-title">${escapeHtml(identity.company_name)}</div>
+        <div class="rb-header-meta">
+          ${identity.broker_name ? `<span>Broker <b>${escapeHtml(identity.broker_name)}</b></span>` : ''}
+          ${identity.product ? `<span>Product <b>${escapeHtml(identity.product)}</b></span>` : ''}
+          ${identity.network ? `<span>Network <b>${escapeHtml(identity.network)}</b></span>` : ''}
+          <span><b>${identity.member_count}</b> members</span>
+        </div>
+      </div>
+      ${identity.days_to_renewal != null ? `
+        <span class="rb-pill ${dueSoon ? 'rb-pill-warning' : 'rb-pill-good'}">
+          ${identity.days_to_renewal >= 0 ? `Renewal due in ${identity.days_to_renewal} days` : `Renewal overdue by ${Math.abs(identity.days_to_renewal)} days`}
+        </span>
+      ` : ''}
+    </div>
+  `;
+}
+
+function _rbKpiStripHtml(kpis) {
+  return `
+    <div class="rb-card">
+      <div class="rb-kpi-strip">
+        ${_rbKpi('Loss ratio', `${(kpis.actual_loss_ratio * 100).toFixed(1)}%`, 'Method A, actual')}
+        ${kpis.claim_frequency != null ? _rbKpi('Claim frequency', kpis.claim_frequency.toFixed(2), 'claims / member / year') : ''}
+        ${kpis.avg_claim_severity != null ? _rbKpi('Avg. claim severity', `AED ${Math.round(kpis.avg_claim_severity).toLocaleString()}`, 'per claim line') : ''}
+        ${kpis.claimant_ratio != null ? _rbKpi('Claimant ratio', `${(kpis.claimant_ratio * 100).toFixed(1)}%`, 'of census with a claim on file') : ''}
+        ${kpis.avg_member_age != null ? _rbKpi('Avg. member age', kpis.avg_member_age.toFixed(1), '') : ''}
+      </div>
+    </div>
+  `;
+}
+
+function _rbClaimsTrendHtml(trend) {
+  if (!trend || trend.length < 2) {
+    return `
+      <div class="rb-card">
+        <div class="rb-card-title">Claims trend</div>
+        <div class="rb-card-sub">Not enough claims-report history yet to show a year-over-year trend - needs at least 2 uploaded claims reports (see the Claims tab) covering different policy years.</div>
+      </div>
+    `;
+  }
+  const maxVal = Math.max(...trend.map(t => t.total_paid));
+  const bars = trend.map(t => `
+    <div style="display:flex; flex-direction:column; align-items:center; gap:6px; flex:1;">
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--rb-ink-2);">AED ${Math.round(t.total_paid).toLocaleString()}</div>
+      <div style="width:100%; max-width:56px; background:var(--rb-accent); border-radius:4px 4px 0 0; height:${maxVal ? Math.max(6, t.total_paid / maxVal * 120) : 6}px;"></div>
+      <div style="font-size:11px; color:var(--rb-muted); font-weight:600;">${t.year}</div>
+    </div>
+  `).join('');
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Claims trend</div>
+      <div class="rb-card-sub">Total paid claims by policy year, from this case's own uploaded claims reports.</div>
+      <div style="display:flex; align-items:flex-end; gap:10px; margin-top:8px;">${bars}</div>
+    </div>
+  `;
+}
+
+const RB_DONUT_COLORS = ['var(--rb-accent)', 'var(--rb-secondary)', 'var(--rb-good)', 'var(--rb-warning)', 'var(--rb-critical)'];
+
+function _rbDonutHtml(breakdown) {
+  if (!breakdown || !breakdown.length) return '<div class="rb-card"><div class="rb-card-title">Claims cost breakdown</div><div class="rb-card-sub">No claims ledger data to break down yet.</div></div>';
+  const total = breakdown.reduce((sum, b) => sum + (b.total_value || 0), 0);
+  let cursor = 0;
+  const stops = breakdown.map((b, i) => {
+    const start = cursor;
+    const pct = total ? b.total_value / total * 100 : 0;
+    cursor += pct;
+    return `${RB_DONUT_COLORS[i % RB_DONUT_COLORS.length]} ${start.toFixed(2)}% ${cursor.toFixed(2)}%`;
+  }).join(', ');
+  const legend = breakdown.map((b, i) => `
+    <div class="rb-legend-row">
+      <div class="rb-legend-dot" style="background:${RB_DONUT_COLORS[i % RB_DONUT_COLORS.length]};"></div>
+      <div>${escapeHtml(b.encounter_type)} &middot; ${b.pct_of_total != null ? b.pct_of_total.toFixed(1) : '0'}%</div>
+      <b>AED ${Math.round(b.total_value).toLocaleString()}</b>
+    </div>
+  `).join('');
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Claims cost breakdown</div>
+      <div class="rb-card-sub">Incurred claims by encounter type, this case's own claims ledger.</div>
+      <div class="rb-donut-wrap">
+        <div style="width:120px; height:120px; border-radius:50%; background:conic-gradient(${stops}); display:flex; align-items:center; justify-content:center; flex-shrink:0;">
+          <div style="width:70px; height:70px; border-radius:50%; background:var(--rb-surface); display:flex; flex-direction:column; align-items:center; justify-content:center;" class="rb-donut-center">
+            <div class="amt">AED ${total >= 1000000 ? (total/1000000).toFixed(2)+'M' : Math.round(total).toLocaleString()}</div>
+            <div class="lbl">Incurred</div>
+          </div>
+        </div>
+        <div class="rb-legend">${legend}</div>
+      </div>
+    </div>
+  `;
+}
+
+let _rbLastSummary = null;
+
+async function loadRenewalBenchSummary() {
+  const headerArea = document.getElementById('renewal-bench-header-area');
+  const kpiArea = document.getElementById('renewal-bench-kpi-area');
+  const donutArea = document.getElementById('renewal-bench-donut-area');
+  const trendArea = document.getElementById('renewal-bench-trend-area');
+  if (!headerArea && !kpiArea && !donutArea && !trendArea) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-bench-summary`);
+    _rbLastSummary = r;
+    if (headerArea) headerArea.innerHTML = _rbHeaderHtml(r.case_identity);
+    if (kpiArea) kpiArea.innerHTML = _rbKpiStripHtml(r.kpis);
+    if (donutArea) donutArea.innerHTML = _rbDonutHtml(r.claims_cost_breakdown);
+    if (trendArea) trendArea.innerHTML = _rbClaimsTrendHtml(r.claims_trend);
+    renderRenewalBenchPremiumAndDrivers(r);
+  } catch (err) {
+    if (headerArea) headerArea.innerHTML = '';
+    if (kpiArea) kpiArea.innerHTML = '';
+    if (donutArea) donutArea.innerHTML = '';
+    if (trendArea) trendArea.innerHTML = '';
+  }
+}
+
+function _rbDriverBlockHtml(label, value, isTotal) {
+  if (value == null) {
+    return `<div class="rb-driver-block"><div class="val">n/a</div><div class="lbl">${escapeHtml(label)}</div></div>`;
+  }
+  const cls = isTotal ? 'total' : (value > 0 ? 'pos' : (value < 0 ? 'neg' : ''));
+  return `
+    <div class="rb-driver-block ${cls}">
+      <div class="val">${value > 0 ? '+' : ''}${value.toFixed(1)}%</div>
+      <div class="lbl">${escapeHtml(label)}</div>
+    </div>
+  `;
+}
+
+function _rbRecommendedPremiumHtml(r) {
+  const d = r.drivers;
+  return `
+    <div class="rb-hero">
+      <div class="lbl">Recommended renewal premium</div>
+      <div class="amt">AED ${Math.round(d.recommended_premium).toLocaleString()}</div>
+      <div class="sub">${d.total_pct > 0 ? '+' : ''}${d.total_pct}% vs. current annual premium &middot; ${d.within_authority ? 'within underwriter authority' : `outside authority (&plusmn;${d.authority_threshold_pct}pt)`}</div>
+      <div class="rb-hero-row">
+        <div class="rb-hero-input">
+          <label>Underwriter adjustment %</label>
+          <input type="number" id="rb-underwriter-adjustment" step="0.5" value="${d.underwriter_adjustment_pct}">
+        </div>
+        <div class="rb-hero-input">
+          <label>Authority threshold %</label>
+          <input type="number" id="rb-authority-threshold" step="1" value="${d.authority_threshold_pct}">
+        </div>
+        <button class="rb-hero-btn" onclick="recomputeRenewalBenchDrivers()">Recompute</button>
+      </div>
+    </div>
+    <div class="rb-card">
+      <div class="rb-card-title">Renewal drivers</div>
+      <div class="rb-card-sub">How the ${d.total_pct}% total technical movement breaks down, each an additive percentage-point contribution against current premium.</div>
+      <div class="rb-driver-row">
+        ${_rbDriverBlockHtml('Claims experience', d.claims_experience_pct)}
+        <div class="rb-driver-op">+</div>
+        ${_rbDriverBlockHtml('Medical trend', d.medical_trend_pct)}
+        <div class="rb-driver-op">+</div>
+        ${_rbDriverBlockHtml('Census change', d.census_change_pct)}
+        <div class="rb-driver-op">+</div>
+        ${_rbDriverBlockHtml('Underwriter adj.', d.underwriter_adjustment_pct)}
+        <div class="rb-driver-op">=</div>
+        ${_rbDriverBlockHtml('Total movement', d.total_pct, true)}
+      </div>
+    </div>
+  `;
+}
+
+function renderRenewalBenchPremiumAndDrivers(r) {
+  const area = document.getElementById('renewal-bench-premium-area');
+  if (!area) return;
+  area.innerHTML = _rbRecommendedPremiumHtml(r);
+}
+
+async function recomputeRenewalBenchDrivers() {
+  const adj = Number(document.getElementById('rb-underwriter-adjustment').value) || 0;
+  const threshold = Number(document.getElementById('rb-authority-threshold').value) || 15;
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-bench-summary?underwriter_adjustment_pct=${adj}&authority_threshold_pct=${threshold}`);
+    _rbLastSummary = r;
+    renderRenewalBenchPremiumAndDrivers(r);
+  } catch (err) { /* leave the card as-is on failure */ }
+}
+
 async function loadRenewalBenchScorecard() {
   const area = document.getElementById('renewal-bench-scorecard-area');
   if (!area) return;
@@ -3873,29 +4105,29 @@ async function loadRenewalBenchNbComparison() {
   if (!area) return;
   try {
     const r = await api(`/cases/${currentCase.id}/renewal-vs-new-business`);
+    const gapCls = r.gap != null ? (r.gap > 0 ? 'pos' : (r.gap < 0 ? 'neg' : '')) : '';
     area.innerHTML = `
       <div class="rb-card">
         <div class="rb-card-title">Renewal vs. New Business module rate</div>
         <div class="rb-card-sub">Compares this renewal's own required premium against what the current New Business rate card would charge this same case's own census/category mix - generated automatically from the Benefits tab's Product/Network/TPA picks, no manual re-entry.</div>
-        <div class="rb-nb-compare">
-          <div class="rb-nb-col">
+        <div class="rb-driver-row">
+          <div class="rb-driver-block">
+            <div class="val" style="font-size:14px;">AED ${Math.round(r.renewal_required_premium).toLocaleString()}</div>
             <div class="lbl">Renewal required (Method A)</div>
-            <div class="amt">AED ${r.renewal_required_premium.toLocaleString()}</div>
           </div>
-          <div class="rb-nb-col">
+          <div class="rb-driver-block">
+            <div class="val" style="font-size:14px;">AED ${Math.round(r.renewal_required_premium_method_b).toLocaleString()}</div>
             <div class="lbl">Renewal required (Method B)</div>
-            <div class="amt">AED ${r.renewal_required_premium_method_b.toLocaleString()}</div>
           </div>
           ${r.new_business_module_premium != null ? `
-            <div class="rb-nb-col">
-              <div class="lbl">New Business module rate</div>
-              <div class="amt">AED ${r.new_business_module_premium.toLocaleString()}</div>
-              <div class="cap">quote #${r.new_business_quote_id}</div>
+            <div class="rb-driver-block">
+              <div class="val" style="font-size:14px;">AED ${Math.round(r.new_business_module_premium).toLocaleString()}</div>
+              <div class="lbl">New Business module rate &middot; quote #${r.new_business_quote_id}</div>
             </div>
-            <div class="rb-nb-col delta">
-              <div class="lbl">Gap vs. renewal (A)</div>
-              <div class="amt">${r.gap > 0 ? '+' : ''}AED ${r.gap.toLocaleString()}</div>
-              <div class="cap">${r.gap_pct > 0 ? '+' : ''}${r.gap_pct}%</div>
+            <div class="rb-driver-op">=</div>
+            <div class="rb-driver-block ${gapCls}">
+              <div class="val">${r.gap > 0 ? '+' : ''}${r.gap_pct}%</div>
+              <div class="lbl">Gap vs. renewal (A) &middot; ${r.gap > 0 ? '+' : ''}AED ${Math.round(r.gap).toLocaleString()}</div>
             </div>
           ` : ''}
         </div>
