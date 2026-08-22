@@ -354,6 +354,12 @@ def analyze_portfolio_member(
         "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
         "policy_start_date": member.get("policy_start_date"),
         "standard_premium": round(standard_premium, 2) if standard_premium is not None else None,
+        # "Written" (the full annual amount, regardless of how much of the
+        # term has elapsed) vs. "actual"/earned (prorated by earned_fraction
+        # above) - Level 1's own "Average Premium per Member" KPI uses the
+        # written figure, since that's the plain per-member price point,
+        # not the year-to-date earned amount.
+        "written_premium": round(actual_gross_premium, 2) if actual_gross_premium is not None else None,
         "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
         "actual_claims": round(claims_breakdown["total"], 2),
         "actual_claims_paid": round(claims_breakdown["paid"], 2),
@@ -914,6 +920,63 @@ def summarize_burning_cost_overall(member_results: List[dict]) -> Optional[dict]
         "actual_claims": round(actual_claims, 2),
         "earned_member_years": round(earned_member_years, 4),
         "burning_cost": round(actual_claims / earned_member_years, 2),
+    }
+
+
+DEFAULT_EXPENSE_RATIO_PCT = 0.33  # matches the case-level renewal loading default (see renewal_rating.py)
+
+
+def executive_portfolio_summary(member_results: List[dict], expense_ratio_pct: float = DEFAULT_EXPENSE_RATIO_PCT) -> dict:
+    """The top-of-page "Level 1 - Executive Portfolio" KPI set: Total
+    Groups, Total Members, Written Premium, Earned Premium, Incurred
+    Claims, Loss Ratio, Combined Ratio, Average Premium per Member.
+
+    Total Groups/Members count every member on the book (in AND out of
+    the rate card's scope - group/member counts aren't a pricing
+    question), keyed by master_client (see resolve_master_client) so a
+    3-subgroup master counts as one group, not three. Written Premium is
+    each member's own full annual premium; Earned Premium prorates it by
+    elapsed policy term (same earned_premium_fraction every other metric
+    here uses) - Incurred Claims is Paid + Outstanding + IBNR, i.e. the
+    same fuller figure loss_ratio_incl_ibnr is built from.
+
+    Combined Ratio = Loss Ratio + an assumed expense ratio (commission +
+    TPA + admin + HC/management fees, as a flat % of premium) -
+    underwriting's own reminder that a healthy-looking loss ratio can
+    still mean an unprofitable book once acquisition/administration cost
+    is added on top. Defaults to 33% (the same default loading used for a
+    single case's own renewal rating - see renewal_rating.py's
+    DEFAULT_LOADING_PCT) since Portfolio Analysis has no per-account fee
+    split of its own the way a single case does; override via
+    expense_ratio_pct for a more precise book-wide assumption.
+    """
+    groups = set()
+    total_members = 0
+    written_premium = 0.0
+    earned_premium = 0.0
+    incurred_claims = 0.0
+    for r in member_results:
+        total_members += 1
+        master_client = r.get("master_client")
+        if master_client:
+            groups.add(master_client)
+        if r.get("written_premium") is not None:
+            written_premium += r["written_premium"]
+        if r.get("actual_premium") is not None:
+            earned_premium += r["actual_premium"]
+        incurred_claims += (r.get("actual_claims") or 0.0) + (r.get("ibnr") or 0.0)
+
+    loss_ratio = incurred_claims / earned_premium if earned_premium else None
+    return {
+        "total_groups": len(groups),
+        "total_members": total_members,
+        "written_premium": round(written_premium, 2),
+        "earned_premium": round(earned_premium, 2),
+        "incurred_claims": round(incurred_claims, 2),
+        "loss_ratio": round(loss_ratio, 4) if loss_ratio is not None else None,
+        "expense_ratio_pct": expense_ratio_pct,
+        "combined_ratio": round(loss_ratio + expense_ratio_pct, 4) if loss_ratio is not None else None,
+        "average_premium_per_member": round(written_premium / total_members, 2) if total_members else None,
     }
 
 

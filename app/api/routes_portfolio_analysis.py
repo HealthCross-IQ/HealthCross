@@ -21,10 +21,12 @@ from app.models import db_models as models
 from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.portfolio_analysis import (
+    DEFAULT_EXPENSE_RATIO_PCT,
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
     analyze_portfolio_member,
     claims_above_thresholds,
     demographic_summary,
+    executive_portfolio_summary,
     group_claims_by_beneficiary,
     normalize_subgroup_key,
     recurring_high_cost_members,
@@ -342,6 +344,28 @@ def portfolio_summary(
         unmapped_product_member_count=unmapped_product_count,
         unmapped_network_member_count=unmapped_network_count,
     )
+
+
+@router.get("/executive-summary")
+def portfolio_executive_summary(
+    as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    expense_ratio_pct: float = Query(
+        DEFAULT_EXPENSE_RATIO_PCT,
+        description="Assumed commission+TPA+admin+HC/management fee load, as a fraction of premium, for the Combined Ratio KPI",
+    ),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """"Level 1 - Executive Portfolio": the top-of-page KPI set (Total
+    Groups, Total Members, Written/Earned Premium, Incurred Claims, Loss
+    Ratio, Combined Ratio, Average Premium per Member) - see
+    executive_portfolio_summary for what each one means and how Combined
+    Ratio's expense_ratio_pct assumption works.
+    """
+    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    return executive_portfolio_summary(results, expense_ratio_pct=expense_ratio_pct)
 
 
 @router.get("/insights")

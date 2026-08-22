@@ -3956,6 +3956,7 @@ function paBuildFilterParams(base) {
 
 function portfolioAnalysisPanelHtml() {
   return `
+    <div class="card" id="pa-executive-summary-area"></div>
     <div class="card">
       <h3>Portfolio Analysis</h3>
       <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone/Client/Gender/Relation/Policy year. Each upload wholesale-replaces the previous one.</div>
@@ -4052,6 +4053,31 @@ async function showPortfolioAnalysis() {
   document.getElementById('main').innerHTML = portfolioAnalysisPanelHtml();
   if (paLastDemographic) bindChartTooltips(document.getElementById('pa-demographic-area'));
   paLoadDataAsOf();
+  paLoadExecutiveSummary();
+}
+
+async function paLoadExecutiveSummary() {
+  const area = document.getElementById('pa-executive-summary-area');
+  if (!area) return;
+  try {
+    const s = await api('/portfolio-analysis/executive-summary');
+    area.innerHTML = `
+      <h3>Level 1 &middot; Executive Portfolio</h3>
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total groups</span><span class="value">${s.total_groups.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Total members</span><span class="value">${s.total_members.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Written premium</span><span class="value">AED ${s.written_premium.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Earned premium</span><span class="value">AED ${s.earned_premium.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Incurred claims</span><span class="value">AED ${s.incurred_claims.toLocaleString()}</span></div>
+        <div class="kpi"><span class="label">Loss ratio</span><span class="value">${s.loss_ratio != null ? (s.loss_ratio * 100).toFixed(1) + '%' : '-'}</span></div>
+        <div class="kpi"><span class="label">Combined ratio</span><span class="value">${s.combined_ratio != null ? (s.combined_ratio * 100).toFixed(1) + '%' : '-'}</span></div>
+        <div class="kpi"><span class="label">Avg. premium / member</span><span class="value">${s.average_premium_per_member != null ? 'AED ' + s.average_premium_per_member.toLocaleString() : '-'}</span></div>
+      </div>
+      <div class="hint" style="margin:0;">Combined ratio = Loss ratio + an assumed ${(s.expense_ratio_pct * 100).toFixed(0)}% expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Incurred claims = Paid + Outstanding + IBNR.</div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 async function paLoadDataAsOf() {

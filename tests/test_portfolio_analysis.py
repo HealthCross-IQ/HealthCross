@@ -8,6 +8,7 @@ from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
     claims_above_thresholds,
     earned_premium_fraction,
+    executive_portfolio_summary,
     group_claims_by_beneficiary,
     ibnr_for_member,
     normalize_subgroup_key,
@@ -323,6 +324,62 @@ def test_analyze_portfolio_member_counts_all_claims_when_member_has_no_policy_da
     }
     result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
     assert result["actual_claims"] == 5700.0
+
+
+def test_executive_portfolio_summary_computes_level_1_kpis():
+    as_of = date(2026, 8, 15)
+    results = [
+        analyze_portfolio_member(
+            _member(beneficiary_id="M1", contract="Acme Sub LLC", master_contract="Acme Holdings", policy_start_date=date(2026, 1, 1)),
+            {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [],
+            {"M1": [{"date_of_treatment": date(2026, 8, 1), "final_amount": 1000.0, "claim_status": "Paid Claims"}]},
+            as_of=as_of,
+        ),
+        analyze_portfolio_member(
+            _member(beneficiary_id="M2", gender="F", contract="Other Sub LLC", master_contract="Other Holdings", policy_start_date=date(2026, 1, 1)),
+            {"Other Sub LLC": "Gold"}, RATE_CARDS, [],
+            {"M2": [{"date_of_treatment": date(2026, 8, 1), "final_amount": 500.0, "claim_status": "Paid Claims"}]},
+            as_of=as_of,
+        ),
+    ]
+    summary = executive_portfolio_summary(results)
+    assert summary["total_groups"] == 2  # two distinct master clients
+    assert summary["total_members"] == 2
+    assert summary["written_premium"] == 5000.0  # 2 x 2500 actual_gross_premium, unprorated
+    assert summary["earned_premium"] == 5000.0  # fully earned - both start exactly at as_of's year
+    # actual_claims (1000+500) + IBNR (each claim also falls in its own
+    # member's last-30-days IBNR window, since neither policy has expired)
+    assert summary["incurred_claims"] == 3000.0
+    assert summary["loss_ratio"] == round(3000.0 / 5000.0, 4)
+    assert summary["expense_ratio_pct"] == 0.33
+    assert summary["combined_ratio"] == round(summary["loss_ratio"] + 0.33, 4)
+    assert summary["average_premium_per_member"] == 2500.0
+
+
+def test_executive_portfolio_summary_counts_groups_by_master_client_not_subgroup():
+    results = [
+        analyze_portfolio_member(_member(beneficiary_id="M1", contract="Sub A", master_contract="Big Corp"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M2", contract="Sub B", master_contract="Big Corp"), {}, RATE_CARDS, [], {}),
+    ]
+    summary = executive_portfolio_summary(results)
+    assert summary["total_groups"] == 1  # same master, 2 subgroups
+    assert summary["total_members"] == 2
+
+
+def test_executive_portfolio_summary_includes_out_of_scope_members_in_headcount():
+    results = [
+        analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {}),
+        analyze_portfolio_member(_member(beneficiary_id="M2", network_type_raw="MSH Intl Network"), {}, RATE_CARDS, [], {}),
+    ]
+    summary = executive_portfolio_summary(results)
+    assert summary["total_members"] == 2  # group/member counts aren't a pricing question
+
+
+def test_executive_portfolio_summary_expense_ratio_is_overridable():
+    results = [analyze_portfolio_member(_member(beneficiary_id="M1"), {}, RATE_CARDS, [], {"M1": [{"date_of_treatment": None, "final_amount": 1000.0}]})]
+    summary = executive_portfolio_summary(results, expense_ratio_pct=0.25)
+    assert summary["expense_ratio_pct"] == 0.25
+    assert summary["combined_ratio"] == round(summary["loss_ratio"] + 0.25, 4)
 
 
 def _claim(**overrides):

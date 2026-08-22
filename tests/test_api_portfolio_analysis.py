@@ -419,6 +419,39 @@ def test_full_pipeline_summary_by_product(client, members_xlsx, claims_xlsx, map
     assert gold["actual_claims"] == 90.0
 
 
+def test_executive_summary_returns_level_1_kpis(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx):
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(claims_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("claims.xlsx", f, "application/octet-stream")})
+    with open(mapping_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/executive-summary")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["total_groups"] == 1
+    assert body["total_members"] == 1
+    assert body["written_premium"] == 12000.0
+    assert body["earned_premium"] == 12000.0
+    assert body["expense_ratio_pct"] == 0.33
+    assert body["combined_ratio"] == round(body["loss_ratio"] + 0.33, 4)
+    assert body["average_premium_per_member"] == 12000.0
+
+
+def test_executive_summary_expense_ratio_is_overridable(client, members_xlsx, rate_card_xlsx):
+    with open(members_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(rate_card_xlsx, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/executive-summary", params={"expense_ratio_pct": 0.25})
+    assert resp.status_code == 200
+    assert resp.json()["expense_ratio_pct"] == 0.25
+
+
 def test_summary_rejects_an_invalid_group_by(client, members_xlsx, rate_card_xlsx):
     with open(members_xlsx, "rb") as f:
         client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
