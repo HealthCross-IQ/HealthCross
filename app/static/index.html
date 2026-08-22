@@ -601,13 +601,13 @@
   .lr-title { font-family: 'Fraunces', serif; font-size: 23px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 5px; color: var(--lr-ink); }
   .lr-sub { font-size: 12.5px; color: var(--lr-muted); margin: 0; max-width: 68ch; line-height: 1.5; }
 
-  .lr-banner { background: linear-gradient(135deg, var(--lr-deep), color-mix(in srgb, var(--lr-deep) 72%, #0a1020)); color: #eaf6ff; border-radius: 16px; padding: 22px 24px; box-shadow: var(--lr-shadow); margin-bottom: 18px; }
+  .lr-banner { background: linear-gradient(135deg, var(--lr-accent), color-mix(in srgb, var(--lr-accent) 62%, #ffffff)); color: #0c2233; border-radius: 16px; padding: 22px 24px; box-shadow: var(--lr-shadow); margin-bottom: 18px; }
   .lr-banner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 20px 26px; }
-  .lr-b-item .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; opacity: 0.72; margin-bottom: 6px; }
+  .lr-b-item .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: rgba(12,34,51,0.66); font-weight: 600; margin-bottom: 6px; }
   .lr-b-item .v { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-  .lr-b-item .v small { font-size: 13px; opacity: 0.8; font-weight: 500; }
+  .lr-b-item .v small { font-size: 13px; color: rgba(12,34,51,0.62); font-weight: 500; }
   .lr-b-item.hero .v { font-size: 30px; }
-  .lr-b-sep { height: 1px; background: rgba(255,255,255,0.16); margin: 18px 0; }
+  .lr-b-sep { height: 1px; background: rgba(12,34,51,0.18); margin: 18px 0; }
 
   .lr-card { background: var(--lr-surface); border: 1px solid var(--lr-border); border-radius: 14px; box-shadow: var(--lr-shadow); margin-bottom: 16px; overflow: hidden; }
   .lr-card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--lr-border); flex-wrap: wrap; }
@@ -4549,6 +4549,18 @@ function lossRatioBoardHtml() {
       </div>
       <div class="lr-toolbar">
         <div class="lr-field">
+          <label>Account</label>
+          <select id="lr-client" onchange="loadLossRatioBoard()" style="min-width:230px;">
+            <option value="">All accounts</option>
+          </select>
+        </div>
+        <div class="lr-field">
+          <label>Policy year</label>
+          <select id="lr-year" onchange="loadLossRatioBoard()" style="min-width:120px;">
+            <option value="">All years</option>
+          </select>
+        </div>
+        <div class="lr-field">
           <label>Report date</label>
           <input type="date" id="lr-as-of" value="${lrState.asOf || ''}">
         </div>
@@ -4569,6 +4581,22 @@ async function showLossRatioBoard() {
   await loadCases();
   document.getElementById('main').innerHTML = lossRatioBoardHtml();
   await loadLossRatioBoard();
+  _lrFillPickers();
+}
+
+// Built from the rows the board itself just loaded (unfiltered on first
+// load), so every option is a value the book actually has - and the
+// selected one survives a refilter, since filtering by account naturally
+// removes every other option from the response.
+function _lrFillPickers() {
+  const clientSel = document.getElementById('lr-client');
+  const yearSel = document.getElementById('lr-year');
+  if (!clientSel || !yearSel || clientSel.dataset.filled) return;
+  const clients = Array.from(new Set(lrState.rows.map(r => r.master_client))).sort();
+  const years = Array.from(new Set(lrState.rows.map(r => (r.policy_start_date || '').slice(0, 4)).filter(Boolean))).sort();
+  clientSel.insertAdjacentHTML('beforeend', clients.map(c => `<option value="${escapeHtml(c)}">${escapeHtml(c)}</option>`).join(''));
+  yearSel.insertAdjacentHTML('beforeend', years.map(y => `<option value="${escapeHtml(y)}">${escapeHtml(y)}</option>`).join(''));
+  clientSel.dataset.filled = '1';
 }
 
 async function loadLossRatioBoard() {
@@ -4577,9 +4605,15 @@ async function loadLossRatioBoard() {
   if (!tableArea) return;
   const asOfEl = document.getElementById('lr-as-of');
   const loadEl = document.getElementById('lr-loading');
+  const clientEl = document.getElementById('lr-client');
+  const yearEl = document.getElementById('lr-year');
   const params = new URLSearchParams();
   if (asOfEl && asOfEl.value) params.set('as_of', asOfEl.value);
   if (loadEl && loadEl.value) params.set('default_loading_pct', String(Number(loadEl.value) / 100));
+  if (clientEl && clientEl.value) params.set('master_client', clientEl.value);
+  if (yearEl && yearEl.value) params.set('policy_year', yearEl.value);
+  lrState.client = (clientEl && clientEl.value) || '';
+  lrState.year = (yearEl && yearEl.value) || '';
   tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
   try {
     const r = await api(`/portfolio-analysis/account-loss-ratio?${params.toString()}`);
