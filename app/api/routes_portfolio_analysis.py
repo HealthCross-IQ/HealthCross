@@ -21,16 +21,21 @@ from app.models import db_models as models
 from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.portfolio_analysis import (
+    DEFAULT_LARGE_CLAIM_THRESHOLDS,
     analyze_portfolio_member,
+    claims_above_thresholds,
     demographic_summary,
     group_claims_by_beneficiary,
     normalize_subgroup_key,
+    recurring_high_cost_members,
     resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_by_product_network,
     summarize_burning_cost_by_product_network_age_gender,
     summarize_portfolio,
+    top_claims_by_value,
+    top_members_by_total_claims,
 )
 
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
@@ -576,4 +581,83 @@ def portfolio_filter_options(db: Session = Depends(get_db)):
         "nationality_zone": sorted(zones),
         "gender": sorted(genders),
         "relation": sorted(relations),
+    }
+
+
+def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
+    """Every uploaded claim line's own group_name/client_name/provider_name
+    are already denormalized onto PortfolioClaimEntry itself (a book-wide
+    export carries its own group identity per row - see
+    app/ingestion/portfolio_claims.py) - so, unlike _run_analysis, this
+    never needs to join against PortfolioMember or a rate card at all.
+    Large-claims analysis is purely about the claim lines themselves.
+    """
+    rows = db.query(
+        models.PortfolioClaimEntry.patient_id,
+        models.PortfolioClaimEntry.group_name,
+        models.PortfolioClaimEntry.client_name,
+        models.PortfolioClaimEntry.provider_name,
+        models.PortfolioClaimEntry.diagnosis_description,
+        models.PortfolioClaimEntry.date_of_treatment,
+        models.PortfolioClaimEntry.final_amount,
+    ).all()
+    return [
+        {
+            "patient_id": patient_id,
+            "group_name": group_name,
+            "client_name": client_name,
+            "provider_name": provider_name,
+            "diagnosis_description": diagnosis_description,
+            "date_of_treatment": date_of_treatment,
+            "final_amount": final_amount,
+        }
+        for patient_id, group_name, client_name, provider_name, diagnosis_description, date_of_treatment, final_amount in rows
+    ]
+
+
+@router.get("/large-claims")
+def large_claims(
+    top_n_claims: int = Query(10, description="How many of the single largest individual claim lines to return"),
+    top_n_members: int = Query(20, description="How many members to return, ranked by their own cumulative claims total"),
+    recurring_claim_threshold: float = Query(
+        DEFAULT_LARGE_CLAIM_THRESHOLDS[0],
+        description="A claim line counts toward 'recurring high-cost members' once it's at or above this AED amount",
+    ),
+    recurring_min_claim_count: int = Query(
+        3, description="A member must have at least this many claim lines at or above recurring_claim_threshold to count as 'recurring'"
+    ),
+    db: Session = Depends(get_db),
+):
+    """Large-loss analysis over the whole uploaded claims book - the usual
+    actuarial cut before drilling into loss ratio by segment, since one or
+    two catastrophic cases can distort a small or medium-sized group's
+    numbers on their own. Four views:
+
+    - top_claims: the single largest individual claim LINES by value.
+    - top_members: members ranked by their own cumulative claims total
+      across every line (distinct from top_claims - a member can rank
+      here through many moderate claims without any one line of theirs
+      being large enough to appear there).
+    - threshold_buckets: count and total value of claim lines at or above
+      each of AED 50K/100K/250K (or whatever custom set is requested,
+      via repeated ?threshold= query params - see below).
+    - recurring_high_cost_members: members with several SEPARATE large
+      claim lines - an ongoing pattern, distinct from one single
+      catastrophic claim (see recurring_high_cost_members's own
+      docstring for why these are worth telling apart).
+
+    Independent of any rate card or membership upload - purely a claims
+    analysis - so it works even before those are set up.
+    """
+    claims = _claim_dicts_for_large_claims(db)
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims uploaded yet")
+
+    return {
+        "top_claims": top_claims_by_value(claims, top_n=top_n_claims),
+        "top_members": top_members_by_total_claims(claims, top_n=top_n_members),
+        "threshold_buckets": claims_above_thresholds(claims),
+        "recurring_high_cost_members": recurring_high_cost_members(
+            claims, claim_threshold=recurring_claim_threshold, min_claim_count=recurring_min_claim_count
+        ),
     }

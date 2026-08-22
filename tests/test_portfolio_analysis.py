@@ -6,16 +6,20 @@ from datetime import date
 from app.scoring.rules.portfolio_analysis import (
     age_bands_from_rate_cards,
     analyze_portfolio_member,
+    claims_above_thresholds,
     earned_premium_fraction,
     group_claims_by_beneficiary,
     ibnr_for_member,
     normalize_subgroup_key,
+    recurring_high_cost_members,
     resolve_group_product,
     resolve_master_client,
     summarize_burning_cost_by_age_gender,
     summarize_burning_cost_overall,
     summarize_population_mix,
     summarize_portfolio,
+    top_claims_by_value,
+    top_members_by_total_claims,
 )
 
 RATE_CARDS = [
@@ -319,6 +323,68 @@ def test_analyze_portfolio_member_counts_all_claims_when_member_has_no_policy_da
     }
     result = analyze_portfolio_member(_member(), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], claims_by_ben)
     assert result["actual_claims"] == 5700.0
+
+
+def _claim(**overrides):
+    base = {
+        "patient_id": "P1", "group_name": "Acme Sub LLC", "client_name": "Acme Holdings",
+        "provider_name": "Some Hospital", "diagnosis_description": "Some diagnosis",
+        "date_of_treatment": date(2026, 6, 1), "final_amount": 1000.0,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_top_claims_by_value_ranks_individual_claim_lines_highest_first():
+    claims = [
+        _claim(patient_id="P1", final_amount=5000.0),
+        _claim(patient_id="P2", final_amount=250000.0),
+        _claim(patient_id="P3", final_amount=80000.0),
+    ]
+    top = top_claims_by_value(claims, top_n=2)
+    assert [c["patient_id"] for c in top] == ["P2", "P3"]
+    assert top[0]["final_amount"] == 250000.0
+
+
+def test_top_members_by_total_claims_sums_across_claim_lines():
+    claims = [
+        _claim(patient_id="P1", final_amount=30000.0),
+        _claim(patient_id="P1", final_amount=40000.0),  # P1's total (70k) beats P2's single claim
+        _claim(patient_id="P2", final_amount=60000.0),
+    ]
+    top = top_members_by_total_claims(claims, top_n=10)
+    assert top[0]["patient_id"] == "P1"
+    assert top[0]["total_claims"] == 70000.0
+    assert top[0]["claim_count"] == 2
+    assert top[1]["patient_id"] == "P2"
+
+
+def test_claims_above_thresholds_counts_and_totals_each_bucket():
+    claims = [_claim(final_amount=40000.0), _claim(final_amount=60000.0), _claim(final_amount=300000.0)]
+    rows = claims_above_thresholds(claims, thresholds=(50_000.0, 250_000.0))
+    by_threshold = {r["threshold"]: r for r in rows}
+    assert by_threshold[50_000.0]["claim_count"] == 2  # 60k and 300k
+    assert by_threshold[50_000.0]["total_value"] == 360000.0
+    assert by_threshold[250_000.0]["claim_count"] == 1
+    assert by_threshold[250_000.0]["total_value"] == 300000.0
+
+
+def test_recurring_high_cost_members_requires_multiple_large_claims():
+    claims = [
+        # P1: 3 separate claims each >= the 50k threshold - recurring.
+        _claim(patient_id="P1", final_amount=60000.0),
+        _claim(patient_id="P1", final_amount=55000.0),
+        _claim(patient_id="P1", final_amount=70000.0),
+        # P2: one single huge claim - NOT recurring, just one catastrophic line.
+        _claim(patient_id="P2", final_amount=500000.0),
+    ]
+    recurring = recurring_high_cost_members(claims, claim_threshold=50_000.0, min_claim_count=3)
+    patient_ids = [r["patient_id"] for r in recurring]
+    assert "P1" in patient_ids
+    assert "P2" not in patient_ids
+    p1 = next(r for r in recurring if r["patient_id"] == "P1")
+    assert p1["large_claim_count"] == 3
+    assert p1["total_claims"] == 185000.0
 
 
 def test_group_claims_by_beneficiary_groups_multiple_claim_lines():

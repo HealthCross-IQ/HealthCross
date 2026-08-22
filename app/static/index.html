@@ -3882,6 +3882,7 @@ function nbResultHtml(quote) {
 let paLastSummary = null;
 let paLastAgeGender = null;
 let paLastDemographic = null;
+let paLastLargeClaims = null;
 let paGroupBy = 'product';
 let paPolicyYear = '';
 let paSearchTerm = '';
@@ -4035,6 +4036,12 @@ function portfolioAnalysisPanelHtml() {
       <div class="row"><button onclick="paLoadAgeGenderBurningCost()">Load</button></div>
       <div id="pa-age-gender-area">${paLastAgeGender ? paAgeGenderHtml(paLastAgeGender) : ''}</div>
     </div>
+    <div class="card">
+      <h3>Large claims &amp; high-cost members</h3>
+      <div class="hint">The usual large-loss cut before drilling into loss ratio by segment - one or two catastrophic claims can distort a small or medium group's numbers on their own. Independent of the rate card/members upload - works from the claims book alone.</div>
+      <div class="row"><button onclick="paLoadLargeClaims()">Load</button></div>
+      <div id="pa-large-claims-area">${paLastLargeClaims ? paLargeClaimsHtml(paLastLargeClaims) : ''}</div>
+    </div>
   `;
 }
 
@@ -4135,6 +4142,71 @@ async function paRunAnalysis() {
   } catch (err) {
     toast(err.message, true);
   }
+}
+
+async function paLoadLargeClaims() {
+  try {
+    paLastLargeClaims = await api('/portfolio-analysis/large-claims');
+    document.getElementById('pa-large-claims-area').innerHTML = paLargeClaimsHtml(paLastLargeClaims);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paLargeClaimsHtml(data) {
+  const thresholdRows = data.threshold_buckets.map(b => `
+    <tr><th>&ge; AED ${b.threshold.toLocaleString()}</th><td>${b.claim_count.toLocaleString()}</td><td>${b.total_value.toLocaleString()}</td></tr>
+  `).join('');
+  const topClaimsRows = data.top_claims.map(c => `
+    <tr>
+      <td>${escapeHtml(c.patient_id || '-')}</td>
+      <td>${escapeHtml(c.client_name || c.group_name || '-')}</td>
+      <td>${escapeHtml(c.provider_name || '-')}</td>
+      <td>${escapeHtml(c.diagnosis_description || '-')}</td>
+      <td>${c.date_of_treatment || '-'}</td>
+      <td>${c.final_amount.toLocaleString()}</td>
+    </tr>
+  `).join('');
+  const topMembersRows = data.top_members.map(m => `
+    <tr>
+      <td>${escapeHtml(m.patient_id || '-')}</td>
+      <td>${escapeHtml(m.client_name || m.group_name || '-')}</td>
+      <td>${m.claim_count.toLocaleString()}</td>
+      <td>${m.total_claims.toLocaleString()}</td>
+    </tr>
+  `).join('');
+  const recurringRows = data.recurring_high_cost_members.map(m => `
+    <tr>
+      <td>${escapeHtml(m.patient_id || '-')}</td>
+      <td>${escapeHtml(m.client_name || m.group_name || '-')}</td>
+      <td>${m.large_claim_count.toLocaleString()}</td>
+      <td>${m.total_claims.toLocaleString()}</td>
+    </tr>
+  `).join('');
+
+  return `
+    <h4>Claims above threshold</h4>
+    <table><tr><th>Threshold</th><th>Claim count</th><th>Total value (AED)</th></tr>${thresholdRows}</table>
+
+    <h4>Top ${data.top_claims.length} claims (single largest claim lines)</h4>
+    <div style="overflow-x:auto;"><table>
+      <tr><th>Patient</th><th>Client</th><th>Provider</th><th>Diagnosis</th><th>Date</th><th>Amount (AED)</th></tr>
+      ${topClaimsRows || '<tr><td colspan="6" class="hint">No data.</td></tr>'}
+    </table></div>
+
+    <h4>Top ${data.top_members.length} members (cumulative claims total)</h4>
+    <div style="overflow-x:auto;"><table>
+      <tr><th>Patient</th><th>Client</th><th>Claims</th><th>Total (AED)</th></tr>
+      ${topMembersRows || '<tr><td colspan="4" class="hint">No data.</td></tr>'}
+    </table></div>
+
+    <h4>Recurring high-cost members</h4>
+    <div class="hint">Members with 3+ SEPARATE claims each at or above AED 50,000 - an ongoing pattern, distinct from a single catastrophic claim above.</div>
+    <div style="overflow-x:auto;"><table>
+      <tr><th>Patient</th><th>Client</th><th>Large claims</th><th>Total (AED)</th></tr>
+      ${recurringRows || '<tr><td colspan="4" class="hint">None.</td></tr>'}
+    </table></div>
+  `;
 }
 
 async function paLoadAgeGenderBurningCost() {

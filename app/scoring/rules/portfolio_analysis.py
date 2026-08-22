@@ -381,6 +381,124 @@ def group_claims_by_beneficiary(claims: List[dict]) -> Dict[str, List[dict]]:
     return dict(grouped)
 
 
+DEFAULT_LARGE_CLAIM_THRESHOLDS = (50_000.0, 100_000.0, 250_000.0)
+RECURRING_HIGH_COST_MIN_CLAIM_COUNT = 3
+
+
+def top_claims_by_value(claims: List[dict], top_n: int = 10) -> List[dict]:
+    """The single largest individual claim LINES by their own final_amount -
+    distinct from top_members_by_total_claims below, which ranks by a
+    member's cumulative total across every claim line. One catastrophic
+    claim line can rank here without that member necessarily also ranking
+    among the highest-total members (a single large claim vs. many
+    moderate ones summing high are different risk stories).
+    """
+    dated = [c for c in claims if c.get("final_amount") is not None]
+    ranked = sorted(dated, key=lambda c: c["final_amount"], reverse=True)[:top_n]
+    return [
+        {
+            "patient_id": c.get("patient_id"),
+            "group_name": c.get("group_name"),
+            "client_name": c.get("client_name"),
+            "provider_name": c.get("provider_name"),
+            "diagnosis_description": c.get("diagnosis_description"),
+            "date_of_treatment": c.get("date_of_treatment"),
+            "final_amount": round(c["final_amount"], 2),
+        }
+        for c in ranked
+    ]
+
+
+def top_members_by_total_claims(claims: List[dict], top_n: int = 20) -> List[dict]:
+    """Every claim line's final_amount summed per patient_id, ranked
+    highest total first - a member driving high cost through many
+    moderate claims shows up here even if no single line of theirs would
+    make top_claims_by_value on its own.
+    """
+    by_patient: Dict[str, dict] = defaultdict(lambda: {"total": 0.0, "claim_count": 0, "group_name": None, "client_name": None})
+    for c in claims:
+        patient_id = c.get("patient_id")
+        if not patient_id:
+            continue
+        bucket = by_patient[patient_id]
+        bucket["total"] += c.get("final_amount") or 0.0
+        bucket["claim_count"] += 1
+        if bucket["group_name"] is None and c.get("group_name"):
+            bucket["group_name"] = c["group_name"]
+        if bucket["client_name"] is None and c.get("client_name"):
+            bucket["client_name"] = c["client_name"]
+
+    ranked = sorted(by_patient.items(), key=lambda item: item[1]["total"], reverse=True)[:top_n]
+    return [
+        {
+            "patient_id": patient_id,
+            "group_name": bucket["group_name"],
+            "client_name": bucket["client_name"],
+            "total_claims": round(bucket["total"], 2),
+            "claim_count": bucket["claim_count"],
+        }
+        for patient_id, bucket in ranked
+    ]
+
+
+def claims_above_thresholds(claims: List[dict], thresholds: tuple = DEFAULT_LARGE_CLAIM_THRESHOLDS) -> List[dict]:
+    """Count and total value of individual claim LINES at or above each of
+    a handful of round-number thresholds (e.g. AED 50K/100K/250K) -
+    underwriting's usual first cut at "how many genuinely large claims
+    does this book have", before drilling into who they belong to.
+    """
+    rows = []
+    for threshold in thresholds:
+        matching = [c for c in claims if (c.get("final_amount") or 0.0) >= threshold]
+        rows.append({
+            "threshold": threshold,
+            "claim_count": len(matching),
+            "total_value": round(sum(c["final_amount"] for c in matching), 2),
+        })
+    return rows
+
+
+def recurring_high_cost_members(
+    claims: List[dict], claim_threshold: float = DEFAULT_LARGE_CLAIM_THRESHOLDS[0],
+    min_claim_count: int = RECURRING_HIGH_COST_MIN_CLAIM_COUNT,
+) -> List[dict]:
+    """Members with several separate claim lines each at or above
+    `claim_threshold` - distinct from a single catastrophic claim (see
+    top_claims_by_value): a member who keeps generating repeated
+    large-but-not-shock claims is a different underwriting concern (an
+    ongoing chronic condition, say) than one large one-off event, even
+    when their totals end up similar.
+    """
+    by_patient: Dict[str, dict] = defaultdict(lambda: {"total": 0.0, "large_claim_count": 0, "group_name": None, "client_name": None})
+    for c in claims:
+        if (c.get("final_amount") or 0.0) < claim_threshold:
+            continue
+        patient_id = c.get("patient_id")
+        if not patient_id:
+            continue
+        bucket = by_patient[patient_id]
+        bucket["total"] += c["final_amount"]
+        bucket["large_claim_count"] += 1
+        if bucket["group_name"] is None and c.get("group_name"):
+            bucket["group_name"] = c["group_name"]
+        if bucket["client_name"] is None and c.get("client_name"):
+            bucket["client_name"] = c["client_name"]
+
+    recurring = [
+        {
+            "patient_id": patient_id,
+            "group_name": bucket["group_name"],
+            "client_name": bucket["client_name"],
+            "large_claim_count": bucket["large_claim_count"],
+            "total_claims": round(bucket["total"], 2),
+        }
+        for patient_id, bucket in by_patient.items()
+        if bucket["large_claim_count"] >= min_claim_count
+    ]
+    recurring.sort(key=lambda r: r["total_claims"], reverse=True)
+    return recurring
+
+
 _GROUP_BY_FIELDS = {
     "product", "network", "region", "nationality_zone", "client", "master_client",
     "gender", "relation", "policy_year", "category",

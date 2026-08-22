@@ -294,6 +294,74 @@ def test_upload_claims_ingests_rows(client, claims_xlsx):
     assert resp.json()["rows_ingested"] == 1
 
 
+@pytest.fixture()
+def large_claims_xlsx(tmp_path):
+    return _write_xlsx(
+        tmp_path,
+        "large_claims.xlsx",
+        CLAIMS_HEADER,
+        [
+            # ACM0001: one single catastrophic claim - not "recurring".
+            ["ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "IP", "HOSPITALISATION", "Big Hospital",
+             "C500", "Cancer treatment", 300000.0, 300000.0],
+            # ACM0002: three separate large claims - recurring high-cost.
+            ["ACM0002", "CLM2", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-03-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis", 60000.0, 60000.0],
+            ["ACM0002", "CLM3", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-05-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis follow-up", 55000.0, 55000.0],
+            ["ACM0002", "CLM4", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-07-01", "Main Insured", "IP", "HOSPITALISATION", "Some Hospital",
+             "K358", "Appendicitis follow-up 2", 70000.0, 70000.0],
+            # A small, ordinary claim - shouldn't show up in any large-claims view.
+            ["ACM0003", "CLM5", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+             "J309", "Allergic rhinitis", 100.0, 90.0],
+        ],
+    )
+
+
+def test_large_claims_404s_without_any_claims_uploaded(client):
+    resp = client.get("/portfolio-analysis/large-claims")
+    assert resp.status_code == 400
+
+
+def test_large_claims_returns_top_claims_top_members_thresholds_and_recurring(client, large_claims_xlsx):
+    with open(large_claims_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("large_claims.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/large-claims")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["top_claims"][0]["patient_id"] == "ACM0001"
+    assert body["top_claims"][0]["final_amount"] == 300000.0
+
+    top_member_ids = [m["patient_id"] for m in body["top_members"]]
+    # ACM0001's single 300,000 claim still beats ACM0002's summed 185,000
+    # across three claims - top_members ranks by TOTAL, not claim count.
+    assert top_member_ids[0] == "ACM0001"
+    assert body["top_members"][0]["total_claims"] == 300000.0
+    assert top_member_ids[1] == "ACM0002"
+    assert body["top_members"][1]["total_claims"] == 185000.0
+    assert body["top_members"][1]["claim_count"] == 3
+
+    buckets = {b["threshold"]: b for b in body["threshold_buckets"]}
+    assert buckets[50000.0]["claim_count"] == 4  # every large-claim line above (300k, 60k, 55k, 70k)
+    assert buckets[250000.0]["claim_count"] == 1
+
+    recurring_ids = [m["patient_id"] for m in body["recurring_high_cost_members"]]
+    assert recurring_ids == ["ACM0002"]
+    assert body["recurring_high_cost_members"][0]["large_claim_count"] == 3
+
+
 def test_upload_group_product_mapping_ingests_rows(client, mapping_xlsx):
     with open(mapping_xlsx, "rb") as f:
         resp = client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
