@@ -2,9 +2,10 @@ import io
 import re
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.orm import Session
 
+from app.api.routes_new_business_rating import maybe_auto_requote
 from app.database import get_db
 from app.ingestion.premium_summary_rate_card import lookup_rate, parse_premium_summary_rate_card
 from app.models import db_models as models
@@ -24,12 +25,21 @@ from app.scoring.rules.claims_ledger_analysis import (
 )
 from app.scoring.rules.claims_projection import ClaimsProjectionAssumptions, project_annual_claims
 from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
+from app.scoring.rules.portfolio_analysis import (
+    DEFAULT_LARGE_CLAIM_THRESHOLDS,
+    claims_above_thresholds,
+    recurring_high_cost_members,
+    top_claims_by_value,
+    top_members_by_total_claims,
+)
 from app.scoring.rules.renewal_rating import (
+    DEFAULT_IBNR_PCT,
     MIN_CREDIBLE_CASE_COUNT,
     RenewalRatingAssumptions,
     _median,
     benchmark_case_against_book,
     calculate_renewal_rating,
+    calculate_renewal_rating_two_methods,
     case_loading_pct,
     premium_component_breakdown,
 )
@@ -878,6 +888,7 @@ def _case_renewal_rating(
     case: models.Case,
     inflation_pct: Optional[float] = None,
     loading_pct: Optional[float] = None,
+    ibnr_pct: Optional[float] = None,
 ) -> Optional[dict]:
     """Shared computation behind GET /{case_id}/renewal-rating and
     GET /{case_id}/renewal-benchmark (which needs every eligible case's
@@ -895,6 +906,12 @@ def _case_renewal_rating(
     having to remember to look up the case's own fees itself. An
     explicit loading_pct (e.g. a what-if query param on
     /renewal-rating) still overrides it.
+
+    The top-level result is always Method A (unchanged, for every
+    existing caller) - a "method_b" key is attached alongside it with the
+    SAME annualized claims base plus an IBNR load (see
+    calculate_renewal_rating_two_methods), for the Renewal Bench's
+    side-by-side scorecard.
     """
     entries = case.claims_ledger_entries
     if not entries or not case.current_annual_premium:
@@ -912,12 +929,18 @@ def _case_renewal_rating(
         if loading_pct is not None
         else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
     )
-    assumptions = RenewalRatingAssumptions(
-        inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
-        loading_pct=effective_loading_pct,
+    effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
+    two_methods = calculate_renewal_rating_two_methods(
+        annualized, case.current_annual_premium,
+        inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
+        ibnr_pct=ibnr_pct if ibnr_pct is not None else DEFAULT_IBNR_PCT,
     )
-    result = calculate_renewal_rating(annualized, case.current_annual_premium, assumptions=assumptions)
+    result = two_methods["method_a"]
     result["months_used"] = [f"{m['year']}-{m['month']:02d}" for m in full_months]
+    result["method_b"] = two_methods["method_b"]
+    result["method_b"]["months_used"] = result["months_used"]
+    result["method_gap"] = two_methods["gap"]
+    result["method_gap_pct"] = two_methods["gap_pct"]
     return result
 
 
@@ -927,12 +950,19 @@ def get_renewal_rating(
     db: Session = Depends(get_db),
     inflation_pct: Optional[float] = None,
     loading_pct: Optional[float] = None,
+    ibnr_pct: Optional[float] = Query(
+        None, description="Method B's IBNR load on the same annualized claims base, applied before inflation - defaults to 10%"
+    ),
 ):
     """The renewal-increase calculation (app/scoring/rules/renewal_rating.py):
     actual loss ratio (annualized incurred claims from the ledger over the
     case's current_annual_premium), trended for inflation, then grossed up
     for the commission/OPEX loading. Requires both a claims ledger upload
     and current_annual_premium set on the case (PATCH /cases/{id}).
+
+    The response's own "method_b" key carries the same figures computed
+    with an added IBNR load (see calculate_renewal_rating_two_methods) -
+    the Renewal Bench's second scorecard method, alongside this one.
     """
     case = _get_case_or_404(db, case_id)
     if not case.claims_ledger_entries:
@@ -942,7 +972,7 @@ def get_renewal_rating(
             status_code=400,
             detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
         )
-    result = _case_renewal_rating(case, inflation_pct, loading_pct)
+    result = _case_renewal_rating(case, inflation_pct, loading_pct, ibnr_pct)
     if result is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
     return result
@@ -980,6 +1010,130 @@ def get_renewal_benchmark(case_id: int, db: Session = Depends(get_db)):
     return {
         "case": this_result,
         "book": benchmark_case_against_book(this_result, other_results),
+    }
+
+
+@router.get("/{case_id}/renewal-vs-new-business")
+def get_renewal_vs_new_business(case_id: int, db: Session = Depends(get_db)):
+    """Compares this renewal's own required premium against what the
+    current New Business rate card would charge this SAME case's own
+    census/category mix - generated automatically (see maybe_auto_requote),
+    no manual re-entry required. Distinct from
+    /new-business-quote/burning-cost-comparison, which compares an NB
+    quote against the whole BOOK's burning cost rather than this case's
+    own renewal rating.
+
+    Requires the same eligibility as /renewal-rating (claims ledger +
+    current_annual_premium) for the renewal side; the New Business side
+    is best-effort - if there's no rate card uploaded yet, or any census
+    category still can't be resolved to a Product/Network/TPA (see
+    _resolve_auto_quote_categories), new_business is returned as None
+    rather than erroring the whole endpoint, since the renewal comparison
+    is still useful on its own.
+    """
+    case = _get_case_or_404(db, case_id)
+    if not case.claims_ledger_entries:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+    if not case.current_annual_premium:
+        raise HTTPException(
+            status_code=400,
+            detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
+        )
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
+
+    maybe_auto_requote(case_id, db)
+    latest_quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    new_business_premium = latest_quote.case_gross_annual_premium if latest_quote else None
+
+    gap = None
+    gap_pct = None
+    if new_business_premium is not None:
+        gap = round(renewal["required_premium"] - new_business_premium, 2)
+        gap_pct = round((renewal["required_premium"] / new_business_premium - 1) * 100, 2) if new_business_premium else None
+
+    return {
+        "renewal_required_premium": renewal["required_premium"],
+        "renewal_required_premium_method_b": renewal["method_b"]["required_premium"],
+        "new_business_module_premium": new_business_premium,
+        "new_business_quote_id": latest_quote.id if latest_quote else None,
+        "gap": gap,
+        "gap_pct": gap_pct,
+    }
+
+
+def _case_claim_dicts(case: models.Case) -> List[dict]:
+    """This case's own claims ledger, reshaped into the same generic claim
+    dict (patient_id/diagnosis_description/date_of_treatment/final_amount)
+    Portfolio Analysis's own large-claims functions already expect (see
+    app/scoring/rules/portfolio_analysis.py) - a case's claims ledger is
+    the exact same per-claim-line shape as the book-wide claims export,
+    just scoped to one case already, so those functions are reused as-is
+    rather than reimplementing large-claims logic a second time.
+    """
+    return [
+        {
+            "patient_id": c.patient_id,
+            "provider_name": c.provider_name,
+            "diagnosis_description": c.diagnosis_description,
+            "date_of_treatment": c.date_of_treatment,
+            "final_amount": c.final_amount,
+        }
+        for c in case.claims_ledger_entries
+    ]
+
+
+@router.get("/{case_id}/large-claims")
+def get_case_large_claims(
+    case_id: int,
+    db: Session = Depends(get_db),
+    top_n_claims: int = Query(10, description="How many of the single largest individual claim lines to return"),
+    top_n_members: int = Query(20, description="How many members to return, ranked by their own cumulative claims total"),
+    recurring_claim_threshold: float = Query(
+        DEFAULT_LARGE_CLAIM_THRESHOLDS[0],
+        description="A claim line counts toward 'recurring high-cost members' once it's at or above this AED amount",
+    ),
+    recurring_min_claim_count: int = Query(
+        3, description="A member must have at least this many claim lines at or above recurring_claim_threshold to count as 'recurring'"
+    ),
+):
+    """This case's own large-loss cut - the same four views Portfolio
+    Analysis's book-wide /large-claims returns (see its own docstring for
+    what each means), scoped to just this one case's claims ledger. Also
+    flags a single "one-off" claim: whichever top claim, if any, makes up
+    an outsized share of this case's own total incurred claims - a loss
+    ratio driven mostly by one event reads very differently than one
+    driven by broad claims activity across the group.
+    """
+    case = _get_case_or_404(db, case_id)
+    claims = _case_claim_dicts(case)
+    if not claims:
+        raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
+
+    total_incurred = sum(c.get("final_amount") or 0.0 for c in claims)
+    top_claims = top_claims_by_value(claims, top_n=top_n_claims)
+    one_off_claim = None
+    if top_claims and total_incurred:
+        largest = top_claims[0]
+        share_pct = largest["final_amount"] / total_incurred * 100
+        if share_pct >= 15:  # a single claim this large is worth calling out on its own
+            one_off_claim = {**largest, "share_of_total_pct": round(share_pct, 1)}
+
+    return {
+        "total_incurred": round(total_incurred, 2),
+        "top_claims": top_claims,
+        "top_members": top_members_by_total_claims(claims, top_n=top_n_members),
+        "threshold_buckets": claims_above_thresholds(claims),
+        "recurring_high_cost_members": recurring_high_cost_members(
+            claims, claim_threshold=recurring_claim_threshold, min_claim_count=recurring_min_claim_count
+        ),
+        "one_off_claim": one_off_claim,
     }
 
 

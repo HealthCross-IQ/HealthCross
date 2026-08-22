@@ -1,10 +1,12 @@
 import pytest
 
 from app.scoring.rules.renewal_rating import (
+    DEFAULT_IBNR_PCT,
     MIN_CREDIBLE_CASE_COUNT,
     RenewalRatingAssumptions,
     benchmark_case_against_book,
     calculate_renewal_rating,
+    calculate_renewal_rating_two_methods,
     case_loading_pct,
     premium_component_breakdown,
 )
@@ -37,6 +39,34 @@ def test_custom_assumptions_change_the_result():
         1_000_000, 1_000_000, assumptions=RenewalRatingAssumptions(loading_pct=0.10)
     )
     assert lighter_load["renewal_increase_pct"] < default_result["renewal_increase_pct"]
+
+
+def test_zero_ibnr_reproduces_the_same_result_as_no_ibnr_at_all():
+    # Default ibnr_pct=0.0 must be a true no-op, so every existing caller
+    # (client summary, benchmark, member rates) is unaffected by Method B's
+    # addition.
+    without_ibnr_arg = calculate_renewal_rating(1_000_000, 1_000_000)
+    with_explicit_zero = calculate_renewal_rating(1_000_000, 1_000_000, RenewalRatingAssumptions(ibnr_pct=0.0))
+    assert without_ibnr_arg["required_premium"] == with_explicit_zero["required_premium"]
+    assert without_ibnr_arg["claims_with_ibnr"] == without_ibnr_arg["annualized_incurred_claims"]
+
+
+def test_ibnr_load_increases_claims_before_inflation_is_applied():
+    result = calculate_renewal_rating(1_000_000, 1_000_000, RenewalRatingAssumptions(ibnr_pct=0.10))
+    assert result["claims_with_ibnr"] == 1_100_000.0
+    assert result["trended_claims"] == pytest.approx(1_100_000 * 1.075, abs=0.01)
+    assert result["assumptions_used"]["ibnr_pct"] == 0.10
+
+
+def test_calculate_renewal_rating_two_methods_shares_the_same_claims_base():
+    both = calculate_renewal_rating_two_methods(1_000_000, 1_000_000)
+    assert both["method_a"]["annualized_incurred_claims"] == both["method_b"]["annualized_incurred_claims"] == 1_000_000
+    assert both["method_a"]["assumptions_used"]["ibnr_pct"] == 0.0
+    assert both["method_b"]["assumptions_used"]["ibnr_pct"] == DEFAULT_IBNR_PCT
+    # Method B's IBNR load means it always requires a higher premium than Method A.
+    assert both["method_b"]["required_premium"] > both["method_a"]["required_premium"]
+    assert both["gap"] == round(both["method_b"]["required_premium"] - both["method_a"]["required_premium"], 2)
+    assert both["gap_pct"] > 0
 
 
 def test_rejects_negative_claims_or_non_positive_premium():

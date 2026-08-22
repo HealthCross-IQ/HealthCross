@@ -16,6 +16,7 @@ from typing import List, Optional
 
 DEFAULT_INFLATION_PCT = 0.075
 DEFAULT_LOADING_PCT = 0.33
+DEFAULT_IBNR_PCT = 0.10  # Method B's IBNR load on top of the same monthly-average-annualized claims base
 
 # The renewal loading (33%) isn't one fee - it's broker commission, TPA
 # administration, HealthCross's own margin, and QIC's (the carrier's) own
@@ -42,6 +43,7 @@ MIN_CREDIBLE_CASE_COUNT = 5
 class RenewalRatingAssumptions:
     inflation_pct: float = DEFAULT_INFLATION_PCT
     loading_pct: float = DEFAULT_LOADING_PCT
+    ibnr_pct: float = 0.0  # Method B only - see calculate_renewal_rating. 0.0 reproduces Method A exactly.
 
 
 def calculate_renewal_rating(
@@ -49,6 +51,20 @@ def calculate_renewal_rating(
     current_annual_premium: float,
     assumptions: Optional[RenewalRatingAssumptions] = None,
 ) -> dict:
+    """Method A ("Standard"): annualized incurred claims (this group's own
+    trailing full months, averaged and annualized - see
+    app.api.routes_analysis._case_renewal_rating for where that base
+    figure comes from), trended for inflation, then grossed up for the
+    renewal loading.
+
+    Method B ("Burning Cost + IBNR") is the SAME base figure with one
+    extra step: an IBNR load (assumptions.ibnr_pct, e.g. 10%) applied
+    BEFORE inflation, to account for claims incurred but not yet
+    reported in that trailing-months figure. Passing ibnr_pct=0.0 (the
+    default) reproduces Method A exactly, so every existing caller is
+    unaffected; see calculate_renewal_rating_two_methods for both side
+    by side.
+    """
     if annualized_incurred_claims < 0:
         raise ValueError("annualized_incurred_claims must not be negative.")
     if current_annual_premium <= 0:
@@ -57,7 +73,8 @@ def calculate_renewal_rating(
     a = assumptions or RenewalRatingAssumptions()
 
     actual_loss_ratio = annualized_incurred_claims / current_annual_premium
-    trended_claims = annualized_incurred_claims * (1 + a.inflation_pct)
+    claims_with_ibnr = annualized_incurred_claims * (1 + a.ibnr_pct)
+    trended_claims = claims_with_ibnr * (1 + a.inflation_pct)
     required_premium = trended_claims / (1 - a.loading_pct)
     renewal_increase_pct = (required_premium / current_annual_premium - 1) * 100
 
@@ -65,13 +82,46 @@ def calculate_renewal_rating(
         "annualized_incurred_claims": round(annualized_incurred_claims, 2),
         "current_annual_premium": round(current_annual_premium, 2),
         "actual_loss_ratio": round(actual_loss_ratio, 4),
+        "claims_with_ibnr": round(claims_with_ibnr, 2),
         "trended_claims": round(trended_claims, 2),
         "required_premium": round(required_premium, 2),
         "renewal_increase_pct": round(renewal_increase_pct, 2),
         "assumptions_used": {
             "inflation_pct": a.inflation_pct,
             "loading_pct": a.loading_pct,
+            "ibnr_pct": a.ibnr_pct,
         },
+    }
+
+
+def calculate_renewal_rating_two_methods(
+    annualized_incurred_claims: float,
+    current_annual_premium: float,
+    inflation_pct: float = DEFAULT_INFLATION_PCT,
+    loading_pct: float = DEFAULT_LOADING_PCT,
+    ibnr_pct: float = DEFAULT_IBNR_PCT,
+) -> dict:
+    """Both renewal scorecard methods from the SAME annualized claims
+    base, side by side: Method A (standard - annualize, trend, load) and
+    Method B (same base, an extra IBNR load applied before trending).
+    The two are directly comparable since only the IBNR step differs.
+    """
+    method_a = calculate_renewal_rating(
+        annualized_incurred_claims, current_annual_premium,
+        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, ibnr_pct=0.0),
+    )
+    method_b = calculate_renewal_rating(
+        annualized_incurred_claims, current_annual_premium,
+        RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, ibnr_pct=ibnr_pct),
+    )
+    return {
+        "method_a": method_a,
+        "method_b": method_b,
+        "gap": round(method_b["required_premium"] - method_a["required_premium"], 2),
+        "gap_pct": (
+            round((method_b["required_premium"] / method_a["required_premium"] - 1) * 100, 2)
+            if method_a["required_premium"] else None
+        ),
     }
 
 

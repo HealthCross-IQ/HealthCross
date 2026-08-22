@@ -351,6 +351,30 @@ def test_renewal_rating_credibility_style_dynamic_assumptions(client):
     assert lower_loading_resp.json()["renewal_increase_pct"] < default_resp.json()["renewal_increase_pct"]
 
 
+def test_renewal_rating_includes_method_b_alongside_method_a(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-rating")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["annualized_incurred_claims"] == body["method_b"]["annualized_incurred_claims"]
+    assert body["method_b"]["assumptions_used"]["ibnr_pct"] == 0.10
+    # Method B's IBNR load means it always requires MORE than Method A.
+    assert body["method_b"]["required_premium"] > body["required_premium"]
+    assert body["method_gap"] == round(body["method_b"]["required_premium"] - body["required_premium"], 2)
+
+
+def test_renewal_rating_ibnr_pct_is_overridable(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-rating", params={"ibnr_pct": 0.25})
+    assert resp.json()["method_b"]["assumptions_used"]["ibnr_pct"] == 0.25
+
+
 def test_renewal_benchmark_with_no_comparable_cases(client):
     case_id = _create_case(client)
     client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
@@ -402,6 +426,125 @@ def test_renewal_benchmark_400s_without_own_current_premium(client):
     _insert_ledger_entries(client, case_id, {(2025, 10): 1000, (2025, 11): 2000, (2025, 12): 1500})
     resp = client.get(f"/cases/{case_id}/renewal-benchmark")
     assert resp.status_code == 400
+
+
+def _upload_minimal_rate_card(client, tmp_path):
+    import openpyxl
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append([
+        "Product Name", "From Age", "To Age", "Male Price", "Female Price",
+        "Married Female Price", "Region", "Network", "TPA", "Zone", "Created Date", "Updated Date",
+    ])
+    ws.append(["Gold", 0, 99, 3000, 3300, "0 (Applicable only for age band 18-50)", "Dubai", "Net A", "TPA X", "Worldwide", "2025-01-01", ""])
+    path = tmp_path / "pricing.xlsx"
+    wb.save(path)
+    with open(path, "rb") as f:
+        resp = client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+    assert resp.status_code == 200
+
+
+def test_renewal_vs_new_business_generates_the_nb_premium_automatically(client, tmp_path):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
+
+    _upload_minimal_rate_card(client, tmp_path)
+    db = client.db_session_local()
+    db.add(models.CensusRecord(case_id=case_id, category="A", age=30, gender="M", marital_status="single", relation="employee", emirates="Dubai"))
+    db.add(models.BenefitPlan(
+        case_id=case_id, role="existing", plan_name="Category A", category="A",
+        nb_product="Gold", nb_network="Net A", nb_tpa="TPA X", standard_summary={},
+    ))
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["new_business_module_premium"] == 4000.0  # single male, age 30, category A, Gold/Net A, net 3000 grossed up
+    assert body["new_business_quote_id"] is not None
+    assert body["gap"] == round(body["renewal_required_premium"] - 4000.0, 2)
+
+
+def test_renewal_vs_new_business_returns_none_for_nb_side_without_a_rate_card(client):
+    case_id = _create_case(client)
+    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
+
+    resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["new_business_module_premium"] is None
+    assert body["gap"] is None
+    assert body["renewal_required_premium"] > 0
+
+
+def test_renewal_vs_new_business_404s_without_own_ledger(client):
+    case_id = _create_case(client)
+    resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
+    assert resp.status_code == 404
+
+
+def test_case_large_claims_flags_a_one_off_claim_and_recurring_member(client):
+    case_id = _create_case(client)
+    db = client.db_session_local()
+    db.add_all(
+        [
+            # One catastrophic claim dominating this case's own total.
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P1", claim_id="C1",
+                date_of_treatment=date(2026, 1, 5), diagnosis_description="Cardiac surgery",
+                claim_status="Paid Claims", final_amount=142000.0,
+            ),
+            # A member with 3 separate large-but-not-catastrophic claims.
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C2",
+                date_of_treatment=date(2026, 1, 10), diagnosis_description="Dorsalgia",
+                claim_status="Paid Claims", final_amount=55000.0,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C3",
+                date_of_treatment=date(2026, 2, 10), diagnosis_description="Dorsalgia follow-up",
+                claim_status="Paid Claims", final_amount=60000.0,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P2", claim_id="C4",
+                date_of_treatment=date(2026, 3, 10), diagnosis_description="Dorsalgia follow-up 2",
+                claim_status="Paid Claims", final_amount=52000.0,
+            ),
+            models.ClaimsLedgerEntry(
+                case_id=case_id, patient_id="P3", claim_id="C5",
+                date_of_treatment=date(2026, 1, 20), diagnosis_description="Allergic rhinitis",
+                claim_status="Paid Claims", final_amount=500.0,
+            ),
+        ]
+    )
+    db.commit()
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/large-claims")
+    assert resp.status_code == 200
+    body = resp.json()
+
+    assert body["top_claims"][0]["patient_id"] == "P1"
+    assert body["top_claims"][0]["final_amount"] == 142000.0
+
+    # 142,000 / (142,000+55,000+60,000+52,000+500) = ~45.6% of the total - well above the 15% one-off threshold.
+    assert body["one_off_claim"] is not None
+    assert body["one_off_claim"]["patient_id"] == "P1"
+    assert body["one_off_claim"]["share_of_total_pct"] > 15
+
+    recurring_ids = [m["patient_id"] for m in body["recurring_high_cost_members"]]
+    assert recurring_ids == ["P2"]
+    assert body["recurring_high_cost_members"][0]["large_claim_count"] == 3
+
+
+def test_case_large_claims_404s_without_a_ledger(client):
+    case_id = _create_case(client)
+    resp = client.get(f"/cases/{case_id}/large-claims")
+    assert resp.status_code == 404
 
 
 def test_renewal_client_summary_full_case(client):
