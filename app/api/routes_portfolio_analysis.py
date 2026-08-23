@@ -217,6 +217,11 @@ def _member_dicts(db: Session) -> List[dict]:
             "residence_emirate": m.residence_emirate,
             "region": m.region,
             "actual_gross_premium": m.actual_gross_premium,
+            # The Membership export carries BOTH a booked GrossPremium and
+            # an ActualGrossPremium; only the latter has ever fed the
+            # analysis. Carried through so a caller can report on either -
+            # see account_loss_ratio_rows' premium_basis.
+            "gross_premium": m.gross_premium,
             "policy_start_date": m.policy_start_date,
             "policy_end_date": m.policy_end_date,
             "member_start_date": m.member_start_date,
@@ -416,6 +421,10 @@ def portfolio_account_loss_ratio(
         DEFAULT_EXPENSE_RATIO_PCT,
         description="Loading (OPEX) fallback for an account with no real figure on file in the uploaded Client Master sheet",
     ),
+    premium_basis: str = Query(
+        "actual",
+        description="Which of the Membership export's own premium columns to build Gross Premium from: 'actual' (ActualGrossPremium - already prorated for each member's own joining/leaving dates, the basis HealthCross underwrites on) or 'booked' (GrossPremium - each member's full annual premium regardless of enrollment).",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
@@ -447,14 +456,19 @@ def portfolio_account_loss_ratio(
                 {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
             )
     effective_as_of = as_of or _get_stored_as_of(db) or date.today()
-    rows = account_loss_ratio_rows(
-        results,
-        as_of=effective_as_of,
-        opex_records_by_client=opex_records_by_client,
-        default_loading_pct=default_loading_pct,
-    )
+    try:
+        rows = account_loss_ratio_rows(
+            results,
+            as_of=effective_as_of,
+            opex_records_by_client=opex_records_by_client,
+            default_loading_pct=default_loading_pct,
+            premium_basis=premium_basis,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {
         "as_of": effective_as_of.isoformat(),
+        "premium_basis": premium_basis,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
     }

@@ -4353,7 +4353,7 @@ async function loadRenewalBenchCensusMovement() {
 
 /* ---------------- Loss Ratio board (portfolio level) ---------------- */
 
-let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null };
+let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual' };
 
 function _lrMoney(v, dp) {
   if (v == null) return '-';
@@ -4443,7 +4443,7 @@ function _lrTableHtml() {
           <div class="lr-card-title">Loss ratio by account</div>
           <div class="lr-card-note">One row per account policy period. Click any column to sort.</div>
         </div>
-        <div class="lr-card-note">Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
+        <div class="lr-card-note">Premium basis: <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b> &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
@@ -4547,6 +4547,13 @@ function lossRatioBoardHtml() {
           <input type="date" id="lr-as-of" value="${lrState.asOf || ''}">
         </div>
         <div class="lr-field">
+          <label>Premium basis</label>
+          <select id="lr-basis" onchange="loadLossRatioBoard()" style="min-width:150px;">
+            <option value="actual">Actual gross</option>
+            <option value="booked">Booked gross</option>
+          </select>
+        </div>
+        <div class="lr-field">
           <label>Loading fallback %</label>
           <input type="number" id="lr-loading" step="0.5" value="33" style="width:110px;">
         </div>
@@ -4594,6 +4601,9 @@ async function loadLossRatioBoard() {
   if (loadEl && loadEl.value) params.set('default_loading_pct', String(Number(loadEl.value) / 100));
   if (clientEl && clientEl.value) params.set('master_client', clientEl.value);
   if (yearEl && yearEl.value) params.set('policy_year', yearEl.value);
+  const basisEl = document.getElementById('lr-basis');
+  if (basisEl && basisEl.value) params.set('premium_basis', basisEl.value);
+  lrState.basis = (basisEl && basisEl.value) || 'actual';
   lrState.client = (clientEl && clientEl.value) || '';
   lrState.year = (yearEl && yearEl.value) || '';
   tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';

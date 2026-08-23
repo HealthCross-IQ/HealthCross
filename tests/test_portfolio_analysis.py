@@ -1552,3 +1552,38 @@ def test_account_loss_ratio_totals_recompute_ratios_from_summed_amounts():
     assert totals["gross_loss_ratio"] == pytest.approx(expected, abs=0.0001)
     naive_mean = sum(r["gross_loss_ratio"] for r in rows) / 2
     assert totals["gross_loss_ratio"] != pytest.approx(naive_mean, abs=0.01)
+
+
+def test_account_loss_ratio_can_report_on_either_premium_column():
+    # The Membership export carries BOTH GrossPremium and
+    # ActualGrossPremium; only the latter has ever fed the analysis, so a
+    # book total built on one will not match the other.
+    members = [{
+        "master_client": "SOME CO", "policy_start_date": date(2026, 1, 1),
+        "actual_claims_paid": 50_000.0, "actual_claims_outstanding": 0.0,
+        "written_premium": 100_000.0,        # ActualGrossPremium
+        "booked_gross_premium": 140_000.0,   # GrossPremium
+        "claim_count": 3,
+    }]
+
+    actual = account_loss_ratio_rows(members, as_of=date(2026, 7, 15))[0]
+    booked = account_loss_ratio_rows(members, as_of=date(2026, 7, 15), premium_basis="booked")[0]
+
+    assert actual["premium_basis"] == "actual"
+    assert actual["gross_premium"] == 100_000.0
+    assert booked["premium_basis"] == "booked"
+    assert booked["gross_premium"] == 140_000.0
+    # Same claims over a larger premium base - the booked basis reports a
+    # materially lower loss ratio, which is exactly why the basis has to
+    # be stated rather than assumed.
+    assert booked["gross_loss_ratio"] < actual["gross_loss_ratio"]
+
+
+def test_account_loss_ratio_rejects_an_unknown_premium_basis():
+    members = [{
+        "master_client": "SOME CO", "policy_start_date": date(2026, 1, 1),
+        "actual_claims_paid": 0.0, "actual_claims_outstanding": 0.0,
+        "written_premium": 100_000.0, "claim_count": 0,
+    }]
+    with pytest.raises(ValueError):
+        account_loss_ratio_rows(members, as_of=date(2026, 7, 15), premium_basis="net")

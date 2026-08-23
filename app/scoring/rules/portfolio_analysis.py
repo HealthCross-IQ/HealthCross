@@ -351,6 +351,7 @@ def analyze_portfolio_member(
             "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
             "policy_start_date": member.get("policy_start_date"),
             "written_premium": round(actual_gross_premium, 2) if actual_gross_premium is not None else None,
+            "booked_gross_premium": round(member["gross_premium"], 2) if member.get("gross_premium") is not None else None,
             "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
             "actual_claims": round(claims_breakdown["total"], 2),
             "actual_claims_paid": round(claims_breakdown["paid"], 2),
@@ -425,6 +426,7 @@ def analyze_portfolio_member(
         # written figure, since that's the plain per-member price point,
         # not the year-to-date earned amount.
         "written_premium": round(actual_gross_premium, 2) if actual_gross_premium is not None else None,
+        "booked_gross_premium": round(member["gross_premium"], 2) if member.get("gross_premium") is not None else None,
         "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
         "actual_claims": round(claims_breakdown["total"], 2),
         "actual_claims_paid": round(claims_breakdown["paid"], 2),
@@ -1451,11 +1453,32 @@ FULL_POLICY_TERM_DAYS = 365
 ACCOUNT_IBNR_TAIL_DAYS = 30
 
 
+#: Which of the Membership export's own premium columns to build the
+#: account's Gross Premium from:
+#:
+#:   "actual" - ActualGrossPremium, each member's premium already prorated
+#:              for their own joining/leaving dates. This is the basis
+#:              HealthCross underwrites on, and the default here: summed
+#:              across members it is the account's real WRITTEN premium,
+#:              reflecting who was actually on cover rather than a
+#:              full-year price for everyone.
+#:   "booked" - GrossPremium, each member's full ANNUAL premium regardless
+#:              of enrollment dates. Offered for comparison, and useful
+#:              for spotting how much of an account's price never gets
+#:              written because of mid-term joiners and leavers.
+#:
+#: Note that Earned Premium then applies Days / 365 on top of whichever
+#: basis is chosen, so an "actual" figure carries member-level proration
+#: and account-level earning together.
+PREMIUM_BASES = ("actual", "booked")
+
+
 def account_loss_ratio_rows(
     member_results: List[dict],
     as_of: date_cls,
     opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
     default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+    premium_basis: str = "actual",
 ) -> List[dict]:
     """Per-account loss ratio, one row per account POLICY PERIOD - the
     underwriting "Loss Ratio" view HealthCross tracks its own book on:
@@ -1485,7 +1508,17 @@ def account_loss_ratio_rows(
     resolve_client_opex_pct, so a client whose loading changed between
     renewals uses the right one for each), falling back to
     default_loading_pct otherwise.
+
+    Gross Premium comes from the Membership export's ActualGrossPremium
+    column by default - each member's premium already prorated for their
+    own joining/leaving dates, which is the basis HealthCross underwrites
+    on. Pass premium_basis="booked" to build it from the full annual
+    GrossPremium instead; see PREMIUM_BASES.
     """
+    if premium_basis not in PREMIUM_BASES:
+        raise ValueError(f"premium_basis must be one of {PREMIUM_BASES}")
+    premium_field = "booked_gross_premium" if premium_basis == "booked" else "written_premium"
+
     buckets: Dict[tuple, dict] = {}
     for r in member_results:
         master_client = r.get("master_client")
@@ -1507,7 +1540,7 @@ def account_loss_ratio_rows(
         bucket["member_count"] += 1
         bucket["paid"] += r.get("actual_claims_paid") or 0.0
         bucket["outstanding"] += r.get("actual_claims_outstanding") or 0.0
-        bucket["gross_premium"] += r.get("written_premium") or 0.0
+        bucket["gross_premium"] += r.get(premium_field) or 0.0
         bucket["claim_count"] += r.get("claim_count") or 0
 
     rows = []
@@ -1542,6 +1575,7 @@ def account_loss_ratio_rows(
             {
                 "master_client": master_client,
                 "policy_start_date": policy_start.isoformat(),
+                "premium_basis": premium_basis,
                 "member_count": bucket["member_count"],
                 "days": days,
                 "expired": expired,
