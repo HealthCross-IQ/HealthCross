@@ -199,10 +199,24 @@ def _claim_matches_period(date_of_treatment, policy_start, policy_end) -> bool:
     matching by ID alone would double count that person's claims into
     every one of their policy years. Missing dates (on either side) fall
     back to matching rather than silently dropping a real claim.
+
+    The period is HALF-OPEN: [start, end). The export's own end date is
+    the renewal date - the day the NEXT policy begins - so a claim treated
+    that day belongs to the incoming policy, not the expiring one. Two
+    things follow from that. An annual policy measures exactly 365 days
+    (1 May 2025 to 1 May 2026), where counting the end date too would make
+    it 366. And consecutive policies stop overlapping, which is what used
+    to let a claim treated on a renewal date match both periods and be
+    counted twice.
     """
     if not policy_start or not policy_end or not date_of_treatment:
         return True
-    return policy_start <= date_of_treatment <= policy_end
+    if policy_end <= policy_start:
+        # A same-day or inverted period would match nothing at all under a
+        # half-open rule - fall back to inclusive rather than silently
+        # dropping every claim for a member whose dates are malformed.
+        return date_of_treatment == policy_start
+    return policy_start <= date_of_treatment < policy_end
 
 
 _PAID_CLAIM_STATUS_KEYWORDS = ("paid", "validated")

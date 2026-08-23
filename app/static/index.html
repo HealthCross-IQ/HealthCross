@@ -4566,7 +4566,7 @@ function lossRatioBoardHtml() {
           </select>
         </div>
         <div class="lr-field">
-          <label>Policy year</label>
+          <label id="lr-year-label">Policy year</label>
           <select id="lr-year" onchange="loadLossRatioBoard()" style="min-width:120px;">
             <option value="">All years</option>
           </select>
@@ -4643,6 +4643,9 @@ async function loadLossRatioBoard() {
   const ybEl = document.getElementById('lr-year-basis');
   if (ybEl && ybEl.value) params.set('year_basis', ybEl.value);
   lrState.yearBasis = (ybEl && ybEl.value) || 'underwriting';
+  // Same control, different question depending on the basis - say which.
+  const ylab = document.getElementById('lr-year-label');
+  if (ylab) ylab.textContent = lrState.yearBasis === 'calendar' ? 'Calendar year' : 'Policy year';
   lrState.client = (clientEl && clientEl.value) || '';
   lrState.year = (yearEl && yearEl.value) || '';
   tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
@@ -4686,109 +4689,208 @@ function printLossRatioReport() {
   if (!lrState.rows.length) { toast('Nothing to print yet - load the loss ratio board first', true); return; }
   const t = lrState.totals;
   const rows = _lrSortRows(lrState.rows);
-  const over = rows.filter(r => r.net_loss_ratio != null && r.net_loss_ratio > 1);
   const asOf = (document.getElementById('lr-as-of') || {}).value || lrState.asOf || '';
+  const calendar = lrState.yearBasis === 'calendar';
+  const yearSel = (document.getElementById('lr-year') || {}).value || '';
+  const acctSel = (document.getElementById('lr-client') || {}).value || '';
+
+  const basisLabel = calendar ? 'Calendar year' : 'Underwriting year';
+  const premLabel = lrState.basis === 'booked' ? 'Booked gross premium' : 'Actual gross premium';
+  const period = yearSel ? (calendar ? `Calendar year ${yearSel}` : `Policy year ${yearSel}`) : 'All periods';
+
+  // Distribution of accounts by net loss ratio - the shape of the book a
+  // reinsurer reads first, before any individual account.
+  const bands = [
+    { label: 'Under 70%', test: r => r.net_loss_ratio != null && r.net_loss_ratio < 0.7 },
+    { label: '70% - 100%', test: r => r.net_loss_ratio != null && r.net_loss_ratio >= 0.7 && r.net_loss_ratio <= 1 },
+    { label: '100% - 150%', test: r => r.net_loss_ratio != null && r.net_loss_ratio > 1 && r.net_loss_ratio <= 1.5 },
+    { label: 'Over 150%', test: r => r.net_loss_ratio != null && r.net_loss_ratio > 1.5 },
+    // An account with no earned premium has no ratio to band, but it can
+    // still carry real claims. Left implicit those claims would vanish
+    // from this table while remaining in the portfolio total below it -
+    // an external reader would find the two irreconcilable.
+    { label: 'Not rated (no earned premium)', test: r => r.net_loss_ratio == null },
+  ].map(b => {
+    const sel = rows.filter(b.test);
+    return {
+      label: b.label,
+      count: sel.length,
+      earned: sel.reduce((a, r) => a + (r.earned_premium || 0), 0),
+      incurred: sel.reduce((a, r) => a + (r.incurred_claims || 0), 0),
+    };
+  });
+  const maxBand = Math.max(1, ...bands.map(b => b.earned));
+
+  const bandRows = bands.filter(b => b.count).map(b => `
+    <tr>
+      <td>${b.label}</td>
+      <td class="num">${b.count}</td>
+      <td class="num">${_lrMoney(b.earned)}</td>
+      <td class="num">${_lrMoney(b.incurred)}</td>
+      <td class="num">${b.earned ? (b.incurred / b.earned * 100).toFixed(1) + '%' : '-'}</td>
+      <td style="width:130px;"><div class="bar"><span style="width:${(b.earned / maxBand * 100).toFixed(1)}%"></span></div></td>
+    </tr>`).join('');
 
   const bodyRows = rows.map(r => `
     <tr>
-      <td>${escapeHtml(r.master_client)}${r.expired ? ' <em>(expired)</em>' : ''}<br><span class="sub">${r.policy_start_date} &middot; ${r.days}d &middot; ${r.member_count} lives</span></td>
+      <td class="acct">${escapeHtml(r.master_client)}
+        <span class="sub">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives${r.expired ? (calendar ? ' &middot; closed' : ' &middot; expired') : ''}</span></td>
       <td class="num">${_lrMoney(r.paid)}</td>
       <td class="num">${_lrMoney(r.outstanding)}</td>
       <td class="num">${_lrMoney(r.ibnr)}</td>
       <td class="num b">${_lrMoney(r.incurred_claims)}</td>
       <td class="num">${_lrPct(r.loading_pct)}</td>
-      <td class="num">${_lrMoney(r.gross_premium)}</td>
       <td class="num">${_lrMoney(r.earned_premium)}</td>
       <td class="num">${_lrMoney(r.net_premium)}</td>
       <td class="num ${_lrBand(r.gross_loss_ratio)}">${_lrPct(r.gross_loss_ratio)}</td>
       <td class="num b ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
-    </tr>
-  `).join('');
+    </tr>`).join('');
 
-  const watchRows = over.slice(0, 12).map(r => `
-    <tr>
-      <td>${escapeHtml(r.master_client)}<br><span class="sub">${r.policy_start_date} &middot; ${r.member_count} lives</span></td>
-      <td class="num">${_lrMoney(r.incurred_claims)}</td>
-      <td class="num">${_lrMoney(r.net_premium)}</td>
-      <td class="num b bad">${_lrPct(r.net_loss_ratio)}</td>
-    </tr>
-  `).join('');
+  const generated = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+  const ref = `HC-LR-${(asOf || '').replace(/-/g, '')}${yearSel ? '-' + yearSel : ''}`;
 
   const html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Portfolio Loss Ratio Report</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
+  @page { size: A4 landscape; margin: 14mm 12mm 16mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; padding: 26px 20px; background: #fff; color: #0f1c2e; font-variant-numeric: tabular-nums; }
-  .sheet { max-width: 1040px; margin: 0 auto; }
-  .masthead { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; border-bottom: 2.5px solid #1c2a48; padding-bottom: 14px; margin-bottom: 22px; }
-  .brand { font-family: 'Fraunces', serif; font-size: 13px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; color: #1c2a48; }
-  h1 { font-family: 'Fraunces', serif; font-size: 26px; font-weight: 600; margin: 6px 0 4px; letter-spacing: -0.015em; }
-  .meta { font-size: 11.5px; color: #64748b; }
-  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid rgba(15,28,46,0.14); border-radius: 10px; overflow: hidden; margin-bottom: 22px; }
-  .kpi { padding: 14px 16px; border-right: 1px solid rgba(15,28,46,0.10); }
+  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; color: #0f1c2e;
+         font-variant-numeric: tabular-nums; font-size: 10px; line-height: 1.45; }
+  .sheet { max-width: 1180px; margin: 0 auto; }
+
+  .masthead { display: flex; justify-content: space-between; align-items: flex-start;
+              border-bottom: 2.5px solid #1c2a48; padding-bottom: 12px; margin-bottom: 4px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { width: 34px; height: 32px; flex-shrink: 0; }
+  .brand .nm { font-size: 16px; font-weight: 700; letter-spacing: 0.005em; line-height: 1; }
+  .brand .nm .h { color: #1c2a48; }
+  .brand .nm .c { color: #5cd9ff; margin-left: 3px; }
+  .brand .nm sup { font-size: 6px; color: #5cd9ff; vertical-align: super; }
+  .brand .sb { font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase;
+               color: #1c2a48; font-weight: 600; margin-top: 3px; }
+  .docref { text-align: right; font-size: 8.5px; color: #64748b; line-height: 1.7; }
+  .docref b { color: #0f1c2e; font-family: 'IBM Plex Mono', monospace; }
+
+  h1 { font-family: 'Fraunces', serif; font-size: 21px; font-weight: 600; margin: 14px 0 3px; letter-spacing: -0.015em; }
+  .scope { font-size: 9.5px; color: #475569; margin-bottom: 12px; }
+  .scope span { display: inline-block; margin-right: 16px; }
+  .scope b { color: #0f1c2e; }
+
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid rgba(15,28,46,.16);
+          border-radius: 8px; overflow: hidden; margin-bottom: 16px; page-break-inside: avoid; }
+  .kpi { padding: 10px 12px; border-right: 1px solid rgba(15,28,46,.10); }
   .kpi:last-child { border-right: none; }
-  .kpi .k { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.07em; color: #64748b; font-weight: 700; margin-bottom: 6px; }
-  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 21px; font-weight: 600; letter-spacing: -0.02em; }
-  h2 { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 24px 0 4px; }
-  .note { font-size: 11px; color: #64748b; margin-bottom: 9px; }
-  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
-  th { text-align: left; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; font-weight: 700; padding: 7px 7px; border-bottom: 1.5px solid rgba(15,28,46,0.24); background: #eef3f7; }
-  td { padding: 6px 7px; border-bottom: 1px solid rgba(15,28,46,0.09); vertical-align: top; }
+  .kpi .k { font-size: 7.5px; letter-spacing: .09em; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 5px; }
+  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
+  .kpi .u { font-size: 8px; color: #94a3b8; }
+
+  h2 { font-family: 'Fraunces', serif; font-size: 12.5px; font-weight: 600; margin: 16px 0 3px;
+       page-break-after: avoid; }
+  .note { font-size: 8.5px; color: #64748b; margin-bottom: 7px; }
+
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 7.5px; letter-spacing: .06em; text-transform: uppercase; color: #475569;
+       font-weight: 700; padding: 6px 6px; background: #eef3f7; border-bottom: 1.5px solid rgba(15,28,46,.25); }
+  td { padding: 5px 6px; border-bottom: 1px solid rgba(15,28,46,.08); vertical-align: top; }
   td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
   td.b { font-weight: 700; }
-  .sub { font-size: 9px; color: #94a3b8; font-family: 'IBM Plex Mono', monospace; }
-  tfoot td { border-top: 2px solid rgba(15,28,46,0.24); font-weight: 700; font-family: 'IBM Plex Mono', monospace; background: #eef3f7; }
-  .good { color: #16855c; } .warn { color: #b07d12; } .bad { color: #c0392b; }
-  .method { margin-top: 22px; padding: 13px 16px; background: #f7f9fb; border-left: 3px solid #5cd9ff; border-radius: 0 8px 8px 0; font-size: 10.5px; color: #46586e; line-height: 1.65; page-break-inside: avoid; }
-  .method b { color: #0f1c2e; }
+  td.acct { font-weight: 600; min-width: 168px; }
+  .sub { display: block; font-size: 7.5px; color: #94a3b8; font-family: 'IBM Plex Mono', monospace; font-weight: 400; }
+  tfoot td { border-top: 2px solid rgba(15,28,46,.25); border-bottom: none; font-weight: 700;
+             font-family: 'IBM Plex Mono', monospace; background: #eef3f7; padding: 7px 6px; }
+  thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
-  @media print { body { padding: 0; } .kpis, .method { page-break-inside: avoid; } }
+  .good { color: #16855c; } .warn { color: #b07d12; } .bad { color: #c0392b; }
+
+  .bar { height: 6px; background: #e3ebf2; border-radius: 3px; overflow: hidden; }
+  .bar span { display: block; height: 100%; background: #1c2a48; border-radius: 3px; }
+
+  .basis { margin-top: 14px; padding: 10px 13px; background: #f7f9fb; border-left: 3px solid #5cd9ff;
+           border-radius: 0 6px 6px 0; font-size: 8.5px; color: #46586e; line-height: 1.7; page-break-inside: avoid; }
+  .basis b { color: #0f1c2e; }
+  .basis .t { font-family: 'Fraunces', serif; font-size: 10.5px; font-weight: 600; color: #0f1c2e; display: block; margin-bottom: 4px; }
+
+  .foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(15,28,46,.14);
+          font-size: 7.5px; color: #94a3b8; display: flex; justify-content: space-between; }
 </style></head><body><div class="sheet">
+
   <div class="masthead">
-    <div>
-      <div class="brand">HealthCross &middot; Underwriting Intelligence</div>
-      <h1>Portfolio Loss Ratio Report</h1>
-      <div class="meta">${t.account_count} account policy periods &middot; ${t.member_count.toLocaleString()} lives${asOf ? ' &middot; report date ' + escapeHtml(asOf) : ''}</div>
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 108 100" role="img" aria-label="HealthCross">
+        <!-- Hexagonal C in brand light blue, with the cross formed in the
+             negative space by the navy bar sitting in its opening. Drawn
+             inline so the report stays a single self-contained file. -->
+        <path fill="#5cd9ff" fill-rule="evenodd"
+              d="M46,2 L87,26 L87,40 L64,40 L64,34 L46,24 L23,37 L23,63 L46,76 L64,66 L64,60 L87,60 L87,74 L46,98 L5,74 L5,26 Z"/>
+        <path fill="#1c2a48" d="M78,28 L95,34 L95,66 L78,72 Z"/>
+      </svg>
+      <div>
+        <div class="nm"><span class="h">HEALTH</span><span class="c">CROSS</span><sup>&reg;</sup></div>
+        <div class="sb">Care without borders</div>
+      </div>
     </div>
-    <div class="meta">Generated ${new Date().toLocaleDateString()}</div>
+    <div class="docref">
+      Reference <b>${escapeHtml(ref)}</b><br>
+      Valuation date <b>${escapeHtml(asOf || '-')}</b><br>
+      Issued ${escapeHtml(generated)}
+    </div>
+  </div>
+
+  <h1>Portfolio Loss Ratio Report</h1>
+  <div class="scope">
+    <span>Basis <b>${escapeHtml(basisLabel)}</b></span>
+    <span>Period <b>${escapeHtml(period)}</b></span>
+    <span>Premium <b>${escapeHtml(premLabel)}</b></span>
+    <span>Scope <b>${acctSel ? escapeHtml(acctSel) : 'Whole portfolio'}</b></span>
+    <span>Currency <b>AED</b></span>
   </div>
 
   <div class="kpis">
-    <div class="kpi"><div class="k">Net earned loss ratio</div><div class="v ${_lrBand(t.net_loss_ratio)}">${_lrPct(t.net_loss_ratio)}</div></div>
-    <div class="kpi"><div class="k">Gross earned loss ratio</div><div class="v ${_lrBand(t.gross_loss_ratio)}">${_lrPct(t.gross_loss_ratio)}</div></div>
-    <div class="kpi"><div class="k">Incurred claims</div><div class="v">${_lrMoney(t.incurred_claims)}</div></div>
-    <div class="kpi"><div class="k">Earned premium</div><div class="v">${_lrMoney(t.earned_premium)}</div></div>
+    <div class="kpi"><div class="k">Accounts</div><div class="v">${t.account_count}</div><div class="u">${basisLabel === 'Calendar year' ? 'account-years' : 'policy periods'}</div></div>
+    <div class="kpi"><div class="k">Lives</div><div class="v">${t.member_count.toLocaleString()}</div><div class="u">exposed</div></div>
+    <div class="kpi"><div class="k">Earned premium</div><div class="v">${_lrMoney(t.earned_premium)}</div><div class="u">AED</div></div>
+    <div class="kpi"><div class="k">Incurred claims</div><div class="v">${_lrMoney(t.incurred_claims)}</div><div class="u">paid + OS + IBNR</div></div>
+    <div class="kpi"><div class="k">Gross earned LR</div><div class="v ${_lrBand(t.gross_loss_ratio)}">${_lrPct(t.gross_loss_ratio)}</div><div class="u">of earned premium</div></div>
+    <div class="kpi"><div class="k">Net earned LR</div><div class="v ${_lrBand(t.net_loss_ratio)}">${_lrPct(t.net_loss_ratio)}</div><div class="u">of net premium</div></div>
   </div>
 
-  ${over.length ? `
-    <h2>Accounts running over 100% net</h2>
-    <div class="note">Claims incurred already exceed the net premium retained after loading - ${over.length} of ${t.account_count} account periods${over.length > 12 ? ', showing the 12 largest by net loss ratio' : ''}.</div>
-    <table>
-      <thead><tr><th>Account</th><th class="num">Incurred</th><th class="num">Net premium</th><th class="num">Net LR</th></tr></thead>
-      <tbody>${watchRows}</tbody>
-    </table>
-  ` : ''}
+  <h2>Distribution by net loss ratio</h2>
+  <div class="note">Accounts grouped by their own net earned loss ratio, with the premium and claims each band carries.</div>
+  <table>
+    <thead><tr><th>Band</th><th class="num">Accounts</th><th class="num">Earned premium</th><th class="num">Incurred claims</th><th class="num">Net LR</th><th>Share of earned premium</th></tr></thead>
+    <tbody>${bandRows}</tbody>
+    <tfoot><tr>
+      <td>All accounts</td>
+      <td class="num">${t.account_count}</td>
+      <td class="num">${_lrMoney(t.earned_premium)}</td>
+      <td class="num">${_lrMoney(t.incurred_claims)}</td>
+      <td class="num">${_lrPct(t.net_loss_ratio)}</td>
+      <td></td>
+    </tr></tfoot>
+  </table>
 
   <h2>Loss ratio by account</h2>
-  <div class="note">One row per account policy period, sorted by ${escapeHtml(lrState.sort.replace(/_/g, ' '))} (${lrState.dir === 'asc' ? 'ascending' : 'descending'}).</div>
+  <div class="note">${calendar
+      ? 'One row per account per calendar year. A policy spanning a year end is apportioned across both years by the days falling in each.'
+      : 'One row per account policy period, each policy year treated as its own cohort.'}
+    Sorted by ${escapeHtml(lrState.sort.replace(/_/g, ' '))} (${lrState.dir === 'asc' ? 'ascending' : 'descending'}).</div>
   <table>
     <thead><tr>
-      <th>Account</th><th class="num">Paid</th><th class="num">OS</th><th class="num">IBNR</th>
-      <th class="num">Incurred</th><th class="num">Loading</th><th class="num">Gross prem.</th>
-      <th class="num">Earned prem.</th><th class="num">Net prem.</th><th class="num">Gross LR</th><th class="num">Net LR</th>
+      <th>Account</th><th class="num">Paid</th><th class="num">Outstanding</th><th class="num">IBNR</th>
+      <th class="num">Incurred claims</th><th class="num">Loading</th><th class="num">Earned premium</th>
+      <th class="num">Net premium</th><th class="num">Gross LR</th><th class="num">Net LR</th>
     </tr></thead>
     <tbody>${bodyRows}</tbody>
     <tfoot><tr>
-      <td>Book total</td>
+      <td>Portfolio total</td>
       <td class="num">${_lrMoney(t.paid)}</td>
       <td class="num">${_lrMoney(t.outstanding)}</td>
       <td class="num">${_lrMoney(t.ibnr)}</td>
       <td class="num">${_lrMoney(t.incurred_claims)}</td>
       <td class="num">-</td>
-      <td class="num">${_lrMoney(t.gross_premium)}</td>
       <td class="num">${_lrMoney(t.earned_premium)}</td>
       <td class="num">${_lrMoney(t.net_premium)}</td>
       <td class="num ${_lrBand(t.gross_loss_ratio)}">${_lrPct(t.gross_loss_ratio)}</td>
@@ -4796,15 +4898,21 @@ function printLossRatioReport() {
     </tr></tfoot>
   </table>
 
-  <div class="method">
-    <b>Method.</b>
-    <b>Days</b> counts from the policy effective date through the report date, inclusive.
-    <b>IBNR</b> reserves an unreported tail of Paid &divide; Days &times; 30; an account whose policy term has fully run (over 365 days) reserves none, since every claim against it has by then been reported.
-    <b>Incurred Claims</b> = Paid + Outstanding + IBNR.
-    <b>Earned Premium</b> prorates the gross annual premium by Days &divide; 365, capped at the full premium once the term has run.
-    <b>Net Premium</b> = Earned &times; (1 &minus; Loading), where Loading is each client's own OPEX where it is on file.
-    <b>Gross LR</b> = Incurred &divide; Earned; <b>Net LR</b> = Incurred &divide; Net.
-    Book totals recompute both ratios from summed amounts rather than averaging account ratios.
+  <div class="basis">
+    <span class="t">Basis of preparation</span>
+    <b>Exposure.</b> Days run from the policy effective date to the valuation date, inclusive of both.
+    ${calendar
+      ? 'On a calendar-year basis a policy spanning a year end is apportioned across both years by the days falling in each, so a renewing account contributes the tail of its expiring policy and the start of its incoming one to the same year. Written premium is attributed in full to the year of inception; earned premium is apportioned.'
+      : 'On an underwriting-year basis each policy period is treated as its own cohort, so claims are measured against the premium that covered them.'}
+    <b>Claims.</b> Attributed by date of treatment. A claim treated on a renewal date falls to the incoming policy, the expiring period being closed at that date.
+    <b>IBNR.</b> Reserved at 30 days of the period's own paid-claims run rate (Paid &divide; days &times; 30). No reserve is held once a period has run its full term or otherwise closed before the valuation date, those periods being considered developed.
+    <b>Premium.</b> Earned premium apportions the annual premium by days elapsed over 365, capped at the full annual premium. Net premium is earned premium less the account's own acquisition and administration loading.
+    <b>Ratios.</b> Gross loss ratio is incurred claims over earned premium; net loss ratio is incurred claims over net premium. Portfolio ratios are recomputed from aggregate amounts, not averaged across accounts.
+  </div>
+
+  <div class="foot">
+    <span>HealthCross &middot; ${escapeHtml(ref)} &middot; Prepared on an ${escapeHtml(basisLabel.toLowerCase())} basis, ${escapeHtml(premLabel.toLowerCase())}</span>
+    <span>All amounts in AED &middot; Page 1</span>
   </div>
 </div>
 <script>window.onload = () => window.print();<\/script>

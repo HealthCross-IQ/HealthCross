@@ -1,12 +1,14 @@
 """Tests for app/scoring/rules/portfolio_analysis.py - checks
 HealthCross's own already-booked book against the New Business rate card.
 """
-from datetime import date
+from datetime import date, timedelta
 
 import pytest
 
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_EXPENSE_RATIO_PCT,
+    _claim_matches_period,
+    actual_claims_for_member,
     account_calendar_loss_ratio_rows,
     account_loss_ratio_rows,
     account_loss_ratio_totals,
@@ -1938,3 +1940,51 @@ def test_calendar_basis_counts_a_renewal_boundary_claim_only_once():
 
     assert rows[2026]["paid"] == 250.0
     assert rows[2026]["claim_count"] == 1
+
+
+def test_a_claim_on_the_renewal_date_belongs_to_the_incoming_policy():
+    # The export's policy end date IS the next policy's start date, so the
+    # period is half-open: a claim treated that day is the incoming
+    # policy's, never the expiring one's, and never both.
+    expiring = (date(2025, 5, 1), date(2026, 5, 1))
+    incoming = (date(2026, 5, 1), date(2027, 5, 1))
+    boundary = date(2026, 5, 1)
+
+    assert _claim_matches_period(boundary, *expiring) is False
+    assert _claim_matches_period(boundary, *incoming) is True
+    # The day before still belongs to the expiring policy.
+    assert _claim_matches_period(date(2026, 4, 30), *expiring) is True
+
+
+def test_an_annual_policy_covers_exactly_365_days():
+    # Counting the end date too would make a one-year policy 366 days.
+    start, end = date(2025, 5, 1), date(2026, 5, 1)
+    covered = sum(1 for i in range((end - start).days + 1)
+                  if _claim_matches_period(start + timedelta(days=i), start, end))
+    assert covered == 365
+
+
+def test_a_malformed_same_day_period_still_matches_its_own_day():
+    # Half-open would match nothing at all here; falling back keeps a real
+    # claim rather than silently dropping every one for that member.
+    day = date(2026, 3, 10)
+    assert _claim_matches_period(day, day, day) is True
+    assert _claim_matches_period(date(2026, 3, 11), day, day) is False
+
+
+def test_renewal_boundary_claim_is_counted_once_across_both_policy_years():
+    # End to end: the member renews, and the boundary claim lands in the
+    # incoming policy's totals only.
+    claims = {"B1": [
+        {"date_of_treatment": date(2026, 5, 1), "final_amount": 250.0, "claim_status": "Paid Claims"},
+    ]}
+    expiring = _member(beneficiary_id="B1", policy_start_date=date(2025, 5, 1),
+                       policy_end_date=date(2026, 5, 1))
+    incoming = _member(beneficiary_id="B1", policy_start_date=date(2026, 5, 1),
+                       policy_end_date=date(2027, 5, 1))
+
+    a = actual_claims_for_member(expiring, claims)
+    b = actual_claims_for_member(incoming, claims)
+
+    assert a["total"] == 0.0 and a["count"] == 0
+    assert b["total"] == 250.0 and b["count"] == 1

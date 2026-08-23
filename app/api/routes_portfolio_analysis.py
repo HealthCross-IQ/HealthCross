@@ -420,7 +420,7 @@ def portfolio_executive_summary(
 @router.get("/account-loss-ratio")
 def portfolio_account_loss_ratio(
     as_of: Optional[date] = Query(None, description="Report date to measure elapsed days and earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
-    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    policy_year: Optional[str] = Query(None, description="On underwriting basis, restrict to members whose own policy started in this year. On calendar basis, restrict to this CALENDAR year's rows - a policy incepting in 2025 still contributes to 2026, so the two readings are not interchangeable."),
     client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
     default_loading_pct: float = Query(
         DEFAULT_EXPENSE_RATIO_PCT,
@@ -454,9 +454,21 @@ def portfolio_account_loss_ratio(
     # ACTUAL claims - the rate card only ever feeds standard_premium (what
     # the card WOULD charge), which no column here uses. Requiring one would
     # block the book's core underwriting view on an unrelated upload.
+    #
+    # "Year" means different things on the two bases, and applying the
+    # wrong one silently answered a different question. On UNDERWRITING
+    # basis a year IS the policy period, so the filter belongs upstream,
+    # restricting which members are analysed at all. On CALENDAR basis the
+    # rows are keyed by calendar year instead, and a policy incepting in
+    # 2025 legitimately produces both a 2025 and a 2026 row - so filtering
+    # members by inception year there returned every calendar year those
+    # policies touched. Calendar basis therefore analyses ALL members and
+    # filters the finished ROWS by their own calendar year.
+    calendar_basis = year_basis == "calendar"
     results = _run_analysis(
-        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client,
-        filters=filters, require_rate_card=False,
+        db, as_of=as_of or _get_stored_as_of(db),
+        policy_year=None if calendar_basis else policy_year,
+        client=client, filters=filters, require_rate_card=False,
     )
     opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
     for cm in db.query(models.ClientMasterInfo).all():
@@ -494,6 +506,8 @@ def portfolio_account_loss_ratio(
                 default_loading_pct=default_loading_pct,
                 premium_basis=premium_basis,
             )
+            if policy_year:
+                rows = [r for r in rows if str(r["calendar_year"]) == str(policy_year)]
         else:
             rows = account_loss_ratio_rows(
                 results,
