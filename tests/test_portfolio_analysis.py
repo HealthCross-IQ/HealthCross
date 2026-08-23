@@ -7,6 +7,7 @@ import pytest
 
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_EXPENSE_RATIO_PCT,
+    account_calendar_loss_ratio_rows,
     account_loss_ratio_rows,
     account_loss_ratio_totals,
     age_bands_from_rate_cards,
@@ -31,6 +32,7 @@ from app.scoring.rules.portfolio_analysis import (
     top_claims_by_value,
     top_members_by_total_claims,
     nationality_risk_table,
+    period_overlap_days,
     utilization_by_benefit_category,
     utilization_by_encounter_type,
 )
@@ -1762,3 +1764,143 @@ def test_pricing_readiness_threshold_is_adjustable():
 
     assert lenient["pricing_ready"] is True    # 30 yrs -> 55% credibility
     assert strict["pricing_ready"] is False
+
+
+def test_period_overlap_days_counts_both_endpoints():
+    assert period_overlap_days(date(2026, 1, 1), date(2026, 1, 10),
+                               date(2026, 1, 5), date(2026, 1, 20)) == 6  # 5th..10th
+    assert period_overlap_days(date(2026, 1, 1), date(2026, 1, 10),
+                               date(2026, 2, 1), date(2026, 2, 10)) == 0
+    assert period_overlap_days(None, date(2026, 1, 10), date(2026, 1, 1), date(2026, 1, 5)) == 0
+
+
+def _cal_member(policy_start, policy_end, premium, beneficiary_id="B1"):
+    return {
+        "beneficiary_id": beneficiary_id, "master_client": "ACME",
+        "policy_start_date": policy_start, "policy_end_date": policy_end,
+        "written_premium": premium, "booked_gross_premium": premium,
+    }
+
+
+def test_calendar_basis_splits_a_year_spanning_policy_across_both_years():
+    # 1 May 2025 - 1 May 2026, reported at 15 Jul 2026. The policy touches
+    # two calendar years and its premium must land in each by the days
+    # falling there - not wholly in the year it incepted.
+    members = [_cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0)]
+    claims = {"B1": [
+        {"date_of_treatment": date(2025, 8, 10), "final_amount": 1_000.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 3, 10), "final_amount": 4_000.0, "claim_status": "Paid Claims"},
+    ]}
+
+    rows = {r["calendar_year"]: r for r in
+            account_calendar_loss_ratio_rows(members, claims, as_of=date(2026, 7, 15))}
+
+    assert set(rows) == {2025, 2026}
+    # 1 May - 31 Dec 2025 inclusive = 245 days; 1 Jan - 1 May 2026 = 121 days.
+    assert rows[2025]["days"] == 245
+    assert rows[2026]["days"] == 121
+    assert rows[2025]["earned_premium"] == pytest.approx(365_000.0 * 245 / 365, abs=0.01)
+    assert rows[2026]["earned_premium"] == pytest.approx(365_000.0 * 121 / 365, abs=0.01)
+    # Each year keeps only the claims actually treated inside it.
+    assert rows[2025]["paid"] == 1_000.0
+    assert rows[2026]["paid"] == 4_000.0
+
+
+def test_calendar_basis_aggregates_two_policies_into_one_year_for_a_renewed_client():
+    # A renewed client's calendar year holds the tail of the expiring
+    # policy AND the start of the new one - the whole point of the basis.
+    members = [
+        _cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0, beneficiary_id="B1"),
+        _cal_member(date(2026, 5, 1), date(2027, 5, 1), 365_000.0, beneficiary_id="B2"),
+    ]
+    rows = {r["calendar_year"]: r for r in
+            account_calendar_loss_ratio_rows(members, {}, as_of=date(2026, 7, 15))}
+
+    assert rows[2026]["member_count"] == 2  # both policies contribute
+    # Expiring policy 1 Jan-1 May (121d) + new policy 1 May-15 Jul (76d).
+    expected = 365_000.0 * 121 / 365 + 365_000.0 * 76 / 365
+    assert rows[2026]["earned_premium"] == pytest.approx(expected, abs=0.01)
+
+
+def test_calendar_basis_reserves_ibnr_only_for_a_year_still_open():
+    # A two-year policy still running at the report date: 2025 is closed
+    # and fully developed, 2026 is only part-run and still has a tail.
+    members = [_cal_member(date(2025, 1, 1), date(2027, 1, 1), 365_000.0)]
+    claims = {"B1": [
+        {"date_of_treatment": date(2025, 8, 10), "final_amount": 30_000.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 3, 10), "final_amount": 30_000.0, "claim_status": "Paid Claims"},
+    ]}
+    rows = {r["calendar_year"]: r for r in
+            account_calendar_loss_ratio_rows(members, claims, as_of=date(2026, 7, 15))}
+
+    # 2025 closed long before the report date - its claims are in.
+    assert rows[2025]["ibnr"] == 0.0
+    assert rows[2025]["expired"] is True
+    # 2026's window runs to the report date, so it still has a tail.
+    assert rows[2026]["ibnr"] > 0.0
+    assert rows[2026]["expired"] is False
+
+
+def test_calendar_basis_treats_a_year_whose_policy_already_expired_as_developed():
+    # The window ends when the POLICY ends, not at the year end - a policy
+    # that expired in May and is reported in July has no tail left, even
+    # though its calendar year is still running.
+    members = [_cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0)]
+    claims = {"B1": [{"date_of_treatment": date(2026, 3, 10), "final_amount": 30_000.0,
+                      "claim_status": "Paid Claims"}]}
+    rows = {r["calendar_year"]: r for r in
+            account_calendar_loss_ratio_rows(members, claims, as_of=date(2026, 7, 15))}
+
+    assert rows[2026]["days"] == 121          # 1 Jan - 1 May, not to year end
+    assert rows[2026]["ibnr"] == 0.0
+    assert rows[2026]["expired"] is True
+
+
+def test_calendar_basis_ignores_claims_outside_the_members_own_enrollment():
+    # A member who left mid-year must not pick up claims from after they
+    # left, even though those fall inside the calendar window.
+    members = [{
+        "beneficiary_id": "B1", "master_client": "ACME",
+        "policy_start_date": date(2026, 1, 1), "policy_end_date": date(2026, 12, 31),
+        "member_start_date": date(2026, 1, 1), "member_end_date": date(2026, 3, 31),
+        "written_premium": 100_000.0,
+    }]
+    claims = {"B1": [
+        {"date_of_treatment": date(2026, 2, 10), "final_amount": 500.0, "claim_status": "Paid Claims"},
+        {"date_of_treatment": date(2026, 6, 10), "final_amount": 9_000.0, "claim_status": "Paid Claims"},
+    ]}
+    row = account_calendar_loss_ratio_rows(members, claims, as_of=date(2026, 7, 15))[0]
+    assert row["paid"] == 500.0
+
+
+def test_analyze_portfolio_member_carries_the_dates_a_calendar_split_needs():
+    # Regression: analyze_portfolio_member returned policy_start_date but
+    # not policy_end_date, so calendar-year splitting fell back to
+    # start==end and collapsed every window to a single day - earned
+    # premium came out ~250x too low with no error anywhere. Unit tests
+    # missed it because they built member dicts by hand; only the real
+    # pipeline shape exposed it.
+    result = analyze_portfolio_member(
+        _member(
+            policy_start_date=date(2025, 5, 1), policy_end_date=date(2026, 5, 1),
+            member_start_date=date(2025, 5, 1), member_end_date=date(2026, 5, 1),
+        ),
+        {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {},
+    )
+    assert result["policy_start_date"] == date(2025, 5, 1)
+    assert result["policy_end_date"] == date(2026, 5, 1)
+    assert result["member_start_date"] == date(2025, 5, 1)
+    assert result["member_end_date"] == date(2026, 5, 1)
+
+
+def test_calendar_split_reconciles_back_to_the_full_annual_premium():
+    # The two halves of a year-spanning policy must sum to what the same
+    # policy earns in full - a split that loses or duplicates premium
+    # would quietly misstate every calendar-year loss ratio.
+    members = [_cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0)]
+    rows = account_calendar_loss_ratio_rows(members, {}, as_of=date(2026, 7, 15))
+
+    total_days = sum(r["days"] for r in rows)
+    total_earned = sum(r["earned_premium"] for r in rows)
+    assert total_days == 366                      # 1 May 2025 - 1 May 2026 inclusive
+    assert total_earned == pytest.approx(365_000.0 * 366 / 365, abs=0.01)

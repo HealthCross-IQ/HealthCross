@@ -365,6 +365,9 @@ def analyze_portfolio_member(
             "category": member.get("category"),
             "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
             "policy_start_date": member.get("policy_start_date"),
+            "policy_end_date": member.get("policy_end_date"),
+            "member_start_date": member.get("member_start_date"),
+            "member_end_date": member.get("member_end_date"),
             "written_premium": round(actual_gross_premium, 2) if actual_gross_premium is not None else None,
             "booked_gross_premium": round(member["gross_premium"], 2) if member.get("gross_premium") is not None else None,
             "actual_premium": round(actual_premium, 2) if actual_premium is not None else None,
@@ -434,6 +437,9 @@ def analyze_portfolio_member(
         # policy_year filter in _run_analysis).
         "policy_year": str(member["policy_start_date"].year) if member.get("policy_start_date") else None,
         "policy_start_date": member.get("policy_start_date"),
+        "policy_end_date": member.get("policy_end_date"),
+        "member_start_date": member.get("member_start_date"),
+        "member_end_date": member.get("member_end_date"),
         "standard_premium": round(standard_premium, 2) if standard_premium is not None else None,
         # "Written" (the full annual amount, regardless of how much of the
         # term has elapsed) vs. "actual"/earned (prorated by earned_fraction
@@ -1526,6 +1532,53 @@ ACCOUNT_IBNR_TAIL_DAYS = 30
 PREMIUM_BASES = ("actual", "booked")
 
 
+
+#: How a loss ratio attributes premium and claims to a period.
+#:
+#:   "underwriting" - one row per POLICY period. Each policy year is its
+#:                    own cohort: premium earned from inception, claims
+#:                    matched to the policy that covered them. This is the
+#:                    basis for pricing, because it compares claims against
+#:                    the premium actually charged to cover them.
+#:   "calendar"     - one row per CALENDAR year. A policy spanning a year
+#:                    end is SPLIT across both years by the days falling in
+#:                    each, and a renewed client's calendar year therefore
+#:                    aggregates the tail of the expiring policy with the
+#:                    start of the new one. This is the basis for financial
+#:                    reporting, because it lines up with the accounting
+#:                    period rather than the contract.
+YEAR_BASES = ("underwriting", "calendar")
+
+
+def period_overlap_days(a_start, a_end, b_start, b_end) -> int:
+    """Days two date ranges share, counting both endpoints - the same
+    inclusive convention as the rest of this module (a policy incepting
+    today has one day of exposure, not zero). Zero when they do not
+    overlap, or when either range is unusable."""
+    if not a_start or not a_end or not b_start or not b_end:
+        return 0
+    start = max(a_start, b_start)
+    end = min(a_end, b_end)
+    if end < start:
+        return 0
+    return (end - start).days + 1
+
+
+def _calendar_windows(policy_start, policy_end, as_of):
+    """Splits a policy period into one window per calendar year it touches,
+    stopping at as_of. Yields (year, window_start, window_end) - the pieces
+    a calendar-year loss ratio is built from."""
+    if not policy_start or not policy_end:
+        return
+    last = min(policy_end, as_of)
+    if last < policy_start:
+        return
+    for year in range(policy_start.year, last.year + 1):
+        window_start = max(policy_start, date_cls(year, 1, 1))
+        window_end = min(last, date_cls(year, 12, 31))
+        if window_end >= window_start:
+            yield year, window_start, window_end
+
 def account_loss_ratio_rows(
     member_results: List[dict],
     as_of: date_cls,
@@ -1804,4 +1857,125 @@ def nationality_risk_table(
         )
 
     rows.sort(key=lambda r: (r["relativity"] is None, -(r["relativity"] or 0)))
+    return rows
+
+
+def account_calendar_loss_ratio_rows(
+    member_results: List[dict],
+    claims_by_beneficiary: Dict[str, List[dict]],
+    as_of: date_cls,
+    opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
+    default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+    premium_basis: str = "actual",
+) -> List[dict]:
+    """Loss ratio on a CALENDAR year basis - one row per account per
+    calendar year, rather than per policy period (see YEAR_BASES).
+
+    A policy spanning a year end contributes to BOTH years, split by the
+    days falling in each: a 1 May 2025 - 1 May 2026 policy earns 245/365
+    of its premium into 2025 and 121/365 into 2026, with each year's
+    claims taken from treatments dated inside that year's own window. A
+    renewed client's calendar year therefore aggregates the tail of the
+    expiring policy with the start of the new one - which is exactly the
+    difference from underwriting-year basis, where each policy stays its
+    own cohort.
+
+    IBNR is reserved only for a window still open at the report date. A
+    calendar year that closed before then has had time to develop, so
+    reserving an unreported tail against it would overstate a period whose
+    claims are already in.
+    """
+    if premium_basis not in PREMIUM_BASES:
+        raise ValueError(f"premium_basis must be one of {PREMIUM_BASES}")
+    premium_field = "booked_gross_premium" if premium_basis == "booked" else "written_premium"
+
+    buckets: Dict[tuple, dict] = {}
+    for r in member_results:
+        master_client = r.get("master_client")
+        policy_start = r.get("policy_start_date")
+        policy_end = r.get("policy_end_date") or r.get("policy_start_date")
+        if not master_client or not policy_start:
+            continue
+
+        annual_premium = r.get(premium_field) or 0.0
+        # Claims are re-matched by treatment date per window, so the
+        # member's own enrollment period still bounds them - a member who
+        # left mid-year must not pick up claims from after they left.
+        enroll_start = r.get("member_start_date") or policy_start
+        enroll_end = r.get("member_end_date") or policy_end
+
+        for year, window_start, window_end in _calendar_windows(policy_start, policy_end, as_of):
+            key = (master_client, year)
+            bucket = buckets.get(key)
+            if bucket is None:
+                bucket = buckets[key] = {
+                    "master_client": master_client, "year": year,
+                    "member_count": 0, "paid": 0.0, "outstanding": 0.0,
+                    "gross_premium": 0.0, "earned_premium": 0.0,
+                    "claim_count": 0, "days": 0, "open": False,
+                    "policy_start_dates": set(),
+                }
+            days = (window_end - window_start).days + 1
+            bucket["member_count"] += 1
+            bucket["days"] = max(bucket["days"], days)
+            bucket["gross_premium"] += annual_premium
+            bucket["earned_premium"] += annual_premium * days / FULL_POLICY_TERM_DAYS
+            bucket["policy_start_dates"].add(policy_start)
+            if window_end >= as_of:
+                bucket["open"] = True
+
+            for c in claims_by_beneficiary.get(r.get("beneficiary_id"), []):
+                treated = c.get("date_of_treatment")
+                if not treated or not (window_start <= treated <= window_end):
+                    continue
+                if not _claim_matches_period(treated, enroll_start, enroll_end):
+                    continue
+                amount = c.get("final_amount") or 0.0
+                if _is_paid_claim_status(c.get("claim_status")):
+                    bucket["paid"] += amount
+                else:
+                    bucket["outstanding"] += amount
+                bucket["claim_count"] += 1
+
+    rows = []
+    for (master_client, year), b in buckets.items():
+        paid, outstanding = b["paid"], b["outstanding"]
+        days = b["days"]
+        # Only a window still running at the report date has an unreported
+        # tail worth reserving for - see the docstring.
+        ibnr = (paid / days * ACCOUNT_IBNR_TAIL_DAYS) if (b["open"] and days > 0 and paid) else 0.0
+        incurred_claims = paid + outstanding + ibnr
+        earned_premium = b["earned_premium"]
+
+        loading_pct = resolve_client_opex_pct(
+            master_client, min(b["policy_start_dates"]) if b["policy_start_dates"] else None,
+            opex_records_by_client, default_loading_pct,
+        )
+        net_premium = earned_premium * (1 - loading_pct)
+
+        rows.append(
+            {
+                "master_client": master_client,
+                "calendar_year": year,
+                "policy_start_date": str(year),
+                "premium_basis": premium_basis,
+                "year_basis": "calendar",
+                "member_count": b["member_count"],
+                "days": days,
+                "expired": not b["open"],
+                "paid": round(paid, 2),
+                "outstanding": round(outstanding, 2),
+                "ibnr": round(ibnr, 2),
+                "incurred_claims": round(incurred_claims, 2),
+                "loading_pct": round(loading_pct, 4),
+                "gross_premium": round(b["gross_premium"], 2),
+                "earned_premium": round(earned_premium, 2),
+                "net_premium": round(net_premium, 2),
+                "gross_loss_ratio": round(incurred_claims / earned_premium, 4) if earned_premium else None,
+                "net_loss_ratio": round(incurred_claims / net_premium, 4) if net_premium else None,
+                "claim_count": b["claim_count"],
+            }
+        )
+
+    rows.sort(key=lambda r: (r["master_client"], r["calendar_year"]))
     return rows

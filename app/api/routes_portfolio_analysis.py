@@ -24,6 +24,8 @@ from app.reference.network_type_mapping import is_out_of_scope_network_type, map
 from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_PRICING_CREDIBILITY,
+    YEAR_BASES,
+    account_calendar_loss_ratio_rows,
     account_loss_ratio_rows,
     nationality_risk_table,
     account_loss_ratio_totals,
@@ -424,6 +426,10 @@ def portfolio_account_loss_ratio(
         DEFAULT_EXPENSE_RATIO_PCT,
         description="Loading (OPEX) fallback for an account with no real figure on file in the uploaded Client Master sheet",
     ),
+    year_basis: str = Query(
+        "underwriting",
+        description="'underwriting' = one row per policy period, each policy year its own cohort (the pricing basis). 'calendar' = one row per calendar year, splitting a year-spanning policy across both years by the days in each (the reporting basis).",
+    ),
     premium_basis: str = Query(
         "actual",
         description="Which of the Membership export's own premium columns to build Gross Premium from: 'actual' (ActualGrossPremium - already prorated for each member's own joining/leaving dates, the basis HealthCross underwrites on) or 'booked' (GrossPremium - each member's full annual premium regardless of enrollment).",
@@ -459,19 +465,49 @@ def portfolio_account_loss_ratio(
                 {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
             )
     effective_as_of = as_of or _get_stored_as_of(db) or date.today()
+    if year_basis not in YEAR_BASES:
+        raise HTTPException(status_code=400, detail=f"year_basis must be one of {YEAR_BASES}")
     try:
-        rows = account_loss_ratio_rows(
-            results,
-            as_of=effective_as_of,
-            opex_records_by_client=opex_records_by_client,
-            default_loading_pct=default_loading_pct,
-            premium_basis=premium_basis,
-        )
+        if year_basis == "calendar":
+            # Calendar basis re-matches claims by treatment date per year,
+            # so it needs the claim lines themselves rather than the
+            # per-member totals already summed against the policy period.
+            claims = [
+                {
+                    "patient_id": patient_id,
+                    "date_of_treatment": date_of_treatment,
+                    "final_amount": final_amount,
+                    "claim_status": claim_status,
+                }
+                for patient_id, date_of_treatment, final_amount, claim_status in db.query(
+                    models.PortfolioClaimEntry.patient_id,
+                    models.PortfolioClaimEntry.date_of_treatment,
+                    models.PortfolioClaimEntry.final_amount,
+                    models.PortfolioClaimEntry.claim_status,
+                ).all()
+            ]
+            rows = account_calendar_loss_ratio_rows(
+                results,
+                group_claims_by_beneficiary(claims),
+                as_of=effective_as_of,
+                opex_records_by_client=opex_records_by_client,
+                default_loading_pct=default_loading_pct,
+                premium_basis=premium_basis,
+            )
+        else:
+            rows = account_loss_ratio_rows(
+                results,
+                as_of=effective_as_of,
+                opex_records_by_client=opex_records_by_client,
+                default_loading_pct=default_loading_pct,
+                premium_basis=premium_basis,
+            )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {
         "as_of": effective_as_of.isoformat(),
         "premium_basis": premium_basis,
+        "year_basis": year_basis,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
     }

@@ -4380,7 +4380,7 @@ async function loadRenewalBenchCensusMovement() {
 
 /* ---------------- Loss Ratio board (portfolio level) ---------------- */
 
-let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual' };
+let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting' };
 
 function _lrMoney(v, dp) {
   if (v == null) return '-';
@@ -4450,7 +4450,7 @@ function _lrTableHtml() {
   }
   const body = rows.map(r => `
     <tr>
-      <td class="lr-acct">${escapeHtml(r.master_client)}${r.expired ? '<span class="lr-exp">expired</span>' : ''}<span class="yr">${r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
+      <td class="lr-acct">${escapeHtml(r.master_client)}${r.expired ? `<span class="lr-exp">${lrState.yearBasis === 'calendar' ? 'closed' : 'expired'}</span>` : ''}<span class="yr">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
       <td class="num">${_lrMoney(r.paid)}</td>
       <td class="num">${_lrMoney(r.outstanding)}</td>
       <td class="num">${_lrMoney(r.ibnr)}</td>
@@ -4468,9 +4468,11 @@ function _lrTableHtml() {
       <div class="lr-card-head">
         <div>
           <div class="lr-card-title">Loss ratio by account</div>
-          <div class="lr-card-note">One row per account policy period. Click any column to sort.</div>
+          <div class="lr-card-note">${lrState.yearBasis === 'calendar'
+            ? 'One row per account per calendar year - a policy spanning a year end is split across both by the days in each. Click any column to sort.'
+            : 'One row per account policy period, each policy year its own cohort. Click any column to sort.'}</div>
         </div>
-        <div class="lr-card-note">Premium basis: <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b> &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
+        <div class="lr-card-note">Basis: <b>${lrState.yearBasis === 'calendar' ? 'Calendar year' : 'Underwriting year'}</b> &middot; <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b> &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
@@ -4574,6 +4576,13 @@ function lossRatioBoardHtml() {
           <input type="date" id="lr-as-of" value="${lrState.asOf || ''}">
         </div>
         <div class="lr-field">
+          <label>Year basis</label>
+          <select id="lr-year-basis" onchange="loadLossRatioBoard()" style="min-width:160px;">
+            <option value="underwriting">Underwriting year</option>
+            <option value="calendar">Calendar year</option>
+          </select>
+        </div>
+        <div class="lr-field">
           <label>Premium basis</label>
           <select id="lr-basis" onchange="loadLossRatioBoard()" style="min-width:150px;">
             <option value="actual">Actual gross</option>
@@ -4631,6 +4640,9 @@ async function loadLossRatioBoard() {
   const basisEl = document.getElementById('lr-basis');
   if (basisEl && basisEl.value) params.set('premium_basis', basisEl.value);
   lrState.basis = (basisEl && basisEl.value) || 'actual';
+  const ybEl = document.getElementById('lr-year-basis');
+  if (ybEl && ybEl.value) params.set('year_basis', ybEl.value);
+  lrState.yearBasis = (ybEl && ybEl.value) || 'underwriting';
   lrState.client = (clientEl && clientEl.value) || '';
   lrState.year = (yearEl && yearEl.value) || '';
   tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
