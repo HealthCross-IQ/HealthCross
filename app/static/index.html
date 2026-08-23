@@ -600,6 +600,8 @@
   .lr-table { width: 100%; border-collapse: collapse; font-size: 12px; white-space: nowrap; }
   .lr-table th { position: sticky; top: 0; background: var(--lr-surface-2); text-align: left; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700; color: var(--lr-ink-2); padding: 9px 10px; border-bottom: 1.5px solid var(--lr-border-strong); }
   .lr-table th.num, .lr-table td.num { text-align: right; font-family: 'IBM Plex Mono', monospace; }
+  /* Marks whichever of shed-vs-reprice does more for the book on that row. */
+  .lr-table td.lr-better { font-weight: 700; color: var(--lr-good, #0f7a52); background: color-mix(in srgb, var(--lr-good, #0f7a52) 8%, transparent); }
   .lr-table td { padding: 9px 10px; border-bottom: 1px solid var(--lr-border); color: var(--lr-ink); }
   .lr-table tbody tr:hover td { background: var(--lr-surface-2); }
   .lr-table tfoot td { padding: 11px 10px; font-weight: 700; border-top: 2px solid var(--lr-border-strong); background: var(--lr-surface-2); font-family: 'IBM Plex Mono', monospace; }
@@ -5016,16 +5018,25 @@ function _lrShedHtml() {
     </div>`;
   }
 
-  const rows = helping.map(a => `
+  const rows = helping.map(a => {
+    // Which of the two actions does more for the book. Re-pricing wins
+    // whenever the rest of the book is itself above 100%: a book that is
+    // losing money needs MORE correctly-priced premium in the pool, not
+    // less of it. Shedding only wins once the remaining book is healthy.
+    const better = a.repriced_lr_change != null && a.repriced_lr_change < a.net_lr_change ? 'reprice' : 'shed';
+    return `
     <tr>
-      <td>${escapeHtml(a.master_client)}</td>
+      <td>${escapeHtml(a.master_client)}${a.period_count > 1 ? `<div class="hint" style="margin:2px 0 0;">${a.period_count} policy periods</div>` : ''}</td>
       <td class="num">${a.member_count.toLocaleString()}</td>
       <td class="num">${money(a.earned_premium)}</td>
       <td class="num ${_lrBand(a.net_loss_ratio)}">${_lrPct(a.net_loss_ratio)}</td>
-      <td class="num" style="font-weight:600;">${_lrPct(a.book_net_loss_ratio_without)}</td>
-      <td class="num" style="color:var(--ok, #0f7a52); font-weight:600;">${pts(a.net_lr_change)}</td>
-      <td class="num">${a.share_of_book_premium == null ? '-' : (a.share_of_book_premium * 100).toFixed(1) + '%'}</td>
-    </tr>`).join('');
+      <td class="num">${_lrPct(a.book_net_loss_ratio_without)}</td>
+      <td class="num ${better === 'shed' ? 'lr-better' : ''}">${pts(a.net_lr_change)}</td>
+      <td class="num">${a.required_increase_pct == null ? '-' : '+' + a.required_increase_pct.toFixed(0) + '%'}</td>
+      <td class="num">${_lrPct(a.book_net_loss_ratio_repriced)}</td>
+      <td class="num ${better === 'reprice' ? 'lr-better' : ''}">${pts(a.repriced_lr_change)}</td>
+    </tr>`;
+  }).join('');
 
   const cum = (lrState.shedCumulative || []).map(c => `
     <tr>
@@ -5041,10 +5052,20 @@ function _lrShedHtml() {
       <div class="lr-card-title">Impact of shedding an account</div>
       <div class="lr-card-sub">The book currently runs at <strong>${_lrPct(s.book_net_loss_ratio)}</strong> net across ${s.account_count} accounts. Each row shows where the book would land if that one account were not renewed &mdash; ranked by the improvement actually on offer, not by the account's own ratio, because a terrible ratio on a handful of lives moves nothing.</div>
       <table class="lr-table" style="margin-top:12px;">
-        <tr><th>Account</th><th class="num">Members</th><th class="num">Earned premium</th><th class="num">Its net LR</th>
-          <th class="num">Book LR without it</th><th class="num">Improvement</th><th class="num">% of book premium</th></tr>
+        <tr>
+          <th rowspan="2">Account</th><th class="num" rowspan="2">Members</th><th class="num" rowspan="2">Earned premium</th><th class="num" rowspan="2">Its net LR</th>
+          <th class="num" colspan="2" style="text-align:center;">If you lose it</th>
+          <th class="num" colspan="3" style="text-align:center;">If you renew it at the right price</th>
+        </tr>
+        <tr>
+          <th class="num">Book LR</th><th class="num">Gain</th>
+          <th class="num">Increase needed</th><th class="num">Book LR</th><th class="num">Gain</th>
+        </tr>
         ${rows}
       </table>
+      <div class="lr-card-sub" style="margin-top:10px;">The better of the two is highlighted on each row. Re-pricing wins whenever the <em>rest</em> of the book is itself above 100%: a book that is losing money needs more correctly-priced premium in the pool, not less of it. Shedding only becomes the better move once the remaining book is healthy - or when the increase needed is one no client would accept.</div>
+      ${s.unpriced_accounts && s.unpriced_accounts.length ? `
+        <div class="lr-card-sub" style="margin-top:10px;"><strong>${s.unpriced_accounts.length} accounts carry ${money(s.unpriced_incurred)} of claims with no premium recorded</strong> and are excluded from the ranking above. Removing them would look like the best decision on the book because it costs nothing - but that is a data gap (a missing premium column, an unmapped subgroup, a client on the claims file that never reached the membership export), not a shedding opportunity.</div>` : ''}
       ${cum ? `
         <div class="lr-card-title" style="font-size:13px; margin-top:20px;">Shedding them in sequence</div>
         <div class="lr-card-sub">The single-account figures above each measure against today's book, so they do not add up. This walks the real path &mdash; remove, recompute, remove again &mdash; and shows the premium given up to get there.</div>

@@ -1745,7 +1745,77 @@ def account_loss_ratio_totals(rows: List[dict]) -> dict:
     }
 
 
-def loss_ratio_shed_impact(rows: List[dict], top_n: Optional[int] = None) -> dict:
+def _reprice_scenario(
+    row: dict,
+    book_incurred: float,
+    book_net: float,
+    book_net_lr: Optional[float],
+    target_net_loss_ratio: float,
+) -> dict:
+    """The other half of the decision: what if this account is RENEWED, at
+    the price its own experience actually justifies?
+
+    Shedding is the option of last resort. Re-pricing keeps the premium,
+    keeps the relationship, and fixes the loss ratio at source - and
+    because the account stays on the book, its premium keeps absorbing
+    expense that would otherwise be spread over a smaller book. The
+    comparison an underwriter needs is not "how bad is this account" but
+    "shed or re-price, and what does each do to the book".
+
+    The required increase is computed on the account's own claims at its
+    own loading, so it is the increase that makes THIS account stand on
+    its own feet - not a blanket uplift. An increase above roughly 30-40%
+    is where clients start shopping the market, which is exactly when
+    shedding becomes the realistic alternative rather than a threat.
+    """
+    incurred = row["incurred_claims"]
+    current_net = row["net_premium"]
+    current_earned = row["earned_premium"]
+    if not current_earned or not incurred or target_net_loss_ratio <= 0:
+        return {
+            "required_net_premium": None,
+            "required_earned_premium": None,
+            "required_increase_pct": None,
+            "book_net_loss_ratio_repriced": None,
+            "repriced_lr_change": None,
+        }
+
+    # The account's own expense loading, implied by the gap between what
+    # it earns and what is left to fund claims after expenses.
+    retention = (current_net / current_earned) if current_earned else 1.0
+
+    required_net = incurred / target_net_loss_ratio
+    required_earned = required_net / retention if retention else None
+    book_net_repriced = book_net - current_net + required_net
+    lr_repriced = round(book_incurred / book_net_repriced, 4) if book_net_repriced > 0 else None
+
+    return {
+        "required_net_premium": round(required_net, 2),
+        "required_earned_premium": round(required_earned, 2) if required_earned else None,
+        "required_increase_pct": (
+            round((required_earned / current_earned - 1) * 100, 1) if required_earned else None
+        ),
+        "book_net_loss_ratio_repriced": lr_repriced,
+        "repriced_lr_change": (
+            round(lr_repriced - book_net_lr, 4)
+            if lr_repriced is not None and book_net_lr is not None else None
+        ),
+    }
+
+
+#: The net loss ratio an account is re-priced TO. 1.0 means the premium
+#: exactly funds expected claims after expenses - break-even, no margin.
+#: Deliberately a parameter: pricing every remediation to break-even
+#: leaves nothing for adverse development, while pricing to 0.85 asks for
+#: an increase some clients will simply refuse.
+DEFAULT_TARGET_NET_LOSS_RATIO = 1.0
+
+
+def loss_ratio_shed_impact(
+    rows: List[dict],
+    top_n: Optional[int] = None,
+    target_net_loss_ratio: float = DEFAULT_TARGET_NET_LOSS_RATIO,
+) -> dict:
     """What the book's loss ratio becomes if a given account is not
     renewed - the "should we walk away from this one?" calculation.
 
@@ -1774,8 +1844,36 @@ def loss_ratio_shed_impact(rows: List[dict], top_n: Optional[int] = None) -> dic
     book_gross_lr = totals["gross_loss_ratio"]
     book_net_lr = totals["net_loss_ratio"]
 
-    impacts = []
+    # Roll each account's policy periods together before measuring the
+    # impact. On the underwriting basis an account renewed once appears as
+    # TWO rows (2025 and 2026), and you do not lose one policy year of a
+    # client - you lose the client. Measuring a single row's removal while
+    # the decision removes every row for that client understates the
+    # impact on any multi-period account, which is most of the book.
+    by_client: Dict[str, dict] = {}
     for row in rows:
+        name = row["master_client"]
+        acc = by_client.setdefault(name, {
+            "master_client": name, "member_count": 0, "incurred_claims": 0.0,
+            "earned_premium": 0.0, "net_premium": 0.0, "period_count": 0,
+        })
+        acc["member_count"] += row["member_count"]
+        acc["incurred_claims"] += row["incurred_claims"]
+        acc["earned_premium"] += row["earned_premium"]
+        acc["net_premium"] += row["net_premium"]
+        acc["period_count"] += 1
+
+    impacts = []
+    for row in by_client.values():
+        row = {
+            **row,
+            "gross_loss_ratio": (
+                round(row["incurred_claims"] / row["earned_premium"], 4) if row["earned_premium"] else None
+            ),
+            "net_loss_ratio": (
+                round(row["incurred_claims"] / row["net_premium"], 4) if row["net_premium"] else None
+            ),
+        }
         remaining_earned = book_earned - row["earned_premium"]
         remaining_net = book_net - row["net_premium"]
         remaining_incurred = book_incurred - row["incurred_claims"]
@@ -1785,6 +1883,7 @@ def loss_ratio_shed_impact(rows: List[dict], top_n: Optional[int] = None) -> dic
 
         impacts.append({
             "master_client": row["master_client"],
+            "period_count": row["period_count"],
             "member_count": row["member_count"],
             "earned_premium": row["earned_premium"],
             "incurred_claims": row["incurred_claims"],
@@ -1805,20 +1904,36 @@ def loss_ratio_shed_impact(rows: List[dict], top_n: Optional[int] = None) -> dic
             "share_of_book_premium": (
                 round(row["earned_premium"] / book_earned, 4) if book_earned else None
             ),
+            **_reprice_scenario(row, book_incurred, book_net, book_net_lr, target_net_loss_ratio),
         })
 
+    # An account carrying claims but NO premium always tops a ranking by
+    # improvement - removing it costs nothing and takes claims out, so the
+    # arithmetic makes it look like the best decision on the book. It is
+    # almost never a shedding opportunity; it is a data gap (a missing
+    # premium column, an unmapped subgroup, a client on the claims file
+    # that never made it onto the membership export). Ranking those
+    # alongside real candidates would put the underwriter's attention on
+    # exactly the wrong accounts, so they come back separately, labelled
+    # for what they are.
+    unpriced = [i for i in impacts if not i["earned_premium"] and i["incurred_claims"]]
+    candidates = [i for i in impacts if i["earned_premium"]]
+
     # Biggest improvement first - most negative change at the top.
-    impacts.sort(key=lambda i: (i["net_lr_change"] if i["net_lr_change"] is not None else 0.0))
+    candidates.sort(key=lambda i: (i["net_lr_change"] if i["net_lr_change"] is not None else 0.0))
+    unpriced.sort(key=lambda i: -i["incurred_claims"])
     if top_n:
-        impacts = impacts[:top_n]
+        candidates = candidates[:top_n]
 
     return {
         "book_gross_loss_ratio": book_gross_lr,
         "book_net_loss_ratio": book_net_lr,
         "book_earned_premium": book_earned,
         "book_incurred_claims": book_incurred,
-        "account_count": totals["account_count"],
-        "accounts": impacts,
+        "account_count": len(by_client),
+        "accounts": candidates,
+        "unpriced_accounts": unpriced,
+        "unpriced_incurred": round(sum(i["incurred_claims"] for i in unpriced), 2),
     }
 
 

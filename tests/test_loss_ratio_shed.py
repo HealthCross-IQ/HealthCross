@@ -125,13 +125,90 @@ def test_cumulative_stops_once_nothing_left_helps():
     assert loss_ratio_shed_cumulative(rows, max_accounts=5) == []
 
 
-def test_an_account_with_no_premium_does_not_break_the_calculation():
+def test_an_account_with_claims_and_no_premium_is_a_data_gap_not_a_candidate():
+    # Removing it costs nothing and takes claims out, so pure arithmetic
+    # ranks it as the best decision on the book. It is almost always a
+    # missing premium column or an unmapped subgroup - ranking it beside
+    # real candidates points the underwriter at the wrong accounts.
     rows = [_row("NORMAL", 100_000, 80_000), _row("UNRATED", 0.0, 30_000)]
     impact = loss_ratio_shed_impact(rows)
-    unrated = next(a for a in impact["accounts"] if a["master_client"] == "UNRATED")
-    # Removing it takes claims out but no premium, so the book improves.
-    assert unrated["net_lr_change"] < 0
-    assert unrated["premium_at_risk"] == 0.0
+
+    assert [a["master_client"] for a in impact["accounts"]] == ["NORMAL"]
+    assert [a["master_client"] for a in impact["unpriced_accounts"]] == ["UNRATED"]
+    assert impact["unpriced_incurred"] == 30_000
+
+
+def test_an_accounts_policy_periods_are_shed_together_not_one_at_a_time():
+    # On the underwriting basis a renewed account is two rows. You do not
+    # lose one policy year of a client - you lose the client, so the
+    # impact must be measured on both rows together.
+    rows = [
+        _row("MULTI", 100_000, 150_000) | {"master_client": "MULTI"},
+        _row("MULTI", 100_000, 150_000) | {"master_client": "MULTI"},
+        _row("GOOD", 800_000, 400_000),
+    ]
+    impact = loss_ratio_shed_impact(rows)
+    multi = next(a for a in impact["accounts"] if a["master_client"] == "MULTI")
+    assert multi["period_count"] == 2
+    assert multi["incurred_claims"] == 300_000
+    assert multi["earned_premium"] == 200_000
+    # Book without it is the GOOD row alone: 400k / 800k.
+    assert multi["book_net_loss_ratio_without"] == pytest.approx(0.5)
+
+
+def test_the_cumulative_walk_never_makes_the_book_worse():
+    # It once did: the impact measured removing ONE row while the walk
+    # removed every row for that client, so a multi-period account was
+    # picked on an understated figure and the book went backwards.
+    rows = [
+        _row("MULTI", 100_000, 90_000) | {"master_client": "MULTI"},
+        _row("MULTI", 100_000, 90_000) | {"master_client": "MULTI"},
+        _row("BAD", 200_000, 400_000),
+        _row("GOOD", 700_000, 350_000),
+    ]
+    steps = loss_ratio_shed_cumulative(rows, max_accounts=4)
+    ratios = [s["book_net_loss_ratio"] for s in steps]
+    assert ratios == sorted(ratios, reverse=True), ratios
+
+
+def test_repricing_shows_the_increase_that_makes_an_account_stand_alone():
+    rows = [_row("BAD", 100_000, 150_000), _row("GOOD", 900_000, 450_000)]
+    impact = loss_ratio_shed_impact(rows, target_net_loss_ratio=1.0)
+    bad = next(a for a in impact["accounts"] if a["master_client"] == "BAD")
+    # 150k of claims at a 100% target needs 150k of net premium, and with
+    # no loading in this fixture that is 150k of earned premium - a 50%
+    # increase on the 100k it currently charges.
+    assert bad["required_earned_premium"] == pytest.approx(150_000)
+    assert bad["required_increase_pct"] == pytest.approx(50.0)
+
+
+def test_repricing_keeps_the_premium_where_shedding_gives_it_up():
+    rows = [_row("BAD", 100_000, 150_000), _row("GOOD", 900_000, 450_000)]
+    impact = loss_ratio_shed_impact(rows)
+    bad = next(a for a in impact["accounts"] if a["master_client"] == "BAD")
+    # Both fix the book; only one keeps the account on it.
+    assert bad["book_net_loss_ratio_without"] == pytest.approx(0.5)
+    assert bad["book_net_loss_ratio_repriced"] == pytest.approx(0.5714, abs=0.001)
+    assert bad["premium_at_risk"] == 100_000
+
+
+def test_a_target_below_one_asks_for_a_bigger_increase():
+    rows = [_row("BAD", 100_000, 150_000), _row("GOOD", 900_000, 450_000)]
+    at_break_even = loss_ratio_shed_impact(rows, target_net_loss_ratio=1.0)["accounts"]
+    at_margin = loss_ratio_shed_impact(rows, target_net_loss_ratio=0.85)["accounts"]
+    a = next(x for x in at_break_even if x["master_client"] == "BAD")
+    b = next(x for x in at_margin if x["master_client"] == "BAD")
+    assert b["required_increase_pct"] > a["required_increase_pct"]
+
+
+def test_repricing_accounts_for_the_accounts_own_loading():
+    # An account keeping only 67% of premium after expenses needs a bigger
+    # gross increase than one keeping 100%, for the same claims.
+    rows = [_row("LOADED", 100_000, 100_000, loading=0.33), _row("GOOD", 900_000, 400_000)]
+    impact = loss_ratio_shed_impact(rows)
+    loaded = next(a for a in impact["accounts"] if a["master_client"] == "LOADED")
+    assert loaded["required_net_premium"] == pytest.approx(100_000)
+    assert loaded["required_earned_premium"] == pytest.approx(149_253, abs=5)
 
 
 def test_shedding_the_only_account_leaves_no_book_to_measure():
