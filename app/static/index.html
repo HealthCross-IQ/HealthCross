@@ -3999,6 +3999,26 @@ function _rbHeaderHtml(identity) {
   `;
 }
 
+async function adoptComputedExistingPremium(computedTotal) {
+  if (!currentCase) return;
+  try {
+    currentCase = await api(`/cases/${currentCase.id}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ current_annual_premium: computedTotal }),
+    });
+    toast(`Current annual premium set to AED ${Math.round(computedTotal).toLocaleString()}`);
+    // The premium drives the scorecard, drivers and NB comparison too, so
+    // the whole tab is reloaded rather than just this one card.
+    await loadRenewalBenchSummary();
+    await loadRenewalBenchScorecard();
+    await loadRenewalBenchNbComparison();
+    await loadExecutiveSummary();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
 function _rbKpiStripHtml(kpis) {
   return `
     <div class="rb-card">
@@ -4064,7 +4084,8 @@ function _rbExistingPremiumHtml(existing) {
           <div class="rb-insight-icon">⚠</div>
           <div>
             <span class="rb-insight-tag">Discrepancy</span>
-            <div class="rb-insight-text">The computed total differs from the case's own current annual premium by <b>${existing.discrepancy_pct > 0 ? '+' : ''}${existing.discrepancy_pct}%</b> - worth checking whether member rates or the case's current_annual_premium is out of date.</div>
+            <div class="rb-insight-text">The computed total differs from the case's own current annual premium by <b>${existing.discrepancy_pct > 0 ? '+' : ''}${existing.discrepancy_pct}%</b> - worth checking whether member rates or the case's current_annual_premium is out of date. Every figure below (loss ratio, renewal increase, drivers) is built on the case's own figure, not this computed one.</div>
+            <button class="rb-btn" style="margin-top:10px;" onclick="adoptComputedExistingPremium(${existing.total_existing_premium})">Use the computed figure</button>
           </div>
         </div>
       ` : ''}
