@@ -138,8 +138,13 @@ def test_analyze_portfolio_member_still_carries_demographic_fields_when_out_of_s
     assert result["age"] == 45
     assert result["nationality"] == "UK"
     assert result["relation"] == "employee"
-    assert result.get("product") is None
-    assert result.get("network") is None
+    # Product and network are just as real as the demographics: these
+    # members ARE sold a product, and their network is a genuine one that
+    # simply is not a UAE rate-card network. Carrying both lets them roll
+    # up under the product they actually hold instead of "Unmapped".
+    assert result["product"] == "Bronze"
+    assert result["network"] == "MSH INTL Network"
+    assert result.get("standard_premium") is None  # the one figure that does need a rate card
 
 
 def test_analyze_portfolio_member_warns_when_no_product_mapping_found():
@@ -813,13 +818,43 @@ def test_summarize_portfolio_claim_frequency_and_severity_are_none_without_claim
     assert bronze["claim_severity"] is None  # can't average over zero claims
 
 
-def test_summarize_portfolio_excludes_out_of_scope_members():
+def test_summarize_portfolio_includes_out_of_scope_members_under_their_own_product():
+    # A member the rate card cannot price still holds a real product and
+    # still carries real premium and claims - excluding them understated
+    # every account they belonged to. They roll up under their own
+    # product, flagged by out_of_scope_member_count.
     results = [
         analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
         analyze_portfolio_member(_member(beneficiary_id="M2", network_type_raw="MSH Intl Network"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
     ]
     rows = summarize_portfolio(results, "product")
-    assert sum(r["member_count"] for r in rows) == 1
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["product"] == "Bronze"
+    assert row["member_count"] == 2
+    assert row["out_of_scope_member_count"] == 1
+    assert row["priced_member_count"] == 1  # only one of them can be rate-card priced
+
+
+def test_summarize_portfolio_measures_vs_standard_against_the_priced_members_only():
+    # The rate-card comparisons must not count an unpriceable member's
+    # claims against the priced members' standard premium - that would
+    # overstate the ratio purely because of who the card covers.
+    priced_only = [
+        analyze_portfolio_member(_member(beneficiary_id="M1"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
+    ]
+    with_unpriceable = priced_only + [
+        analyze_portfolio_member(_member(beneficiary_id="M2", network_type_raw="MSH Intl Network"), {"Acme Sub LLC": "Bronze"}, RATE_CARDS, [], {}),
+    ]
+
+    a = summarize_portfolio(priced_only, "product")[0]
+    b = summarize_portfolio(with_unpriceable, "product")[0]
+
+    assert b["loss_ratio_vs_standard"] == a["loss_ratio_vs_standard"]
+    assert b["actual_vs_standard_pct"] == a["actual_vs_standard_pct"]
+    # ...while the whole-bucket figures do grow with the extra member.
+    assert b["actual_premium"] > a["actual_premium"]
 
 
 def test_summarize_portfolio_groups_unmapped_members_together():
@@ -836,6 +871,7 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
             "ibnr": 0.0,
+            "out_of_scope_member_count": 0,
             "loss_ratio_vs_standard": None,
             "loss_ratio_vs_actual": 0.0,
             "loss_ratio_incl_ibnr": 0.0,

@@ -334,10 +334,19 @@ def analyze_portfolio_member(
         # See demographic_summary, which counts every member (in and out
         # of scope) toward the same headline total every other Portfolio
         # Analysis view reports.
+        #
+        # Product and network are just as real: these members ARE sold a
+        # product, and their network is a genuine one (it simply is not a
+        # UAE rate-card network). Carrying both means they roll up under
+        # the product they actually hold instead of "Unmapped" - only
+        # standard_premium stays absent, since that is the one figure
+        # that truly requires a rate card.
         return {
             "beneficiary_id": beneficiary_id,
             "in_scope": False,
             "reason": f"'{member.get('network_type_raw')}' is outside the UAE rate card's scope",
+            "product": resolve_group_product(member, group_product_by_name),
+            "network": (member.get("network_type_raw") or "").strip() or None,
             "region": member.get("region"),
             "nationality": member.get("nationality"),
             "nationality_zone": member.get("nationality_zone"),
@@ -675,10 +684,17 @@ _GROUP_BY_FIELDS = {
 def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]:
     """Rolls up analyze_portfolio_member's per-member results by one
     dimension (product/network/region/nationality_zone/client/gender/
-    relation/category) - members outside the rate card's scope are excluded
-    entirely (see analyze_portfolio_member), and a member missing that
-    dimension's own value (e.g. no Product mapping yet) rolls up under
-    "Unmapped" rather than being dropped silently. "client" groups by the
+    relation/category). A member missing that dimension's own value (e.g.
+    no Product mapping yet) rolls up under "Unmapped" rather than being
+    dropped silently.
+
+    Members the rate card cannot price (see is_out_of_scope_network_type)
+    are INCLUDED - they hold a real product and their premium and claims
+    are real money, so leaving them out understated every account they
+    belong to. They are counted in out_of_scope_member_count, and the two
+    rate-card comparisons (loss_ratio_vs_standard, actual_vs_standard_pct)
+    are measured against the priced members' own premium and claims so
+    they stay apples-to-apples; every other figure covers the whole bucket. "client" groups by the
     member's own contract (sub-group), falling back to its master
     contract. "gender"/"relation" (employee/spouse/child) let pricing see
     burning cost by demographic segment, not just Product/Network-wide -
@@ -700,6 +716,12 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "member_count": 0,
             "priced_member_count": 0,
             "standard_premium": 0.0,
+            # The priced subset's OWN actual figures, so a vs-rate-card
+            # comparison stays apples-to-apples even in a bucket that also
+            # holds members the card cannot price (see the loop below).
+            "priced_actual_premium": 0.0,
+            "priced_actual_claims": 0.0,
+            "out_of_scope_member_count": 0,
             "actual_premium": 0.0,
             "actual_claims": 0.0,
             "actual_claims_paid": 0.0,
@@ -713,13 +735,18 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         }
     )
     for r in member_results:
-        if not r.get("in_scope", True):
-            continue
+        in_scope = r.get("in_scope", True)
         key = r.get(group_by) or "Unmapped"
         bucket = buckets[key]
         bucket["member_count"] += 1
+        if not in_scope:
+            bucket["out_of_scope_member_count"] += 1
         if r.get("actual_premium") is not None:
             bucket["actual_premium"] += r["actual_premium"]
+            if in_scope:
+                bucket["priced_actual_premium"] += r["actual_premium"]
+        if in_scope:
+            bucket["priced_actual_claims"] += r.get("actual_claims") or 0.0
         bucket["actual_claims"] += r.get("actual_claims") or 0.0
         bucket["actual_claims_paid"] += r.get("actual_claims_paid") or 0.0
         bucket["actual_claims_outstanding"] += r.get("actual_claims_outstanding") or 0.0
@@ -742,6 +769,13 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
         actual_premium = bucket["actual_premium"]
         actual_claims = bucket["actual_claims"]
         earned_member_years = bucket["earned_member_years"]
+        # Compared against the priced members' OWN premium/claims, never
+        # the bucket totals: a bucket can also hold members the rate card
+        # cannot price (e.g. MSH INTL NETWORK), and measuring everyone's
+        # claims against only the priced members' standard premium would
+        # overstate the ratio purely because of who the card covers.
+        priced_actual_premium = bucket["priced_actual_premium"]
+        priced_actual_claims = bucket["priced_actual_claims"]
         rows.append(
             {
                 group_by: key,
@@ -759,7 +793,8 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 # ibnr_for_member) - zero for a bucket made up entirely of
                 # already-expired policies, not necessarily zero overall.
                 "ibnr": round(bucket["ibnr"], 2),
-                "loss_ratio_vs_standard": round(actual_claims / standard_premium, 4) if standard_premium else None,
+                "out_of_scope_member_count": bucket["out_of_scope_member_count"],
+                "loss_ratio_vs_standard": round(priced_actual_claims / standard_premium, 4) if standard_premium else None,
                 "loss_ratio_vs_actual": round(actual_claims / actual_premium, 4) if actual_premium else None,
                 # Underwriting's own fuller loss ratio: Paid + Outstanding +
                 # IBNR (actual_claims already sums the first two), over
@@ -770,7 +805,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 else None,
                 # Positive = actual premium sits above standard (charging
                 # more than the rate card); negative = discounted below it.
-                "actual_vs_standard_pct": round((actual_premium - standard_premium) / standard_premium * 100, 2)
+                "actual_vs_standard_pct": round((priced_actual_premium - standard_premium) / standard_premium * 100, 2)
                 if standard_premium
                 else None,
                 "earned_member_years": round(earned_member_years, 4),
