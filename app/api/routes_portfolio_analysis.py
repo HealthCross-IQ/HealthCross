@@ -23,6 +23,7 @@ from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS
 from app.scoring.rules.portfolio_analysis import (
+    DEFAULT_PRICING_CREDIBILITY,
     account_loss_ratio_rows,
     nationality_risk_table,
     account_loss_ratio_totals,
@@ -486,6 +487,10 @@ def portfolio_nationality_risk(
     ),
     min_relativity: float = Query(0.5, description="Floor on the resulting rating factor"),
     max_relativity: float = Query(2.0, description="Cap on the resulting rating factor"),
+    pricing_credibility: float = Query(
+        DEFAULT_PRICING_CREDIBILITY,
+        description="Credibility at which a nationality is marked ready to price on - below it the factor is still shown, just flagged as resting on partial data",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
@@ -510,12 +515,15 @@ def portfolio_nationality_risk(
         full_credibility_member_years=full_credibility_member_years,
         min_relativity=min_relativity,
         max_relativity=max_relativity,
+        pricing_credibility=pricing_credibility,
     )
     return {
         "rows": rows,
         "full_credibility_member_years": full_credibility_member_years,
+        "pricing_credibility": pricing_credibility,
         "nationality_count": len(rows),
         "fully_credible_count": sum(1 for r in rows if r["credibility"] >= 1.0),
+        "pricing_ready_count": sum(1 for r in rows if r["pricing_ready"]),
     }
 
 

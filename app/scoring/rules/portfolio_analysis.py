@@ -1678,11 +1678,22 @@ def account_loss_ratio_totals(rows: List[dict]) -> dict:
     }
 
 
+#: Credibility at which a nationality's own factor is considered solid
+#: enough to actually price on. Below it the factor is still computed and
+#: shown - it is real information, and it is what will cross the line as
+#: the book grows - but it is marked not-yet-pricing-ready so a thin
+#: segment is never mistaken for an established one. Deliberately a
+#: parameter rather than a constant: the right threshold depends on how
+#: much of the book an underwriter is willing to price off partial data.
+DEFAULT_PRICING_CREDIBILITY = 0.5
+
+
 def nationality_risk_table(
     member_results: List[dict],
     full_credibility_member_years: float = FULL_CREDIBILITY_MEMBER_YEARS,
     min_relativity: float = 0.5,
     max_relativity: float = 2.0,
+    pricing_credibility: float = DEFAULT_PRICING_CREDIBILITY,
 ) -> List[dict]:
     """Per-nationality burning cost, credibility-weighted toward the
     nationality's own zone - the evidence behind a nationality rating
@@ -1778,6 +1789,17 @@ def nationality_risk_table(
                 # against its population rather than taken at face value.
                 "avg_age": round(sum(b["ages"]) / len(b["ages"]), 1) if b["ages"] else None,
                 "female_pct": round(b["female"] / b["gendered"] * 100, 1) if b["gendered"] else None,
+                # Enough exposure behind it to price on today. A nationality
+                # below this still gets a factor - it is real information,
+                # and it is what crosses the line as the book grows - but
+                # it should not be mistaken for an established rate.
+                "pricing_ready": blend["credibility"] >= pricing_credibility,
+                # How much more exposure would take this nationality to
+                # full credibility - i.e. what the book has to grow by
+                # before its own experience is trusted outright.
+                "member_years_to_full_credibility": round(
+                    max(0.0, full_credibility_member_years - b["exposure"]), 1
+                ),
             }
         )
 

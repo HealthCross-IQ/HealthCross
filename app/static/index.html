@@ -705,6 +705,7 @@
       <div class="hc-rail-group">
         <div class="hc-rail-label">Claims Analysis</div>
         <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio<span class="hc-rail-tag cl">CL</span></button>
+        <button class="hc-rail-item" id="hc-rail-nationality" onclick="hcRailNationalityRisk()">Nationality Risk<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
       </div>
@@ -1036,6 +1037,11 @@ function hcRailIntlComparison() {
 function hcRailLossRatio() {
   _hcRailSetActive('hc-rail-loss-ratio');
   showLossRatioBoard();
+}
+
+function hcRailNationalityRisk() {
+  _hcRailSetActive('hc-rail-nationality');
+  showNationalityRisk();
 }
 
 function hcRailClaimsExplorer() {
@@ -4792,6 +4798,212 @@ function printLossRatioReport() {
 <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
+
+/* ---------------- Nationality risk (credibility-weighted) ------------- */
+
+let natState = { rows: [], meta: null };
+
+function _natBar(credibility) {
+  // Credibility is the whole point of this table - shown as a bar rather
+  // than a bare percentage so a thin nationality is obvious at a glance.
+  const pct = Math.round((credibility || 0) * 100);
+  const color = pct >= 90 ? 'var(--lr-good)' : pct >= 50 ? 'var(--lr-warn)' : 'var(--lr-bad)';
+  return `<div style="display:flex; align-items:center; gap:7px; justify-content:flex-end;">
+      <div class="lr-bar" style="min-width:52px;"><span style="width:${pct}%; background:${color};"></span></div>
+      <span style="font-family:var(--font-mono); font-size:11px; min-width:32px;">${pct}%</span>
+    </div>`;
+}
+
+function _natFactorChip(f) {
+  if (f == null) return '-';
+  const band = f > 1.15 ? 'bad' : f < 0.9 ? 'good' : 'warn';
+  return `<span class="lr-chip ${band}">${f.toFixed(2)}&times;</span>`;
+}
+
+function _natTableHtml() {
+  const rows = natState.rows;
+  if (!rows.length) {
+    return '<div class="lr-card"><div class="lr-empty">No nationality data yet - upload the Membership and Claims exports on the Claims Explorer screen first.</div></div>';
+  }
+  const body = rows.map(r => `
+    <tr style="${r.pricing_ready ? '' : 'opacity:0.62;'}">
+      <td style="font-weight:600;">${escapeHtml(r.nationality)}${r.pricing_ready ? '' : '<span class="lr-exp" style="margin-left:6px;">building</span>'}<span class="yr" style="display:block; font-size:10.5px; color:var(--lr-muted); font-weight:500;">${escapeHtml((r.nationality_zone || '-').replace(/^zone_\d_/, '').replace(/_/g, ' '))} &middot; ${r.member_count.toLocaleString()} members</span></td>
+      <td class="num">${r.earned_member_years.toLocaleString(undefined, {maximumFractionDigits: 1})}</td>
+      <td class="num">${r.burning_cost != null ? Math.round(r.burning_cost).toLocaleString() : '-'}</td>
+      <td class="num" style="color:var(--lr-muted);">${r.zone_burning_cost != null ? Math.round(r.zone_burning_cost).toLocaleString() : '-'}</td>
+      <td class="num">${_natBar(r.credibility)}</td>
+      <td class="num" style="font-weight:600;">${r.credible_burning_cost != null ? Math.round(r.credible_burning_cost).toLocaleString() : '-'}</td>
+      <td class="num">${r.pricing_ready ? _natFactorChip(r.relativity) : `<span style="color:var(--lr-muted); font-family:var(--font-mono); font-size:11px;">${r.relativity != null ? r.relativity.toFixed(2) + '&times;' : '-'}</span>`}</td>
+      <td class="num" style="color:var(--lr-muted);">${r.avg_age != null ? r.avg_age.toFixed(0) : '-'}</td>
+      <td class="num" style="color:var(--lr-muted);">${r.female_pct != null ? r.female_pct.toFixed(0) + '%' : '-'}</td>
+      <td class="num" style="color:var(--lr-muted);">${r.member_years_to_full_credibility > 0 ? '+' + r.member_years_to_full_credibility.toFixed(0) + ' yrs' : 'reached'}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Burning cost by nationality</div>
+          <div class="lr-card-note">Sorted by rating factor, most expensive first. Raw = the nationality's own experience; Credible = blended toward its zone by how much exposure stands behind it.</div>
+        </div>
+        <div class="lr-card-note">Full credibility at ${natState.meta ? natState.meta.full_credibility_member_years : 100} member-years</div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr>
+            <th>Nationality</th>
+            <th class="num">Exposure (yrs)</th>
+            <th class="num">Raw BC</th>
+            <th class="num">Zone BC</th>
+            <th class="num">Credibility</th>
+            <th class="num">Credible BC</th>
+            <th class="num">Factor</th>
+            <th class="num">Avg age</th>
+            <th class="num">Female</th>
+            <th class="num">To full cred.</th>
+          </tr></thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function nationalityRiskHtml() {
+  return `
+    <div class="lr-scope">
+      <div class="lr-head">
+        <div>
+          <h2 class="lr-title">Nationality Risk</h2>
+          <p class="lr-sub">What each nationality actually costs per member-year on the booked book, blended toward its zone by the exposure behind it - so a thin population inherits the zone rate rather than pricing off a handful of claims. Age and gender mix are shown alongside, because a nationality that looks expensive may simply be an older or more female population.</p>
+        </div>
+        <button class="lr-btn" onclick="printNationalityRisk()">Print / Save as PDF</button>
+      </div>
+      <div class="lr-toolbar">
+        <div class="lr-field">
+          <label>Full credibility at (member-years)</label>
+          <input type="number" id="nat-full-cred" step="10" value="100" style="width:150px;">
+        </div>
+        <div class="lr-field">
+          <label>Price-ready above</label>
+          <input type="number" id="nat-pricing-cred" step="0.05" value="0.5" style="width:120px;">
+        </div>
+        <div class="lr-field">
+          <label>Factor floor</label>
+          <input type="number" id="nat-min-rel" step="0.05" value="0.5" style="width:100px;">
+        </div>
+        <div class="lr-field">
+          <label>Factor cap</label>
+          <input type="number" id="nat-max-rel" step="0.05" value="2.0" style="width:100px;">
+        </div>
+        <button class="lr-btn ghost" onclick="loadNationalityRisk()">Recompute</button>
+        <label style="display:flex; align-items:center; gap:6px; font-size:12px; color:var(--lr-ink-2); margin:0 0 8px 4px;">
+          <input type="checkbox" id="nat-ready-only" onchange="loadNationalityRisk()" style="width:auto; margin:0;">
+          Only those ready to price on
+        </label>
+      </div>
+      <div id="nat-summary-area"></div>
+      <div id="nat-table-area"></div>
+    </div>
+  `;
+}
+
+async function showNationalityRisk() {
+  currentCase = null;
+  await loadCases();
+  document.getElementById('main').innerHTML = nationalityRiskHtml();
+  await loadNationalityRisk();
+}
+
+async function loadNationalityRisk() {
+  const tableArea = document.getElementById('nat-table-area');
+  const summaryArea = document.getElementById('nat-summary-area');
+  if (!tableArea) return;
+  const params = new URLSearchParams();
+  const full = document.getElementById('nat-full-cred');
+  const lo = document.getElementById('nat-min-rel');
+  const hi = document.getElementById('nat-max-rel');
+  if (full && full.value) params.set('full_credibility_member_years', full.value);
+  if (lo && lo.value) params.set('min_relativity', lo.value);
+  if (hi && hi.value) params.set('max_relativity', hi.value);
+  const pc = document.getElementById('nat-pricing-cred');
+  if (pc && pc.value) params.set('pricing_credibility', pc.value);
+  tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
+  try {
+    const r = await api(`/portfolio-analysis/nationality-risk?${params.toString()}`);
+    const readyOnly = document.getElementById('nat-ready-only');
+    natState.rows = (readyOnly && readyOnly.checked)
+      ? (r.rows || []).filter(x => x.pricing_ready)
+      : (r.rows || []);
+    natState.meta = r;
+    summaryArea.innerHTML = `
+      <div class="lr-banner">
+        <div class="lr-banner-grid">
+          <div class="lr-b-item hero"><div class="k">Ready to price on</div><div class="v">${r.pricing_ready_count}<small> / ${r.nationality_count}</small></div></div>
+          <div class="lr-b-item hero"><div class="k">Fully credible</div><div class="v">${r.fully_credible_count}<small> / ${r.nationality_count}</small></div></div>
+          <div class="lr-b-item"><div class="k">Still building</div><div class="v">${r.nationality_count - r.pricing_ready_count}</div></div>
+        </div>
+      </div>
+    `;
+    tableArea.innerHTML = _natTableHtml();
+  } catch (err) {
+    summaryArea.innerHTML = '';
+    tableArea.innerHTML = `<div class="lr-card"><div class="lr-empty">${escapeHtml(err.message || 'Could not load nationality risk')}</div></div>`;
+  }
+}
+
+function printNationalityRisk() {
+  if (!natState.rows.length) { toast('Nothing to print yet', true); return; }
+  const rows = natState.rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.nationality)}<br><span class="sub">${escapeHtml((r.nationality_zone || '-').replace(/^zone_\d_/, '').replace(/_/g, ' '))} &middot; ${r.member_count} members</span></td>
+      <td class="num">${r.earned_member_years.toFixed(1)}</td>
+      <td class="num">${r.burning_cost != null ? Math.round(r.burning_cost).toLocaleString() : '-'}</td>
+      <td class="num">${r.zone_burning_cost != null ? Math.round(r.zone_burning_cost).toLocaleString() : '-'}</td>
+      <td class="num">${(r.credibility * 100).toFixed(0)}%</td>
+      <td class="num b">${r.credible_burning_cost != null ? Math.round(r.credible_burning_cost).toLocaleString() : '-'}</td>
+      <td class="num b">${r.relativity != null ? r.relativity.toFixed(2) + '×' : '-'}</td>
+      <td class="num">${r.avg_age != null ? r.avg_age.toFixed(0) : '-'}</td>
+      <td class="num">${r.female_pct != null ? r.female_pct.toFixed(0) + '%' : '-'}</td>
+    </tr>`).join('');
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Nationality Risk</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  body { font-family: 'IBM Plex Sans', sans-serif; margin: 0; padding: 26px 20px; color: #0f1c2e; font-variant-numeric: tabular-nums; }
+  .sheet { max-width: 980px; margin: 0 auto; }
+  .brand { font-family: 'Fraunces', serif; font-size: 12px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; color: #1c2a48; }
+  h1 { font-family: 'Fraunces', serif; font-size: 25px; margin: 6px 0 4px; }
+  .meta { font-size: 11.5px; color: #64748b; border-bottom: 2.5px solid #1c2a48; padding-bottom: 13px; margin-bottom: 20px; }
+  table { width: 100%; border-collapse: collapse; font-size: 10.5px; }
+  th { text-align: left; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #475569; padding: 7px; background: #eef3f7; border-bottom: 1.5px solid rgba(15,28,46,0.24); }
+  td { padding: 6px 7px; border-bottom: 1px solid rgba(15,28,46,0.09); vertical-align: top; }
+  td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+  td.b { font-weight: 700; }
+  .sub { font-size: 9px; color: #94a3b8; }
+  .method { margin-top: 20px; padding: 13px 16px; background: #f7f9fb; border-left: 3px solid #5cd9ff; border-radius: 0 8px 8px 0; font-size: 10.5px; line-height: 1.65; color: #46586e; }
+  .method b { color: #0f1c2e; }
+</style></head><body><div class="sheet">
+  <div class="brand">HealthCross &middot; Underwriting Intelligence</div>
+  <h1>Nationality Risk</h1>
+  <div class="meta">${natState.meta.nationality_count} nationalities &middot; ${natState.meta.fully_credible_count} fully credible &middot; full credibility at ${natState.meta.full_credibility_member_years} member-years &middot; generated ${new Date().toLocaleDateString()}</div>
+  <table>
+    <thead><tr><th>Nationality</th><th class="num">Exposure (yrs)</th><th class="num">Raw BC</th><th class="num">Zone BC</th><th class="num">Credibility</th><th class="num">Credible BC</th><th class="num">Factor</th><th class="num">Avg age</th><th class="num">Female</th></tr></thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <div class="method">
+    <b>Method.</b> Burning cost is incurred claims (paid + outstanding + IBNR) divided by earned member-years.
+    <b>Credibility</b> follows the square-root rule: a nationality earns full weight on its own experience only at the full-credibility standard above, and below it the rate blends toward its own zone's rate - so a nationality with little exposure inherits the zone rather than pricing off a handful of claims.
+    <b>Factor</b> is the credible rate over the book rate, capped in both directions, since even after weighting a segment holding one catastrophic claim can produce a multiplier that is correct arithmetic and indefensible as a price.
+    <b>Avg age and female share</b> are shown because nationality correlates with age, role and gender mix - a nationality that looks expensive may simply be an older or more female population, and that should be ruled out before the factor is trusted.
+  </div>
+</div><script>window.onload = () => window.print();<\/script></body></html>`;
   const win = window.open('', '_blank');
   win.document.write(html);
   win.document.close();

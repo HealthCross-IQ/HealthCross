@@ -1729,3 +1729,36 @@ def test_nationality_risk_table_skips_members_with_no_nationality():
                _nat_member("Indian", "zone_1_asia", 1_000.0, 1.0)]
     rows = nationality_risk_table(members)
     assert [r["nationality"] for r in rows] == ["Indian"]
+
+
+def test_nationality_risk_table_marks_which_nationalities_can_be_priced_on_today():
+    # A small book means most nationalities sit below full credibility, so
+    # "can I act on this one yet" has to be explicit rather than something
+    # read off a credibility number.
+    members = [_nat_member("Indian", "zone_1_asia", 1_000.0, 1.0) for _ in range(80)]
+    members += [_nat_member("Syrian", "zone_1_asia", 1_000.0, 1.0) for _ in range(4)]
+
+    rows = {r["nationality"]: r for r in nationality_risk_table(members)}
+
+    assert rows["Indian"]["pricing_ready"] is True     # 80 yrs -> 89% credibility
+    assert rows["Syrian"]["pricing_ready"] is False    # 4 yrs -> 20%
+    # A thin nationality still gets a factor - it is real information, and
+    # it is what crosses the line as the book grows.
+    assert rows["Syrian"]["relativity"] is not None
+
+
+def test_nationality_risk_table_says_how_much_growth_reaches_full_credibility():
+    members = [_nat_member("Egyptian", "zone_2_middle_east", 1_000.0, 1.0) for _ in range(30)]
+    row = nationality_risk_table(members, full_credibility_member_years=100.0)[0]
+
+    assert row["earned_member_years"] == 30.0
+    assert row["member_years_to_full_credibility"] == 70.0
+
+
+def test_pricing_readiness_threshold_is_adjustable():
+    members = [_nat_member("Indian", "zone_1_asia", 1_000.0, 1.0) for _ in range(30)]
+    lenient = nationality_risk_table(members, pricing_credibility=0.4)[0]
+    strict = nationality_risk_table(members, pricing_credibility=0.9)[0]
+
+    assert lenient["pricing_ready"] is True    # 30 yrs -> 55% credibility
+    assert strict["pricing_ready"] is False
