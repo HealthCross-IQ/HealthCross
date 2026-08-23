@@ -6,56 +6,79 @@
 <title>HealthCross Underwriting Intelligence</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
     color-scheme: light dark;
-    --bg: #f9f9f7;
-    --surface: #fcfcfb;
-    --surface-2: #f0efec;
-    --border: rgba(11,11,11,0.10);
-    --ink: #0b0b0b;
-    --ink-2: #52514e;
-    --ink-muted: #898781;
-    --grid: #e1e0d9;
-    /* Brand: Light Blue #5CD9FF - HealthCross Brand Guidelines. */
+    /* ---- HealthCross design system -------------------------------
+       Brand: Light Blue #5CD9FF (accent) and Dark Blue #1C2A48
+       (authority). Every neutral below is tinted toward that navy, so
+       the shell, the nav rail and every scoped screen share one ground
+       rather than the three different temperatures they used to carry.
+       Scoped systems (.hc-rail / .rb-scope / .lr-scope) alias these
+       tokens - they must not redefine raw hex of their own. -------- */
+    --bg: #f4f7fa;
+    --surface: #ffffff;
+    --surface-2: #eaf0f6;
+    --surface-3: #dde6ef;
+    --border: rgba(15,28,46,0.11);
+    --border-strong: rgba(15,28,46,0.22);
+    --ink: #0f1c2e;
+    --ink-2: #46586e;
+    --ink-muted: #8496a8;
+    --grid: #dde6ef;
     --accent: #5cd9ff;
     --accent-ink: #06121c;
-    --good: #0ca30c;
-    --good-bg: #0ca30c1a;
-    --warning: #fab219;
-    --warning-bg: #fab2191a;
-    --serious: #ec835a;
-    --serious-bg: #ec835a1a;
-    --critical: #d03b3b;
-    --critical-bg: #d03b3b1a;
+    --deep: #1c2a48;
+    --deep-ink: #eaf6ff;
+    --good: #16855c;
+    --good-bg: rgba(22,133,92,0.12);
+    --warning: #b07d12;
+    --warning-bg: rgba(176,125,18,0.14);
+    --serious: #d4783f;
+    --serious-bg: rgba(212,120,63,0.14);
+    --critical: #c0392b;
+    --critical-bg: rgba(192,57,43,0.12);
     --series-1: #5cd9ff;
     --series-2: #eb6834;
-    --series-3: #1baf7a;
+    --series-3: #16855c;
     --series-4: #eda100;
-    --series-1-wash: #5cd9ff26;
+    --series-1-wash: rgba(92,217,255,0.20);
+    --shadow: 0 1px 2px rgba(15,28,46,0.05), 0 10px 30px -18px rgba(15,28,46,0.30);
+    --font-body: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", sans-serif;
+    --font-display: 'Fraunces', Georgia, serif;
+    --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #0d0d0d;
-      --surface: #1a1a19;
-      --surface-2: #232320;
-      --border: rgba(255,255,255,0.10);
-      --ink: #ffffff;
-      --ink-2: #c3c2b7;
-      --ink-muted: #898781;
-      --grid: #2c2c2a;
+      --bg: #0b1220;
+      --surface: #121c2c;
+      --surface-2: #1a2537;
+      --surface-3: #223044;
+      --border: rgba(234,241,248,0.11);
+      --border-strong: rgba(234,241,248,0.22);
+      --ink: #eaf1f8;
+      --ink-2: #b3c2d3;
+      --ink-muted: #7b8ca0;
+      --grid: #223044;
       --accent: #5cd9ff;
-      --accent-ink: #0d0d0d;
-      --good-bg: #0ca30c26;
-      --warning-bg: #fab21926;
-      --serious-bg: #ec835a26;
-      --critical-bg: #d03b3b26;
+      --accent-ink: #06121c;
+      --deep: #5cd9ff;
+      --deep-ink: #06121c;
+      --good: #3fcf94;
+      --good-bg: rgba(63,207,148,0.14);
+      --warning: #e0b24f;
+      --warning-bg: rgba(224,178,79,0.16);
+      --serious: #e59a6a;
+      --serious-bg: rgba(229,154,106,0.16);
+      --critical: #ef6f60;
+      --critical-bg: rgba(239,111,96,0.16);
       --series-1: #5cd9ff;
-      --series-2: #d95926;
-      --series-3: #199e70;
-      --series-4: #c98500;
-      --series-1-wash: #5cd9ff26;
+      --series-2: #e07a4a;
+      --series-3: #3fcf94;
+      --series-4: #e0b24f;
+      --series-1-wash: rgba(92,217,255,0.22);
+      --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -18px rgba(0,0,0,0.60);
     }
   }
   * { box-sizing: border-box; }
@@ -63,22 +86,29 @@
     margin: 0;
     background: var(--bg);
     color: var(--ink);
-    font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-    line-height: 1.45;
+    font-family: var(--font-body);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
   header {
-    padding: 14px 24px;
+    padding: 0 22px;
+    height: 54px;
     border-bottom: 1px solid var(--border);
     display: flex;
-    align-items: baseline;
-    gap: 10px;
+    align-items: center;
+    gap: 11px;
     position: sticky;
     top: 0;
-    background: var(--bg);
+    background: var(--surface);
     z-index: 5;
   }
-  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
-  header span { color: var(--ink-muted); font-size: 12.5px; }
+  header::before {
+    content: "";
+    width: 26px; height: 26px; border-radius: 7px; flex-shrink: 0;
+    background: linear-gradient(150deg, var(--accent), color-mix(in srgb, var(--accent) 55%, var(--deep)));
+  }
+  header h1 { font-family: var(--font-display); font-size: 17px; margin: 0; font-weight: 600; letter-spacing: -0.015em; }
+  header span { color: var(--ink-muted); font-size: 12px; letter-spacing: 0.01em; }
 
   .layout {
     display: grid;
@@ -101,28 +131,15 @@
      approved Renewal Bench mockup, layered above the existing case
      list/filters rather than replacing them. ---------- */
   .hc-rail {
-    --hcr-ink: #10201b; --hcr-ink-2: #46564e; --hcr-muted: #838f88;
-    --hcr-border: rgba(16,32,27,0.12);
-    --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.16);
-    --hcr-secondary: #a8672a; --hcr-secondary-soft: rgba(168,103,42,0.12);
-    --hcr-surface-3: #e2e6e2;
-    font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .hc-rail {
-      --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
-      --hcr-border: rgba(238,243,240,0.10);
-      --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.12);
-      --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
-      --hcr-surface-3: #1f2d27;
-    }
-  }
-  :root[data-theme="dark"] .hc-rail {
-    --hcr-ink: #eef3f0; --hcr-ink-2: #b7c3bc; --hcr-muted: #7d8b84;
-    --hcr-border: rgba(238,243,240,0.10);
-    --hcr-accent: #5cd9ff; --hcr-accent-soft: rgba(92,217,255,0.12);
-    --hcr-secondary: #e0a25c; --hcr-secondary-soft: rgba(224,162,92,0.14);
-    --hcr-surface-3: #1f2d27;
+    /* Aliases the root design tokens - no palette of its own, so the rail
+       can never drift away from the shell it sits in (it used to carry
+       green-tinted neutrals left over from an earlier theme). */
+    --hcr-ink: var(--ink); --hcr-ink-2: var(--ink-2); --hcr-muted: var(--ink-muted);
+    --hcr-border: var(--border);
+    --hcr-accent: var(--accent); --hcr-accent-soft: var(--series-1-wash);
+    --hcr-secondary: var(--serious); --hcr-secondary-soft: var(--serious-bg);
+    --hcr-surface-3: var(--surface-2);
+    font-family: var(--font-body);
   }
   .hc-rail-brand { display: flex; align-items: center; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--hcr-border); margin-bottom: 4px; }
   .hc-rail-brand .mark {
@@ -241,7 +258,10 @@
     font-size: 13.5px;
     transition: background 0.1s ease, filter 0.1s ease;
   }
-  button:hover { background: var(--surface-2); }
+  button:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  button:focus-visible, .tab-btn:focus-visible, input:focus-visible, select:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
+  }
   button.primary {
     background: var(--accent);
     color: var(--accent-ink);
@@ -255,21 +275,22 @@
   .card {
     background: var(--surface);
     border: 1px solid var(--border);
-    border-radius: 12px;
+    border-radius: 14px;
     padding: 20px 22px;
     margin-bottom: 16px;
+    box-shadow: var(--shadow);
   }
-  .card h3 { margin: 0 0 4px; font-size: 14.5px; font-weight: 700; }
+  .card h3 { font-family: var(--font-display); margin: 0 0 4px; font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }
   .card h4 { margin: 18px 0 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-muted); font-weight: 700; }
   .card .hint { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 14px; }
   .hint-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
 
-  label { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 4px; }
+  label { display: block; font-size: 11.5px; font-weight: 500; color: var(--ink-2); margin: 10px 0 4px; }
   input[type=text], input[type=number], select {
     width: 100%;
     padding: 8px 10px;
-    border-radius: 7px;
-    border: 1px solid var(--border);
+    border-radius: 8px;
+    border: 1px solid var(--border-strong);
     background: var(--surface);
     color: var(--ink);
     font: inherit;
@@ -328,9 +349,10 @@
   .dir-same { background: var(--surface-2); color: var(--ink-2); }
   .dir-review { background: var(--warning-bg); color: var(--ink-2); }
 
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
-  table th { color: var(--ink-muted); font-weight: 700; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-variant-numeric: normal; }
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  table th, table td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table th { background: var(--surface-2); color: var(--ink-2); font-weight: 700; font-size: 10px; text-transform: uppercase; letter-spacing: 0.055em; font-variant-numeric: normal; border-bottom: 1.5px solid var(--border-strong); }
+  table tbody tr:hover td { background: var(--surface-2); }
   td.cmp-cell-yes { background: rgba(46, 160, 67, 0.12); }
   td.cmp-cell-no { background: rgba(218, 54, 51, 0.10); color: var(--ink-muted); }
   td.cmp-cell-neutral { color: inherit; }
@@ -344,7 +366,7 @@
     margin-bottom: -1px;
   }
   .tab-btn:hover { background: none; color: var(--ink); }
-  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-btn.active { color: var(--deep); border-bottom-color: var(--accent); }
   .tab-panel { display: none; }
   .tab-panel.active { display: block; }
 
@@ -449,42 +471,20 @@
   /* ---------- Renewal Bench (scoped - its own palette/type, doesn't
      affect the rest of the app) ---------- */
   .rb-scope {
-    --rb-bg: #f5f6f3; --rb-surface: #ffffff; --rb-surface-2: #eceef0; --rb-surface-3: #e2e6e2;
-    --rb-ink: #10201b; --rb-ink-2: #46564e; --rb-muted: #838f88;
-    --rb-border: rgba(16,32,27,0.12); --rb-border-strong: rgba(16,32,27,0.22);
-    --rb-accent: #5cd9ff; --rb-accent-ink: #06121c; --rb-accent-soft: rgba(92,217,255,0.16); --rb-accent-soft-2: rgba(92,217,255,0.26);
-    --rb-secondary: #a8672a; --rb-secondary-soft: rgba(168,103,42,0.12);
-    --rb-good: #1f8a5f; --rb-good-soft: rgba(31,138,95,0.12);
-    --rb-warning: #b9821f; --rb-warning-soft: rgba(185,130,31,0.14);
-    --rb-critical: #b23b3b; --rb-critical-soft: rgba(178,59,59,0.10);
-    --rb-shadow: 0 1px 2px rgba(16,32,27,0.05), 0 8px 24px -12px rgba(16,32,27,0.18);
-    font-family: 'IBM Plex Sans', var(--font-body, system-ui), sans-serif;
+    /* Aliases the root design tokens - see .hc-rail above. */
+    --rb-bg: var(--bg); --rb-surface: var(--surface); --rb-surface-2: var(--surface-2); --rb-surface-3: var(--surface-3);
+    --rb-ink: var(--ink); --rb-ink-2: var(--ink-2); --rb-muted: var(--ink-muted);
+    --rb-border: var(--border); --rb-border-strong: var(--border-strong);
+    --rb-accent: var(--accent); --rb-accent-ink: var(--accent-ink);
+    --rb-accent-soft: var(--series-1-wash); --rb-accent-soft-2: rgba(92,217,255,0.30);
+    --rb-secondary: var(--serious); --rb-secondary-soft: var(--serious-bg);
+    --rb-good: var(--good); --rb-good-soft: var(--good-bg);
+    --rb-warning: var(--warning); --rb-warning-soft: var(--warning-bg);
+    --rb-critical: var(--critical); --rb-critical-soft: var(--critical-bg);
+    --rb-shadow: var(--shadow);
+    font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
     color: var(--rb-ink);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .rb-scope {
-      --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
-      --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
-      --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
-      --rb-accent: #5cd9ff; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(92,217,255,0.12); --rb-accent-soft-2: rgba(92,217,255,0.22);
-      --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
-      --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
-      --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
-      --rb-critical: #e5837e; --rb-critical-soft: rgba(229,131,126,0.14);
-      --rb-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
-    }
-  }
-  :root[data-theme="dark"] .rb-scope {
-    --rb-bg: #0d1512; --rb-surface: #131e19; --rb-surface-2: #182420; --rb-surface-3: #1f2d27;
-    --rb-ink: #eef3f0; --rb-ink-2: #b7c3bc; --rb-muted: #7d8b84;
-    --rb-border: rgba(238,243,240,0.10); --rb-border-strong: rgba(238,243,240,0.18);
-    --rb-accent: #5cd9ff; --rb-accent-ink: #06120e; --rb-accent-soft: rgba(92,217,255,0.12); --rb-accent-soft-2: rgba(92,217,255,0.22);
-    --rb-secondary: #e0a25c; --rb-secondary-soft: rgba(224,162,92,0.14);
-    --rb-good: #3fcaa8; --rb-good-soft: rgba(63,202,168,0.14);
-    --rb-warning: #e0b24f; --rb-warning-soft: rgba(224,178,79,0.14);
-    --rb-critical: #e5837e; --rb-critical-soft: rgba(229,131,126,0.14);
-    --rb-shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px -12px rgba(0,0,0,0.5);
   }
 
   .rb-card {
@@ -565,36 +565,18 @@
   /* ---------- Loss Ratio board (scoped - portfolio-level per-account
      loss ratio, the underwriting view the book is tracked on) ---------- */
   .lr-scope {
-    --lr-bg: #f7f9fb; --lr-surface: #ffffff; --lr-surface-2: #eef3f7;
-    --lr-ink: #0f1c2e; --lr-ink-2: #46586e; --lr-muted: #8496a8;
-    --lr-border: rgba(15,28,46,0.10); --lr-border-strong: rgba(15,28,46,0.20);
-    --lr-accent: #5cd9ff; --lr-deep: #1c2a48;
-    --lr-good: #16855c; --lr-good-soft: rgba(22,133,92,0.12);
-    --lr-warn: #b07d12; --lr-warn-soft: rgba(176,125,18,0.14);
-    --lr-bad: #c0392b; --lr-bad-soft: rgba(192,57,43,0.12);
-    --lr-shadow: 0 1px 2px rgba(15,28,46,0.05), 0 10px 30px -16px rgba(15,28,46,0.25);
+    /* Aliases the root design tokens - see .hc-rail above. */
+    --lr-bg: var(--bg); --lr-surface: var(--surface); --lr-surface-2: var(--surface-2);
+    --lr-ink: var(--ink); --lr-ink-2: var(--ink-2); --lr-muted: var(--ink-muted);
+    --lr-border: var(--border); --lr-border-strong: var(--border-strong);
+    --lr-accent: var(--accent); --lr-deep: var(--deep);
+    --lr-good: var(--good); --lr-good-soft: var(--good-bg);
+    --lr-warn: var(--warning); --lr-warn-soft: var(--warning-bg);
+    --lr-bad: var(--critical); --lr-bad-soft: var(--critical-bg);
+    --lr-shadow: var(--shadow);
+    font-family: var(--font-body);
     font-variant-numeric: tabular-nums;
     color: var(--lr-ink);
-  }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) .lr-scope {
-      --lr-bg: #0b1220; --lr-surface: #121c2c; --lr-surface-2: #1a2537;
-      --lr-ink: #eaf1f8; --lr-ink-2: #b3c2d3; --lr-muted: #7b8ca0;
-      --lr-border: rgba(234,241,248,0.10); --lr-border-strong: rgba(234,241,248,0.20);
-      --lr-good: #3fcf94; --lr-good-soft: rgba(63,207,148,0.14);
-      --lr-warn: #e0b24f; --lr-warn-soft: rgba(224,178,79,0.16);
-      --lr-bad: #ef6f60; --lr-bad-soft: rgba(239,111,96,0.16);
-      --lr-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -16px rgba(0,0,0,0.6);
-    }
-  }
-  :root[data-theme="dark"] .lr-scope {
-    --lr-bg: #0b1220; --lr-surface: #121c2c; --lr-surface-2: #1a2537;
-    --lr-ink: #eaf1f8; --lr-ink-2: #b3c2d3; --lr-muted: #7b8ca0;
-    --lr-border: rgba(234,241,248,0.10); --lr-border-strong: rgba(234,241,248,0.20);
-    --lr-good: #3fcf94; --lr-good-soft: rgba(63,207,148,0.14);
-    --lr-warn: #e0b24f; --lr-warn-soft: rgba(224,178,79,0.16);
-    --lr-bad: #ef6f60; --lr-bad-soft: rgba(239,111,96,0.16);
-    --lr-shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -16px rgba(0,0,0,0.6);
   }
 
   .lr-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; }
@@ -638,7 +620,7 @@
   .lr-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
   .lr-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--lr-ink-2); }
   .lr-field input, .lr-field select { font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--lr-border-strong); background: var(--lr-surface); color: var(--lr-ink); }
-  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 9px; border: 1px solid transparent; background: var(--lr-deep); color: #eaf6ff; padding: 9px 16px; }
+  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 9px; border: 1px solid transparent; background: var(--lr-deep); color: var(--deep-ink); padding: 9px 16px; }
   .lr-btn:hover { filter: brightness(1.15); }
   .lr-btn.ghost { background: transparent; border-color: var(--lr-border-strong); color: var(--lr-ink-2); }
   .lr-btn.ghost:hover { background: var(--lr-surface-2); filter: none; }
@@ -5480,7 +5462,7 @@ function paBuildFilterParams(base) {
 
 function portfolioAnalysisPanelHtml() {
   return `<div class="pa-panel">
-    <div class="card" id="pa-executive-summary-area"></div>
+    <div class="card" id="pa-executive-summary-area" style="display:none;"></div>
     <div class="card">
       <h3>Portfolio Analysis</h3>
       <div class="hint">Checks the already-booked book's real membership/claims against the New Business rate card - what the current rate card would charge (standard) vs. what was actually charged and actually claimed, segmented by Product/Network/Region/Nationality zone/Client/Gender/Relation/Policy year. Each upload wholesale-replaces the previous one.</div>
@@ -5639,8 +5621,10 @@ async function paLoadExecutiveSummary() {
       </div>
       <div class="hint" style="margin:0;">Combined ratio = Loss ratio + expense ratio (commission + TPA + admin + HC/management fees) - a healthy-looking loss ratio can still mean an unprofitable book once acquisition/administration cost is added. Expense ratio here (${(s.expense_ratio_pct * 100).toFixed(1)}%) uses each client's own real OPEX/Loading % from the uploaded Client Master sheet where it's on file, falling back to a flat 33% assumption otherwise - it's a blend across the whole book, not a flat number, once any client has a real figure uploaded. Incurred claims = Paid + Outstanding + IBNR. Claim frequency = claims per earned member-year; Claim severity = average AED cost per claim - a poor loss ratio can be read as "too many claims" vs. "a few expensive ones" before drilling into any one segment.</div>
     `;
+    area.style.display = '';
   } catch (err) {
     area.innerHTML = '';
+    area.style.display = 'none';
   }
 }
 
