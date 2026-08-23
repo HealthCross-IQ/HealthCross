@@ -4708,7 +4708,7 @@ async function loadRenewalPremiumBuildUp() {
 
 /* ---------------- Loss Ratio board (portfolio level) ---------------- */
 
-let lrState = { rows: [], totals: null, sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting' };
+let lrState = { rows: [], totals: null, shed: null, shedCumulative: [], sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting' };
 
 function _lrMoney(v, dp) {
   if (v == null) return '-';
@@ -4986,12 +4986,75 @@ async function loadLossRatioBoard() {
       // field never sits blank while the figures below already depend on one.
       asOfEl.value = r.as_of || '';
     }
+    lrState.shed = r.shed_impact || null;
+    lrState.shedCumulative = r.shed_cumulative || [];
     bannerArea.innerHTML = _lrBannerHtml(lrState.totals);
-    tableArea.innerHTML = _lrTableHtml();
+    tableArea.innerHTML = _lrTableHtml() + _lrShedHtml();
   } catch (err) {
     bannerArea.innerHTML = '';
     tableArea.innerHTML = `<div class="lr-card"><div class="lr-empty">${escapeHtml(err.message || 'Could not load the loss ratio board')}</div></div>`;
   }
+}
+
+/* "How much would the book improve if we didn't renew this account?"
+   Ranked by the improvement actually on offer rather than by each
+   account's own loss ratio - a 400% account with two lives on it moves
+   nothing, and ranking by ratio puts it at the top. The premium given up
+   sits beside every figure because shedding an account is permanent and
+   the expense base does not shrink with it. */
+function _lrShedHtml() {
+  const s = lrState.shed;
+  if (!s || !s.accounts || !s.accounts.length || s.book_net_loss_ratio == null) return '';
+  const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const pts = v => v == null ? '-' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)} pts`;
+
+  const helping = s.accounts.filter(a => a.net_lr_change != null && a.net_lr_change < 0).slice(0, 10);
+  if (!helping.length) {
+    return `<div class="lr-card" style="margin-top:18px;">
+      <div class="lr-card-title">Impact of shedding an account</div>
+      <div class="lr-empty">No account is running worse than the book as a whole - there is nothing here to walk away from.</div>
+    </div>`;
+  }
+
+  const rows = helping.map(a => `
+    <tr>
+      <td>${escapeHtml(a.master_client)}</td>
+      <td class="num">${a.member_count.toLocaleString()}</td>
+      <td class="num">${money(a.earned_premium)}</td>
+      <td class="num ${_lrBand(a.net_loss_ratio)}">${_lrPct(a.net_loss_ratio)}</td>
+      <td class="num" style="font-weight:600;">${_lrPct(a.book_net_loss_ratio_without)}</td>
+      <td class="num" style="color:var(--ok, #0f7a52); font-weight:600;">${pts(a.net_lr_change)}</td>
+      <td class="num">${a.share_of_book_premium == null ? '-' : (a.share_of_book_premium * 100).toFixed(1) + '%'}</td>
+    </tr>`).join('');
+
+  const cum = (lrState.shedCumulative || []).map(c => `
+    <tr>
+      <td class="num">${c.step}</td>
+      <td>${escapeHtml(c.master_client)}</td>
+      <td class="num">${_lrPct(c.own_net_loss_ratio)}</td>
+      <td class="num">${money(c.cumulative_premium_given_up)}</td>
+      <td class="num" style="font-weight:600;">${_lrPct(c.book_net_loss_ratio)}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="lr-card" style="margin-top:18px;">
+      <div class="lr-card-title">Impact of shedding an account</div>
+      <div class="lr-card-sub">The book currently runs at <strong>${_lrPct(s.book_net_loss_ratio)}</strong> net across ${s.account_count} accounts. Each row shows where the book would land if that one account were not renewed &mdash; ranked by the improvement actually on offer, not by the account's own ratio, because a terrible ratio on a handful of lives moves nothing.</div>
+      <table class="lr-table" style="margin-top:12px;">
+        <tr><th>Account</th><th class="num">Members</th><th class="num">Earned premium</th><th class="num">Its net LR</th>
+          <th class="num">Book LR without it</th><th class="num">Improvement</th><th class="num">% of book premium</th></tr>
+        ${rows}
+      </table>
+      ${cum ? `
+        <div class="lr-card-title" style="font-size:13px; margin-top:20px;">Shedding them in sequence</div>
+        <div class="lr-card-sub">The single-account figures above each measure against today's book, so they do not add up. This walks the real path &mdash; remove, recompute, remove again &mdash; and shows the premium given up to get there.</div>
+        <table class="lr-table" style="margin-top:10px;">
+          <tr><th class="num">#</th><th>Account dropped</th><th class="num">Its net LR</th><th class="num">Cumulative premium given up</th><th class="num">Book LR after</th></tr>
+          ${cum}
+        </table>` : ''}
+      <div class="lr-card-sub" style="margin-top:12px;">Shedding premium is permanent and the expense base does not shrink with it. Re-pricing an account to a sustainable level keeps the premium and the relationship; walking away is the option of last resort when the required increase is one no client will accept.</div>
+    </div>
+  `;
 }
 
 function lrDownloadCsv() {

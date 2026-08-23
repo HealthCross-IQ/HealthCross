@@ -1745,6 +1745,133 @@ def account_loss_ratio_totals(rows: List[dict]) -> dict:
     }
 
 
+def loss_ratio_shed_impact(rows: List[dict], top_n: Optional[int] = None) -> dict:
+    """What the book's loss ratio becomes if a given account is not
+    renewed - the "should we walk away from this one?" calculation.
+
+    An account only improves the book by leaving if its OWN loss ratio is
+    worse than the book's, and by how much depends on its size as well as
+    its ratio: a 400% account with two lives on it moves nothing, while a
+    115% account carrying a tenth of the premium moves the book
+    materially. Ranking accounts by their own loss ratio answers the
+    wrong question; this ranks them by the improvement actually on offer.
+
+    Both loss ratios are recomputed from the remaining amounts rather
+    than averaged - removing an account takes its premium out along with
+    its claims, and a book LR is a ratio of sums, never a mean of ratios.
+
+    `premium_at_risk` is the other half of the decision and is returned
+    alongside: shedding an account gives up its premium permanently, and
+    expense loadings are spread over a book that is now smaller. This
+    function deliberately does not net the two into a recommendation -
+    whether losing AED 2m of premium to gain 3 points of loss ratio is
+    worth it is a portfolio strategy question, not an arithmetic one.
+    """
+    totals = account_loss_ratio_totals(rows)
+    book_incurred = totals["incurred_claims"]
+    book_earned = totals["earned_premium"]
+    book_net = totals["net_premium"]
+    book_gross_lr = totals["gross_loss_ratio"]
+    book_net_lr = totals["net_loss_ratio"]
+
+    impacts = []
+    for row in rows:
+        remaining_earned = book_earned - row["earned_premium"]
+        remaining_net = book_net - row["net_premium"]
+        remaining_incurred = book_incurred - row["incurred_claims"]
+
+        gross_lr_without = round(remaining_incurred / remaining_earned, 4) if remaining_earned > 0 else None
+        net_lr_without = round(remaining_incurred / remaining_net, 4) if remaining_net > 0 else None
+
+        impacts.append({
+            "master_client": row["master_client"],
+            "member_count": row["member_count"],
+            "earned_premium": row["earned_premium"],
+            "incurred_claims": row["incurred_claims"],
+            "gross_loss_ratio": row["gross_loss_ratio"],
+            "net_loss_ratio": row["net_loss_ratio"],
+            "book_gross_loss_ratio_without": gross_lr_without,
+            "book_net_loss_ratio_without": net_lr_without,
+            # Negative = the book improves by shedding this account.
+            "gross_lr_change": (
+                round(gross_lr_without - book_gross_lr, 4)
+                if gross_lr_without is not None and book_gross_lr is not None else None
+            ),
+            "net_lr_change": (
+                round(net_lr_without - book_net_lr, 4)
+                if net_lr_without is not None and book_net_lr is not None else None
+            ),
+            "premium_at_risk": row["earned_premium"],
+            "share_of_book_premium": (
+                round(row["earned_premium"] / book_earned, 4) if book_earned else None
+            ),
+        })
+
+    # Biggest improvement first - most negative change at the top.
+    impacts.sort(key=lambda i: (i["net_lr_change"] if i["net_lr_change"] is not None else 0.0))
+    if top_n:
+        impacts = impacts[:top_n]
+
+    return {
+        "book_gross_loss_ratio": book_gross_lr,
+        "book_net_loss_ratio": book_net_lr,
+        "book_earned_premium": book_earned,
+        "book_incurred_claims": book_incurred,
+        "account_count": totals["account_count"],
+        "accounts": impacts,
+    }
+
+
+def loss_ratio_shed_cumulative(rows: List[dict], max_accounts: int = 10) -> List[dict]:
+    """Shedding accounts one after another, worst first - because the
+    single-account impacts above do NOT add up.
+
+    Each standalone impact is measured against the ORIGINAL book. Once
+    the worst account is gone both the numerator and the denominator have
+    moved, so the next account's improvement is measured from a different
+    baseline. The combined effect is not the sum of the parts, and it is
+    not reliably smaller OR larger than that sum either - which way it
+    lands depends on the relative size and ratio of the accounts
+    involved, so there is no shortcut correction to apply. The only way
+    to know what shedding several accounts achieves is to walk it:
+    remove, recompute, remove again.
+    """
+    remaining = list(rows)
+    shed: List[dict] = []
+    out = []
+
+    for _ in range(min(max_accounts, len(rows))):
+        totals = account_loss_ratio_totals(remaining)
+        current_lr = totals["net_loss_ratio"]
+        if current_lr is None:
+            break
+        # Whichever single account left to drop improves the book most
+        # from where it now stands, not from where it originally stood.
+        impact = loss_ratio_shed_impact(remaining)
+        best = impact["accounts"][0] if impact["accounts"] else None
+        if best is None or best["net_lr_change"] is None or best["net_lr_change"] >= 0:
+            break  # nothing left whose removal helps
+
+        remaining = [r for r in remaining if r["master_client"] != best["master_client"]]
+        shed.append(best)
+        new_totals = account_loss_ratio_totals(remaining)
+        out.append({
+            "step": len(shed),
+            "master_client": best["master_client"],
+            "own_net_loss_ratio": best["net_loss_ratio"],
+            "premium_given_up": best["earned_premium"],
+            "book_net_loss_ratio": new_totals["net_loss_ratio"],
+            "book_earned_premium": new_totals["earned_premium"],
+            "cumulative_premium_given_up": round(sum(s["earned_premium"] for s in shed), 2),
+            "cumulative_lr_change": (
+                round(new_totals["net_loss_ratio"] - current_lr, 4)
+                if new_totals["net_loss_ratio"] is not None else None
+            ),
+        })
+
+    return out
+
+
 #: Credibility at which a nationality's own factor is considered solid
 #: enough to actually price on. Below it the factor is still computed and
 #: shown - it is real information, and it is what will cross the line as

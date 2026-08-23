@@ -29,6 +29,8 @@ from app.scoring.rules.portfolio_analysis import (
     account_loss_ratio_rows,
     nationality_risk_table,
     account_loss_ratio_totals,
+    loss_ratio_shed_cumulative,
+    loss_ratio_shed_impact,
     DEFAULT_EXPENSE_RATIO_PCT,
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
     analyze_portfolio_member,
@@ -533,6 +535,14 @@ def portfolio_account_loss_ratio(
         "year_basis": year_basis,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
+        # What the book's loss ratio becomes if each account is not
+        # renewed, and what shedding them one after another actually
+        # achieves - see loss_ratio_shed_impact. Returned alongside the
+        # rows rather than as a separate call so the "which accounts are
+        # worth walking away from?" view is always computed on exactly
+        # the same filtered, basis-matched rows shown in the table.
+        "shed_impact": loss_ratio_shed_impact(rows, top_n=15),
+        "shed_cumulative": loss_ratio_shed_cumulative(rows, max_accounts=10),
     }
 
 
