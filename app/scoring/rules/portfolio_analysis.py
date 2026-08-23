@@ -22,6 +22,7 @@ from datetime import timedelta
 from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
+from app.reference.treatment_classification import classify_paramedical
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.new_business_rating import category_loading_pct, gross_up, price_member
 
@@ -592,17 +593,24 @@ UTILIZATION_CATEGORY_LABELS = {
     "PHARMACY": "Pharmacy",
     "VISION CARE": "Optical",
     "PSYCHIATRY": "Mental Health",
-    "PARAMEDICAL": "Physiotherapy",
 }
 #: Shown as one combined "Dental" row rather than three separate ones.
 UTILIZATION_DENTAL_CATEGORIES = {"GENERAL DENTAL", "ORTHODONTIA", "DENTAL PROSTHESIS"}
 
 
-def _utilization_category_label(raw_category: Optional[str]) -> str:
+def _utilization_category_label(raw_category: Optional[str], medical_act: Optional[str] = None) -> str:
+    """PARAMEDICAL is split by the treatment actually performed rather than
+    shown as one row: the category holds true physiotherapy, every
+    alternative therapy on the book, and nursing, and labelling the whole
+    thing "Physiotherapy" (as this did) both overstated physiotherapy and
+    hid alternative treatment entirely. See
+    app/reference/treatment_classification.py."""
     if not raw_category:
         return "Unclassified"
     if raw_category in UTILIZATION_DENTAL_CATEGORIES:
         return "Dental"
+    if raw_category.strip().upper() == "PARAMEDICAL":
+        return classify_paramedical(medical_act)
     if raw_category in UTILIZATION_CATEGORY_LABELS:
         return UTILIZATION_CATEGORY_LABELS[raw_category]
     return raw_category.title()
@@ -648,15 +656,20 @@ def utilization_by_benefit_category(claims: List[dict]) -> List[dict]:
     of total spend on their own, so folding them into a vague "Other"
     would hide rather than reveal a cost driver.
 
-    Chronic conditions, Alternative treatments, and High-cost specialty
-    treatments aren't represented here at all - HealthCross's own export
-    has no field that tags a claim as any of those three, so building
-    them would mean guessing rather than reading real data.
+    PARAMEDICAL is split into "Physiotherapy", "Alternative Treatment"
+    (ayurvedic/homeopathy/acupuncture/osteopathy/chiropractic) and "Other
+    Paramedical" by each line's own treatment, since the category holds
+    all three and reporting it as one row overstated physiotherapy while
+    hiding alternative treatment completely.
+
+    Chronic conditions and high-cost specialty treatments still aren't
+    represented - the export has no field tagging a claim as either, so
+    building them would mean guessing rather than reading real data.
     """
     buckets: Dict[str, dict] = defaultdict(lambda: {"claim_count": 0, "total_value": 0.0})
     total_value_all = 0.0
     for c in claims:
-        key = _utilization_category_label(c.get("medical_category"))
+        key = _utilization_category_label(c.get("medical_category"), c.get("medical_act"))
         amount = c.get("final_amount") or 0.0
         buckets[key]["claim_count"] += 1
         buckets[key]["total_value"] += amount

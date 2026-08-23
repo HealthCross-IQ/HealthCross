@@ -836,7 +836,7 @@ def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
 
 def _claim_dicts_for_utilization(db: Session) -> List[dict]:
     """Every uploaded claim line's own ip_op_maternity/medical_category/
-    final_amount, plus its resolved master client (see
+    medical_act/final_amount, plus its resolved master client (see
     _master_client_by_beneficiary) so this can be scoped to one client for
     a client-level report - a Utilization of Benefits view, like Large
     Claims, is purely about the claim lines themselves and needs no
@@ -850,6 +850,9 @@ def _claim_dicts_for_utilization(db: Session) -> List[dict]:
         models.PortfolioClaimEntry.client_name,
         models.PortfolioClaimEntry.ip_op_maternity,
         models.PortfolioClaimEntry.medical_category,
+        # Needed to split PARAMEDICAL into physiotherapy vs alternative
+        # treatment - the category alone cannot tell them apart.
+        models.PortfolioClaimEntry.medical_act,
         models.PortfolioClaimEntry.final_amount,
     ).all()
     return [
@@ -857,9 +860,10 @@ def _claim_dicts_for_utilization(db: Session) -> List[dict]:
             "master_client": master_client_by_beneficiary.get(patient_id) or client_name,
             "ip_op_maternity": ip_op_maternity,
             "medical_category": medical_category,
+            "medical_act": medical_act,
             "final_amount": final_amount,
         }
-        for patient_id, client_name, ip_op_maternity, medical_category, final_amount in rows
+        for patient_id, client_name, ip_op_maternity, medical_category, medical_act, final_amount in rows
     ]
 
 

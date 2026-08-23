@@ -629,7 +629,12 @@ def test_utilization_by_benefit_category_relabels_known_categories():
     assert rows["Pharmacy"]["total_value"] == 100.0
     assert rows["Optical"]["total_value"] == 200.0
     assert rows["Mental Health"]["total_value"] == 300.0
-    assert rows["Physiotherapy"]["total_value"] == 400.0
+    # PARAMEDICAL with no treatment recorded is NOT assumed to be
+    # physiotherapy - that assumption is what previously let alternative
+    # therapy hide inside a "Physiotherapy" row. Without the treatment
+    # there is nothing to classify it on, so it stays unclassified.
+    assert rows["Other Paramedical"]["total_value"] == 400.0
+    assert "Physiotherapy" not in rows
 
 
 def test_utilization_by_benefit_category_combines_dental_categories():
@@ -1623,3 +1628,37 @@ def test_account_loss_ratio_rejects_an_unknown_premium_basis():
     }]
     with pytest.raises(ValueError):
         account_loss_ratio_rows(members, as_of=date(2026, 7, 15), premium_basis="net")
+
+
+def test_utilization_splits_paramedical_by_the_actual_treatment():
+    # PARAMEDICAL holds physiotherapy, every alternative therapy on the
+    # book, and nursing. Reporting it as one "Physiotherapy" row (as this
+    # used to) overstated physiotherapy and hid alternative treatment
+    # completely - the category alone cannot tell them apart, only the
+    # treatment can.
+    claims = [
+        {"medical_category": "PARAMEDICAL", "medical_act": "Physical Therapist", "final_amount": 1000.0},
+        {"medical_category": "PARAMEDICAL", "medical_act": "Kinésithérapeute", "final_amount": 500.0},
+        {"medical_category": "PARAMEDICAL", "medical_act": "Ayuverdic", "final_amount": 800.0},
+        {"medical_category": "PARAMEDICAL", "medical_act": "Osteopath", "final_amount": 200.0},
+        {"medical_category": "PARAMEDICAL", "medical_act": "Nursing services", "final_amount": 100.0},
+    ]
+    rows = {r["category"]: r for r in utilization_by_benefit_category(claims)}
+
+    assert rows["Physiotherapy"]["total_value"] == 1500.0
+    assert rows["Alternative Treatment"]["total_value"] == 1000.0
+    assert rows["Other Paramedical"]["total_value"] == 100.0
+
+
+def test_utilization_still_labels_the_other_categories_as_before():
+    claims = [
+        {"medical_category": "PHARMACY", "final_amount": 100.0},
+        {"medical_category": "VISION CARE", "final_amount": 50.0},
+        {"medical_category": "GENERAL DENTAL", "final_amount": 30.0},
+        {"medical_category": "ORTHODONTIA", "final_amount": 20.0},
+    ]
+    rows = {r["category"]: r for r in utilization_by_benefit_category(claims)}
+
+    assert rows["Pharmacy"]["total_value"] == 100.0
+    assert rows["Optical"]["total_value"] == 50.0
+    assert rows["Dental"]["total_value"] == 50.0  # the dental categories still combine

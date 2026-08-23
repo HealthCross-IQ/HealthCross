@@ -141,6 +141,7 @@ def parse_portfolio_claims(file: BinaryIO, filename: str) -> List[dict]:
                 "relation": _str_or_none(row.get("relation")),
                 "ip_op_maternity": _str_or_none(row.get("ip_op_maternity")),
                 "medical_category": _str_or_none(row.get("medical_category")),
+                "medical_act": _str_or_none(row.get("medical_act")),
                 "provider_name": _str_or_none(row.get("provider_name")),
                 "diagnosis_code": _str_or_none(row.get("diagnosis_code")),
                 "diagnosis_description": _str_or_none(row.get("diagnosis_description")),

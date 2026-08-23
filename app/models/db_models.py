@@ -253,6 +253,9 @@ class ClaimsLedgerEntry(Base):
     relation = Column(String, nullable=True)
     ip_op_maternity = Column(String, nullable=True)
     medical_category = Column(String, nullable=True)
+    # The specific treatment performed - the only field separating true
+    # physiotherapy from alternative therapy inside "PARAMEDICAL".
+    medical_act = Column(String, nullable=True)
     provider_name = Column(String, nullable=True)
     diagnosis_code = Column(String, nullable=True)
     diagnosis_description = Column(String, nullable=True)
@@ -602,6 +605,9 @@ class PortfolioClaimEntry(Base):
     relation = Column(String, nullable=True)
     ip_op_maternity = Column(String, nullable=True)
     medical_category = Column(String, nullable=True)
+    # The specific treatment performed - the only field separating true
+    # physiotherapy from alternative therapy inside "PARAMEDICAL".
+    medical_act = Column(String, nullable=True)
     provider_name = Column(String, nullable=True)
     diagnosis_code = Column(String, nullable=True)
     diagnosis_description = Column(String, nullable=True)

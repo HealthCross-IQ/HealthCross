@@ -31,6 +31,11 @@ CLAIMS_LEDGER_ALIASES: Dict[str, List[str]] = {
     "relation": ["relation", "relationship"],
     "ip_op_maternity": ["ip_op_maternity", "ip/op/maternity", "claim type"],
     "medical_category": ["medical_category", "medical category"],
+    # The specific treatment performed (e.g. "Physical Therapist",
+    # "Osteopath", "Ayuverdic"). Finer than medical_category, and the ONLY
+    # field that distinguishes true physiotherapy from alternative therapy
+    # - both of which land in the same "PARAMEDICAL" category.
+    "medical_act": ["medical_act", "medical act"],
     "provider_name": ["provider_name", "provider name", "provider", "hospital/clinic", "hospital name", "facility name"],
     "diagnosis_code": ["diagnosis_code", "diagnosis code", "icd code", "icd10"],
     "diagnosis_description": ["diagnosis_description", "diagnosis description", "diagnosis_short_description", "diagnosis short description"],
@@ -77,6 +82,7 @@ def parse_claims_ledger(file: BinaryIO, filename: str) -> List[dict]:
                 "relation": _str_or_none(row.get("relation")),
                 "ip_op_maternity": _str_or_none(row.get("ip_op_maternity")),
                 "medical_category": _str_or_none(row.get("medical_category")),
+                "medical_act": _str_or_none(row.get("medical_act")),
                 "provider_name": _str_or_none(row.get("provider_name")),
                 "diagnosis_code": _str_or_none(row.get("diagnosis_code")),
                 "diagnosis_description": _str_or_none(row.get("diagnosis_description")),
