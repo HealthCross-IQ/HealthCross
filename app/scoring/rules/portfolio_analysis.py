@@ -23,6 +23,11 @@ from typing import Dict, List, Optional
 
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
 from app.reference.treatment_classification import classify_paramedical
+from app.scoring.rules.credibility import (
+    FULL_CREDIBILITY_MEMBER_YEARS,
+    blend_with_complement,
+    relativity,
+)
 from app.scoring.rules.census_summary import census_demographic_summary
 from app.scoring.rules.new_business_rating import category_loading_pct, gross_up, price_member
 
@@ -1671,3 +1676,110 @@ def account_loss_ratio_totals(rows: List[dict]) -> dict:
         "gross_loss_ratio": round(incurred_claims / earned_premium, 4) if earned_premium else None,
         "net_loss_ratio": round(incurred_claims / net_premium, 4) if net_premium else None,
     }
+
+
+def nationality_risk_table(
+    member_results: List[dict],
+    full_credibility_member_years: float = FULL_CREDIBILITY_MEMBER_YEARS,
+    min_relativity: float = 0.5,
+    max_relativity: float = 2.0,
+) -> List[dict]:
+    """Per-nationality burning cost, credibility-weighted toward the
+    nationality's own zone - the evidence behind a nationality rating
+    factor, rather than a raw rate that a handful of claims could swing.
+
+    Zone is the complement rather than the whole book deliberately: a
+    nationality's nearest comparable population is the other nationalities
+    in its own zone, so a thin Egyptian cell falls back to Middle East
+    experience rather than to a book average dominated by a different
+    zone entirely.
+
+    Every row carries the exposure standing behind it and the credibility
+    that exposure earned, so a number can never be read without seeing how
+    much data it rests on. age/gender mix is carried for the same reason:
+    nationality correlates with age, role and gender mix, so a nationality
+    that looks expensive may really be an older or more female population,
+    and the mix is what lets an underwriter tell those apart instead of
+    baking a confounded signal into a rate.
+
+    relativity is the figure a quote would actually use - the blended rate
+    over the whole book's rate, capped (see credibility.relativity).
+    """
+    by_nationality: Dict[str, dict] = defaultdict(
+        lambda: {"claims": 0.0, "exposure": 0.0, "members": 0, "zone": None,
+                 "ages": [], "female": 0, "gendered": 0}
+    )
+    by_zone: Dict[str, dict] = defaultdict(lambda: {"claims": 0.0, "exposure": 0.0})
+    book_claims = 0.0
+    book_exposure = 0.0
+
+    for r in member_results:
+        nationality = (r.get("nationality") or "").strip() or None
+        if not nationality:
+            continue
+        zone = r.get("nationality_zone")
+        claims = (r.get("actual_claims") or 0.0) + (r.get("ibnr") or 0.0)
+        exposure = r.get("earned_premium_fraction") or 0.0
+
+        bucket = by_nationality[nationality]
+        bucket["claims"] += claims
+        bucket["exposure"] += exposure
+        bucket["members"] += 1
+        if bucket["zone"] is None and zone:
+            bucket["zone"] = zone
+        if r.get("age") is not None:
+            bucket["ages"].append(r["age"])
+        gender = (r.get("gender") or "").strip().upper()
+        if gender in ("M", "F"):
+            bucket["gendered"] += 1
+            if gender == "F":
+                bucket["female"] += 1
+
+        if zone:
+            by_zone[zone]["claims"] += claims
+            by_zone[zone]["exposure"] += exposure
+        book_claims += claims
+        book_exposure += exposure
+
+    book_rate = book_claims / book_exposure if book_exposure else None
+    zone_rate = {
+        z: (b["claims"] / b["exposure"] if b["exposure"] else None) for z, b in by_zone.items()
+    }
+
+    rows = []
+    for nationality, b in by_nationality.items():
+        own_rate = b["claims"] / b["exposure"] if b["exposure"] else None
+        # Falls back to the book rate for a nationality whose zone could
+        # not be resolved - still a complement, just a broader one.
+        complement = zone_rate.get(b["zone"]) if b["zone"] else None
+        if complement is None:
+            complement = book_rate
+
+        blend = blend_with_complement(
+            own_rate, complement, b["exposure"],
+            full_credibility_member_years=full_credibility_member_years,
+        )
+        rows.append(
+            {
+                "nationality": nationality,
+                "nationality_zone": b["zone"],
+                "member_count": b["members"],
+                "earned_member_years": round(b["exposure"], 4),
+                "incurred_claims": round(b["claims"], 2),
+                "burning_cost": round(own_rate, 2) if own_rate is not None else None,
+                "zone_burning_cost": round(complement, 2) if complement is not None else None,
+                "credibility": blend["credibility"],
+                "credible_burning_cost": blend["blended_rate"],
+                "relativity": relativity(
+                    blend["blended_rate"], book_rate,
+                    min_relativity=min_relativity, max_relativity=max_relativity,
+                ),
+                # Carried so a nationality's apparent cost can be checked
+                # against its population rather than taken at face value.
+                "avg_age": round(sum(b["ages"]) / len(b["ages"]), 1) if b["ages"] else None,
+                "female_pct": round(b["female"] / b["gendered"] * 100, 1) if b["gendered"] else None,
+            }
+        )
+
+    rows.sort(key=lambda r: (r["relativity"] is None, -(r["relativity"] or 0)))
+    return rows

@@ -21,8 +21,10 @@ from app.ingestion.subgroup_mapping import parse_subgroup_mapping
 from app.models import db_models as models
 from app.models import schemas
 from app.reference.network_type_mapping import is_out_of_scope_network_type, map_network_type
+from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS
 from app.scoring.rules.portfolio_analysis import (
     account_loss_ratio_rows,
+    nationality_risk_table,
     account_loss_ratio_totals,
     DEFAULT_EXPENSE_RATIO_PCT,
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
@@ -471,6 +473,49 @@ def portfolio_account_loss_ratio(
         "premium_basis": premium_basis,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
+    }
+
+
+@router.get("/nationality-risk")
+def portfolio_nationality_risk(
+    as_of: Optional[date] = Query(None, description="Date to compute earned exposure as of - defaults to the stored data-as-of date"),
+    policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
+    full_credibility_member_years: float = Query(
+        FULL_CREDIBILITY_MEMBER_YEARS,
+        description="Exposure at which a nationality's own experience is trusted completely; below it the rate blends toward its zone",
+    ),
+    min_relativity: float = Query(0.5, description="Floor on the resulting rating factor"),
+    max_relativity: float = Query(2.0, description="Cap on the resulting rating factor"),
+    filters: Dict[str, str] = Depends(_result_filters),
+    db: Session = Depends(get_db),
+):
+    """Per-nationality burning cost from the booked book, credibility-
+    weighted toward each nationality's own zone - the evidence behind a
+    nationality rating factor (see nationality_risk_table).
+
+    Every row carries the exposure behind it and the credibility that
+    exposure earned, plus the population's age and gender mix, so a
+    nationality that looks expensive can be checked against whether it is
+    simply older or more female before its rate is trusted.
+
+    No rate card is required: this compares each nationality's own claims
+    against its own exposure and never touches rate-card pricing.
+    """
+    results = _run_analysis(
+        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year,
+        filters=filters, require_rate_card=False,
+    )
+    rows = nationality_risk_table(
+        results,
+        full_credibility_member_years=full_credibility_member_years,
+        min_relativity=min_relativity,
+        max_relativity=max_relativity,
+    )
+    return {
+        "rows": rows,
+        "full_credibility_member_years": full_credibility_member_years,
+        "nationality_count": len(rows),
+        "fully_credible_count": sum(1 for r in rows if r["credibility"] >= 1.0),
     }
 
 

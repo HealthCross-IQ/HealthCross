@@ -30,6 +30,7 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_portfolio,
     top_claims_by_value,
     top_members_by_total_claims,
+    nationality_risk_table,
     utilization_by_benefit_category,
     utilization_by_encounter_type,
 )
@@ -1662,3 +1663,69 @@ def test_utilization_still_labels_the_other_categories_as_before():
     assert rows["Pharmacy"]["total_value"] == 100.0
     assert rows["Optical"]["total_value"] == 50.0
     assert rows["Dental"]["total_value"] == 50.0  # the dental categories still combine
+
+
+def _nat_member(nationality, zone, claims, exposure, age=35, gender="M"):
+    return {
+        "nationality": nationality, "nationality_zone": zone,
+        "actual_claims": claims, "ibnr": 0.0,
+        "earned_premium_fraction": exposure, "age": age, "gender": gender,
+    }
+
+
+def test_nationality_risk_table_blends_a_thin_nationality_toward_its_zone():
+    # 40 members of a cheap nationality set the zone rate; one expensive
+    # member with almost no exposure must not price at their raw rate.
+    members = [_nat_member("Indian", "zone_1_asia", 1_000.0, 1.0) for _ in range(40)]
+    members.append(_nat_member("Sudanese", "zone_1_asia", 12_000.0, 1.0))
+
+    rows = {r["nationality"]: r for r in nationality_risk_table(members)}
+    thin = rows["Sudanese"]
+
+    assert thin["earned_member_years"] == 1.0
+    assert thin["burning_cost"] == 12_000.0          # its own raw experience
+    assert thin["credibility"] == 0.1                 # sqrt(1/100)
+    # Blended lands far below the raw rate - one member-year cannot carry a 12x load.
+    assert thin["credible_burning_cost"] < 3_000.0
+
+
+def test_nationality_risk_table_lets_a_well_evidenced_nationality_keep_its_own_rate():
+    members = [_nat_member("Indian", "zone_1_asia", 1_000.0, 1.0) for _ in range(120)]
+    members += [_nat_member("Other", "zone_1_asia", 5_000.0, 1.0) for _ in range(5)]
+
+    rows = {r["nationality"]: r for r in nationality_risk_table(members)}
+    indian = rows["Indian"]
+
+    assert indian["credibility"] == 1.0  # 120 member-years is past the standard
+    assert indian["credible_burning_cost"] == indian["burning_cost"]
+
+
+def test_nationality_risk_table_carries_the_mix_so_confounding_can_be_checked():
+    # A nationality can look expensive because it is older or more female
+    # rather than because of nationality - the mix is what makes that
+    # visible instead of baking a confounded signal into a rate.
+    members = [_nat_member("Egyptian", "zone_2_middle_east", 5_000.0, 1.0, age=50, gender="F")
+               for _ in range(10)]
+    members += [_nat_member("Egyptian", "zone_2_middle_east", 5_000.0, 1.0, age=40, gender="M")
+                for _ in range(10)]
+
+    row = nationality_risk_table(members)[0]
+    assert row["avg_age"] == 45.0
+    assert row["female_pct"] == 50.0
+    assert row["member_count"] == 20
+
+
+def test_nationality_risk_table_relativity_is_capped():
+    members = [_nat_member("Cheap", "zone_1_asia", 100.0, 60.0)]
+    members += [_nat_member("Wild", "zone_1_asia", 900_000.0, 60.0)]
+
+    rows = {r["nationality"]: r for r in nationality_risk_table(members)}
+    assert rows["Wild"]["relativity"] <= 2.0
+    assert rows["Cheap"]["relativity"] >= 0.5
+
+
+def test_nationality_risk_table_skips_members_with_no_nationality():
+    members = [_nat_member(None, "zone_1_asia", 1_000.0, 1.0),
+               _nat_member("Indian", "zone_1_asia", 1_000.0, 1.0)]
+    rows = nationality_risk_table(members)
+    assert [r["nationality"] for r in rows] == ["Indian"]
