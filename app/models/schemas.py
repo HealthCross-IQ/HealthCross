@@ -21,6 +21,21 @@ class CaseCreate(BaseModel):
     qic_fee_pct: Optional[float] = None
 
 
+class RenewalIntakeRequest(BaseModel):
+    """Open the renewal case for one account already on HealthCross's own
+    book - see routes_portfolio_analysis's open_renewal_intake. Only the
+    account name is required, because everything else is derived from the
+    Membership export rather than typed in; broker/industry are accepted
+    up front purely so the underwriter doesn't have to go back and edit
+    the case when they already know them.
+    """
+
+    master_client: str
+    broker_name: Optional[str] = None
+    industry: Optional[str] = None
+    reseed_census: bool = False
+
+
 class CaseOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -39,6 +54,7 @@ class CaseOut(BaseModel):
     submitted_at: datetime
     business_type: Optional[str] = None
     current_annual_premium: Optional[float] = None
+    portfolio_master_client: Optional[str] = None
     policy_start_date: Optional[date] = None
     tpa_fee_pct: Optional[float] = None
     commission_pct: Optional[float] = None

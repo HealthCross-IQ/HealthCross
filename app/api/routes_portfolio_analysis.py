@@ -52,6 +52,14 @@ from app.scoring.rules.portfolio_analysis import (
     utilization_by_benefit_category,
     utilization_by_encounter_type,
 )
+from app.scoring.rules.renewal_intake import (
+    account_members,
+    census_rows_from_members,
+    claim_belongs_to_term,
+    current_term_members,
+    renewal_intake_profile,
+    term_member_windows,
+)
 
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
 
@@ -591,10 +599,196 @@ def portfolio_renewal_due_list(
     members = _member_dicts(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    subgroup_master_by_name: Dict[str, str] = {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
+    subgroup_master_by_name = _subgroup_master_by_name(db)
+    due = renewal_due_accounts(members, subgroup_master_by_name, within_days=within_days, as_of=as_of)
+
+    # Which of these accounts already have a renewal case open, so the list
+    # can offer "Open" rather than "Start" and never silently create a
+    # second case for an account someone is already working on.
+    cases_by_client = _portfolio_cases_by_client(db)
+    for row in due:
+        case = cases_by_client.get(_client_key(row["master_client"]))
+        row["case_id"] = case.id if case else None
+        row["case_status"] = (case.status.value if hasattr(case.status, "value") else case.status) if case else None
+    return due
+
+
+def _client_key(name: Optional[str]) -> str:
+    return (name or "").strip().casefold()
+
+
+def _subgroup_master_by_name(db: Session) -> Dict[str, str]:
+    return {
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name
+        for sm in db.query(models.SubgroupMasterMapping).all()
     }
-    return renewal_due_accounts(members, subgroup_master_by_name, within_days=within_days, as_of=as_of)
+
+
+def _portfolio_cases_by_client(db: Session) -> Dict[str, models.Case]:
+    """Cases already opened off the book, keyed by their master client.
+    Oldest first so that if an account somehow ended up with two, the
+    original (the one carrying the work) is the one the list points at.
+    """
+    cases = (
+        db.query(models.Case)
+        .filter(models.Case.portfolio_master_client.isnot(None))
+        .order_by(models.Case.id.asc())
+        .all()
+    )
+    by_client: Dict[str, models.Case] = {}
+    for case in cases:
+        by_client.setdefault(_client_key(case.portfolio_master_client), case)
+    return by_client
+
+
+@router.get("/renewal-intake/{master_client}")
+def preview_renewal_intake(master_client: str, db: Session = Depends(get_db)):
+    """What opening this account's renewal would pull through from the
+    book - headcount, term dates, per-category existing premium - without
+    creating anything. Lets the Renewal Due List show the underwriter
+    exactly what they're about to get before they commit to a case.
+    """
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    profile = renewal_intake_profile(members, master_client, _subgroup_master_by_name(db))
+    if not profile["member_count"]:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+    case = _portfolio_cases_by_client(db).get(_client_key(master_client))
+    profile["case_id"] = case.id if case else None
+    return profile
+
+
+@router.post("/renewal-intake")
+def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Depends(get_db)):
+    """Open the renewal case for an account already on HealthCross's own
+    book, seeded from the book itself rather than re-keyed by hand.
+
+    Idempotent by master client: an account whose case is already open
+    returns that same case rather than opening a second one, so clicking
+    through from the Renewal Due List twice is harmless. The census is
+    only seeded when the case has none - once an underwriter has uploaded
+    the renewal census, re-opening the case must not overwrite it with the
+    expiring roster again. `reseed_census` forces the refresh explicitly,
+    and takes the same before-snapshot as a census upload does so Census
+    Movement still has an expiring state to compare against.
+    """
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+
+    subgroup_master_by_name = _subgroup_master_by_name(db)
+    profile = renewal_intake_profile(members, payload.master_client, subgroup_master_by_name)
+    if not profile["member_count"]:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{payload.master_client}'")
+
+    account = account_members(members, payload.master_client, subgroup_master_by_name)
+    term_members = current_term_members(account)
+
+    case = _portfolio_cases_by_client(db).get(_client_key(payload.master_client))
+    created = case is None
+    if created:
+        case = models.Case(
+            # The book carries no broker or industry of its own - those are
+            # case-workflow facts, not membership facts - so they're opened
+            # as placeholders for the underwriter to set rather than being
+            # guessed at. "unknown" industry scores at the neutral 1.0
+            # multiplier (see industry_risk), so an unset industry loads
+            # nothing either way rather than quietly penalising the account.
+            broker_name=payload.broker_name or "To be confirmed",
+            company_name=profile["master_client"],
+            industry=payload.industry or "unknown",
+            region=profile["region"],
+            employee_count_declared=profile["member_count"],
+            business_type="existing",
+            claims_available=True,
+            renewal_date=profile["policy_end_date"],
+            policy_start_date=profile["policy_start_date"],
+            current_annual_premium=profile["annualised_premium"] or None,
+            portfolio_master_client=profile["master_client"],
+        )
+        db.add(case)
+        db.flush()
+
+    seeded = 0
+    existing_census = db.query(models.CensusRecord).filter_by(case_id=case.id).count()
+    if not existing_census or payload.reseed_census:
+        if existing_census:
+            # Same snapshot-before-replace contract as upload_census, so a
+            # reseed can't destroy the expiring state Census Movement needs.
+            relation_counts: Dict[str, int] = defaultdict(int)
+            for record in db.query(models.CensusRecord).filter_by(case_id=case.id).all():
+                relation_counts[record.relation or "Unspecified"] += 1
+            db.query(models.CensusSnapshot).filter_by(case_id=case.id).delete()
+            db.add_all(
+                models.CensusSnapshot(case_id=case.id, relation=relation, member_count=count)
+                for relation, count in relation_counts.items()
+            )
+            db.query(models.CensusRecord).filter_by(case_id=case.id).delete()
+        rows = census_rows_from_members(term_members)
+        db.add_all(models.CensusRecord(case_id=case.id, **row) for row in rows)
+        seeded = len(rows)
+
+    # The book's claims export already holds this account's own experience,
+    # line by line - so the claims ledger the Renewal Bench prices off is
+    # seeded from it too, rather than asking for a re-upload of claims
+    # HealthCross itself produced. Only the renewing term's lines are
+    # copied, under the same period rule the Loss Ratio board uses, so the
+    # case and the board can't disagree about the same account.
+    claims_seeded = 0
+    existing_ledger = db.query(models.ClaimsLedgerEntry).filter_by(case_id=case.id).count()
+    if not existing_ledger or payload.reseed_census:
+        windows = term_member_windows(term_members)
+        if windows:
+            if existing_ledger:
+                db.query(models.ClaimsLedgerEntry).filter_by(case_id=case.id).delete()
+            # Chunked rather than one big IN (...): a large master client can
+            # carry more beneficiary IDs than SQLite will accept as bound
+            # parameters in a single statement.
+            beneficiary_ids = list(windows)
+            candidates = []
+            for start in range(0, len(beneficiary_ids), 500):
+                candidates.extend(
+                    db.query(models.PortfolioClaimEntry)
+                    .filter(models.PortfolioClaimEntry.patient_id.in_(beneficiary_ids[start:start + 500]))
+                    .all()
+                )
+            entries = [
+                models.ClaimsLedgerEntry(
+                    case_id=case.id,
+                    patient_id=c.patient_id,
+                    claim_id=c.claim_id,
+                    claim_status=c.claim_status,
+                    policy_start_date=c.policy_start_date,
+                    policy_end_date=c.policy_end_date,
+                    member_start_date=c.member_start_date,
+                    member_end_date=c.member_end_date,
+                    date_of_treatment=c.date_of_treatment,
+                    relation=c.relation,
+                    ip_op_maternity=c.ip_op_maternity,
+                    medical_category=c.medical_category,
+                    medical_act=c.medical_act,
+                    provider_name=c.provider_name,
+                    diagnosis_code=c.diagnosis_code,
+                    diagnosis_description=c.diagnosis_description,
+                    claimed_amount=c.claimed_amount,
+                    final_amount=c.final_amount,
+                )
+                for c in candidates
+                if claim_belongs_to_term(c.patient_id, c.date_of_treatment, windows)
+            ]
+            db.add_all(entries)
+            claims_seeded = len(entries)
+
+    db.commit()
+    db.refresh(case)
+    return {
+        "case": schemas.CaseOut.model_validate(case),
+        "created": created,
+        "census_seeded": seeded,
+        "claims_seeded": claims_seeded,
+        "profile": profile,
+    }
 
 
 @router.get("/group-size-bands")

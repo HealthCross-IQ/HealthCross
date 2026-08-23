@@ -1139,23 +1139,32 @@ async function hcRailRenewalDueList() {
   const daysInput = document.getElementById('renewal-due-window') ? document.getElementById('renewal-due-window').value : 60;
   try {
     const due = await api(`/portfolio-analysis/renewal-due-list?within_days=${daysInput}`);
-    const rows = due.map(d => `
+    const rows = due.map(d => {
+      const urgency = d.days_until_renewal <= 14 ? 'dir-review' : d.days_until_renewal <= 30 ? 'dir-same' : '';
+      const action = d.case_id
+        ? `<button onclick="hcOpenRenewalFromBook(${escapeHtml(JSON.stringify(d.master_client))})">Open renewal</button>
+           <span class="tier-pill dir-improved">Case #${d.case_id}</span>`
+        : `<button onclick="hcOpenRenewalFromBook(${escapeHtml(JSON.stringify(d.master_client))})">Start renewal</button>`;
+      return `
       <tr>
         <td>${escapeHtml(d.master_client)}</td>
         <td style="text-align:right;">${d.member_count}</td>
         <td>${d.policy_end_date}</td>
-        <td style="text-align:right;">${d.days_until_renewal}</td>
-      </tr>
-    `).join('');
+        <td style="text-align:right;"><span class="tier-pill ${urgency}">${d.days_until_renewal}</span></td>
+        <td style="text-align:right; white-space:nowrap;">${action}</td>
+      </tr>`;
+    }).join('');
     document.getElementById('main').innerHTML = `
       <div class="card">
         <h3>Renewal Due List</h3>
         <div class="hint">Real accounts from the booked Membership export whose own policy end date falls within the window below - not a manually-set date on a case record. Soonest first.</div>
+        <div class="hint">Opening a renewal here builds the case straight from the book - company, policy term, headcount, category mix and each member's own existing annual rate are all carried across, so nothing is re-typed and no "New Case" form is needed. The only documents left to upload are the ones the book genuinely doesn't hold: the expiring table of benefits, the renewal quote, and any broker correspondence.</div>
         <div class="row" style="align-items:flex-end; margin-bottom:14px;">
           <div><label>Within (days)</label><input type="number" id="renewal-due-window" value="${daysInput}" style="width:90px;"></div>
           <button onclick="hcRailRenewalDueList()">Refresh</button>
         </div>
-        ${due.length ? `<table><tr><th>Master client</th><th style="text-align:right;">Members</th><th>Policy end date</th><th style="text-align:right;">Days to renewal</th></tr>${rows}</table>` : `<div class="hint">No accounts due for renewal in the next ${daysInput} days.</div>`}
+        <div id="renewal-intake-status" class="hint"></div>
+        ${due.length ? `<table><tr><th>Master client</th><th style="text-align:right;">Members</th><th>Policy end date</th><th style="text-align:right;">Days to renewal</th><th style="text-align:right;">Renewal file</th></tr>${rows}</table>` : `<div class="hint">No accounts due for renewal in the next ${daysInput} days.</div>`}
       </div>
     `;
   } catch (err) {
@@ -1167,6 +1176,65 @@ async function hcRailRenewalDueList() {
       </div>
     `;
   }
+}
+
+async function hcOpenRenewalFromBook(masterClient) {
+  const statusEl = document.getElementById('renewal-intake-status');
+  if (statusEl) statusEl.textContent = `Opening ${masterClient} from the book...`;
+  try {
+    const result = await api('/portfolio-analysis/renewal-intake', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ master_client: masterClient }),
+    });
+    // Set before selectCase, which renders the workspace itself - so the
+    // notice appears on that first render rather than needing a second
+    // one. It says what the book already provided, making it obvious that
+    // only the TOB and quote are actually still outstanding.
+    renewalIntakeNotice = result;
+    await selectCase(result.case.id);
+    const zone = document.getElementById('quick-upload-zone');
+    if (zone) zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  } catch (err) {
+    if (statusEl) statusEl.textContent = err.message;
+  }
+}
+
+/* Set by hcOpenRenewalFromBook so the case workspace can show, once,
+   what was just carried over from the book. Cleared as soon as it's
+   rendered - it describes one action, not a lasting property of the case. */
+let renewalIntakeNotice = null;
+
+function renewalIntakeNoticeHtml() {
+  if (!renewalIntakeNotice) return '';
+  const r = renewalIntakeNotice;
+  const p = r.profile;
+  renewalIntakeNotice = null;
+  const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const categories = (p.by_category || []).map(b =>
+    `<tr><td>${escapeHtml(b.category)}</td><td style="text-align:right;">${b.member_count}</td>
+     <td style="text-align:right;">${b.average_rate == null ? '-' : money(b.average_rate)}</td>
+     <td style="text-align:right;">${money(b.annual_premium)}</td></tr>`).join('');
+  return `
+    <div class="card">
+      <h3>${r.created ? 'Renewal opened from the book' : 'Renewal reopened from the book'}</h3>
+      <div class="hint">${escapeHtml(p.master_client)} &middot; policy term ${p.policy_start_date || '-'} to ${p.policy_end_date || '-'}${p.prior_term_member_count ? ` &middot; ${p.prior_term_member_count} member rows from earlier terms left out - only the renewing term is seeded` : ''}</div>
+      <div class="kpi-grid" style="margin-top:12px;">
+        <div class="kpi"><span class="label">Lives carried over</span><div class="value">${p.member_count.toLocaleString()}</div>
+          <span class="label" style="margin:4px 0 0;">${r.census_seeded ? `${r.census_seeded.toLocaleString()} census rows seeded` : 'census already on the case - left untouched'}</span></div>
+        <div class="kpi"><span class="label">Existing premium (annualised)</span><div class="value">${money(p.annualised_premium)}</div>
+          <span class="label" style="margin:4px 0 0;">${p.rated_member_count.toLocaleString()} of ${p.member_count.toLocaleString()} members rated</span></div>
+        <div class="kpi"><span class="label">Booked over the term</span><div class="value">${money(p.booked_premium)}</div>
+          <span class="label" style="margin:4px 0 0;">pro-rated by join/leave dates</span></div>
+        <div class="kpi"><span class="label">Average annual rate</span><div class="value">${p.average_annual_rate == null ? '-' : money(p.average_annual_rate)}</div>
+          <span class="label" style="margin:4px 0 0;">per member</span></div>
+        <div class="kpi"><span class="label">Claim lines carried over</span><div class="value">${(r.claims_seeded || 0).toLocaleString()}</div>
+          <span class="label" style="margin:4px 0 0;">${r.claims_seeded ? 'from the book\'s own claims export' : 'ledger already on the case, or no claims on this term'}</span></div>
+      </div>
+      ${categories ? `<table style="margin-top:14px;"><tr><th>Category</th><th style="text-align:right;">Members</th><th style="text-align:right;">Average rate</th><th style="text-align:right;">Existing premium</th></tr>${categories}</table>` : ''}
+      <div class="hint" style="margin-top:12px;">Still to upload: the <strong>expiring table of benefits</strong>, and the <strong>renewal quote</strong> once it's out. Claims come from the book's own claims export - nothing to upload there. Set the broker and industry on the case header above; the book doesn't carry them.</div>
+    </div>
+  `;
 }
 
 async function selectCaseAndOpenRenewalBench(id) {
@@ -2099,6 +2167,8 @@ function renderCaseWorkspace() {
     <div class="card" id="executive-summary-card"></div>
 
     <div class="card" id="case-completeness-card"></div>
+
+    ${renewalIntakeNoticeHtml()}
 
     <div class="card">
       <h3>Quick upload</h3>

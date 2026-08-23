@@ -1182,3 +1182,124 @@ def test_renewal_due_list_returns_only_clients_due_within_the_window(client, tmp
     assert [d["master_client"] for d in due] == ["Due Soon Co"]
     assert due[0]["policy_end_date"] == "2026-03-15"
     assert due[0]["days_until_renewal"] == 42
+
+
+# --- opening a renewal straight from the book ---------------------------
+# The whole point: an account already on HealthCross's own book should not
+# have to be re-keyed through "New Case" - see routes_portfolio_analysis's
+# open_renewal_intake and app/scoring/rules/renewal_intake.py.
+
+@pytest.fixture()
+def book_for_intake(client, tmp_path):
+    """One master client booked as two subgroups, on two policy years, with
+    a claim in each - the shape that actually catches mistakes: subgroups
+    must roll up, and last year's term must NOT come through as this
+    year's renewal.
+    """
+    members_path = _write_xlsx(
+        tmp_path, "intake_members.xlsx", MEMBERS_HEADER,
+        [
+            # expiring term (the one renewing): two subgroups, two lives
+            ["Intake Sub One", "Intake Holdings", "P1", "QC-I1", "IN0001", "1990-01-01", "M", "Single",
+             "India", "Principal", "Dubai", "QIC/HC/BR/INT/DXB/A", "PLATINUM",
+             "2025-05-01", "2026-05-01", "2025-05-01", "2026-05-01", 12000, 12000, None, None, 500],
+            ["Intake Sub Two", "Intake Holdings", "P2", "QC-I2", "IN0002", "1992-01-01", "F", "Married",
+             "India", "Spouse", "Dubai", "QIC/HC/BR/INT/DXB/B", "PLATINUM",
+             "2025-05-01", "2026-05-01", "2025-11-01", "2026-05-01", 8000, 4000, None, None, 300],
+            # the PRIOR term for the same person - must not be seeded
+            ["Intake Sub One", "Intake Holdings", "P0", "QC-I0", "IN0001", "1990-01-01", "M", "Single",
+             "India", "Principal", "Dubai", "QIC/HC/BR/INT/DXB/A", "PLATINUM",
+             "2024-05-01", "2025-05-01", "2024-05-01", "2025-05-01", 10000, 10000, None, None, 400],
+        ],
+    )
+    claims_path = _write_xlsx(
+        tmp_path, "intake_claims.xlsx", CLAIMS_HEADER,
+        [
+            ["IN0001", "C-THIS", "Paid Claims", "Intake Sub One", "Intake Holdings", "QC-I1",
+             "2025-05-01", "2026-05-01", "2025-05-01", "2026-05-01", "2025-08-01",
+             "Main Insured", "OP", "PHARMACY", "A Pharmacy", "J309", "Rhinitis", 500.0, 450.0],
+            ["IN0001", "C-PRIOR", "Paid Claims", "Intake Sub One", "Intake Holdings", "QC-I0",
+             "2024-05-01", "2025-05-01", "2024-05-01", "2025-05-01", "2024-08-01",
+             "Main Insured", "OP", "PHARMACY", "A Pharmacy", "J309", "Rhinitis", 900.0, 800.0],
+        ],
+    )
+    with open(members_path, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("m.xlsx", f, "application/octet-stream")})
+    with open(claims_path, "rb") as f:
+        client.post("/portfolio-analysis/claims/upload", files={"file": ("c.xlsx", f, "application/octet-stream")})
+
+
+def test_renewal_intake_preview_changes_nothing(client, book_for_intake):
+    resp = client.get("/portfolio-analysis/renewal-intake/Intake Holdings")
+    assert resp.status_code == 200
+    profile = resp.json()
+    assert profile["member_count"] == 2          # this term only, both subgroups
+    assert profile["prior_term_member_count"] == 1
+    assert profile["annualised_premium"] == 20000.0   # 12000 + 8000, annual rates
+    assert profile["booked_premium"] == 16000.0       # 12000 + 4000, pro-rated
+    assert profile["case_id"] is None
+    assert client.get("/cases").json() == []
+
+
+def test_renewal_intake_opens_a_case_seeded_from_the_book(client, book_for_intake):
+    resp = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"})
+    assert resp.status_code == 200
+    result = resp.json()
+    assert result["created"] is True
+
+    case = result["case"]
+    assert case["company_name"] == "Intake Holdings"
+    assert case["business_type"] == "existing"
+    assert case["renewal_date"] == "2026-05-01"
+    assert case["policy_start_date"] == "2025-05-01"
+    assert case["employee_count_declared"] == 2
+    assert case["current_annual_premium"] == 20000.0
+    assert case["portfolio_master_client"] == "Intake Holdings"
+
+    # Census seeded off the book, with each member's own existing rate, so
+    # Existing Premium builds up per category without a rate-card import.
+    assert result["census_seeded"] == 2
+    rates = client.get(f"/cases/{case['id']}/member-rates").json()
+    assert sorted(r["existing_annual_rate"] for r in rates["members"]) == [8000.0, 12000.0]
+    assert rates["existing_premium"]["total_existing_premium"] == 20000.0
+
+    # Claims seeded from the book too - this term's claim only.
+    assert result["claims_seeded"] == 1
+
+
+def test_renewal_intake_is_idempotent_and_does_not_open_a_second_case(client, book_for_intake):
+    first = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"}).json()
+    second = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"}).json()
+    assert second["created"] is False
+    assert second["case"]["id"] == first["case"]["id"]
+    assert len(client.get("/cases").json()) == 1
+    # A reopen must not silently re-seed over work already done on the case.
+    assert second["census_seeded"] == 0
+    assert second["claims_seeded"] == 0
+
+
+def test_renewal_intake_reseed_snapshots_the_expiring_census_first(client, book_for_intake):
+    opened = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"}).json()
+    case_id = opened["case"]["id"]
+    again = client.post(
+        "/portfolio-analysis/renewal-intake",
+        json={"master_client": "Intake Holdings", "reseed_census": True},
+    ).json()
+    assert again["census_seeded"] == 2
+    movement = client.get(f"/cases/{case_id}/census-movement").json()
+    assert movement["rows"], "reseeding must leave an expiring snapshot to compare against"
+
+
+def test_renewal_due_list_says_which_accounts_already_have_a_case_open(client, book_for_intake):
+    due = client.get("/portfolio-analysis/renewal-due-list", params={"within_days": 60, "as_of": "2026-04-01"}).json()
+    assert [d["case_id"] for d in due] == [None]
+
+    opened = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"}).json()
+    due = client.get("/portfolio-analysis/renewal-due-list", params={"within_days": 60, "as_of": "2026-04-01"}).json()
+    assert due[0]["case_id"] == opened["case"]["id"]
+    assert due[0]["case_status"] == "submitted"
+
+
+def test_renewal_intake_for_an_unknown_account_is_a_404(client, book_for_intake):
+    resp = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Nobody Ltd"})
+    assert resp.status_code == 404

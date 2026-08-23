@@ -58,6 +58,15 @@ class Case(Base):
     # distinct from target_premium (a broker's target for a NEW quote).
     current_annual_premium = Column(Float, nullable=True)
 
+    # Set when this case was opened straight off HealthCross's own book
+    # rather than keyed in by hand - the PortfolioMember master client
+    # (resolve_master_client) it was derived from. Makes the link both
+    # ways: the Renewal Due List can tell which accounts already have a
+    # case open, and a case opened this way can always be traced back to
+    # the account whose membership seeded it. Null on any manually-created
+    # case, which is every case that isn't on the book.
+    portfolio_master_client = Column(String, nullable=True, index=True)
+
     # The renewal premium's own component breakdown - what the loading %
     # in app/scoring/rules/renewal_rating.py actually consists of, broken
     # into its real named pieces rather than one blended number. Nullable:
