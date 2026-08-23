@@ -1904,3 +1904,37 @@ def test_calendar_split_reconciles_back_to_the_full_annual_premium():
     total_earned = sum(r["earned_premium"] for r in rows)
     assert total_days == 366                      # 1 May 2025 - 1 May 2026 inclusive
     assert total_earned == pytest.approx(365_000.0 * 366 / 365, abs=0.01)
+
+
+def test_calendar_basis_does_not_double_count_a_year_spanning_policys_written_premium():
+    # Written premium belongs to the inception year only. Adding the annual
+    # figure to every window a policy touches inflated any book-wide Gross
+    # total by the number of years the policy spanned - 2x here.
+    members = [_cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0)]
+    rows = account_calendar_loss_ratio_rows(members, {}, as_of=date(2026, 7, 15))
+
+    by_year = {r["calendar_year"]: r for r in rows}
+    assert by_year[2025]["gross_premium"] == 365_000.0   # incepts here
+    assert by_year[2026]["gross_premium"] == 0.0         # runs through, not written here
+    assert sum(r["gross_premium"] for r in rows) == 365_000.0
+    # Earned still spreads across both years, unlike written.
+    assert by_year[2025]["earned_premium"] > 0
+    assert by_year[2026]["earned_premium"] > 0
+
+
+def test_calendar_basis_counts_a_renewal_boundary_claim_only_once():
+    # The expiring policy ends and the new one starts on the SAME day, so
+    # both windows contain it and both fall in the same calendar year. A
+    # claim treated that day is one payment and must be counted once.
+    members = [
+        _cal_member(date(2025, 5, 1), date(2026, 5, 1), 365_000.0, beneficiary_id="B1"),
+        _cal_member(date(2026, 5, 1), date(2027, 5, 1), 365_000.0, beneficiary_id="B1"),
+    ]
+    claims = {"B1": [
+        {"date_of_treatment": date(2026, 5, 1), "final_amount": 250.0, "claim_status": "Paid Claims"},
+    ]}
+    rows = {r["calendar_year"]: r for r in
+            account_calendar_loss_ratio_rows(members, claims, as_of=date(2026, 7, 15))}
+
+    assert rows[2026]["paid"] == 250.0
+    assert rows[2026]["claim_count"] == 1

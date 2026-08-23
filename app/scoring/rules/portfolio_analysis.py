@@ -1884,6 +1884,12 @@ def account_calendar_loss_ratio_rows(
     calendar year that closed before then has had time to develop, so
     reserving an unreported tail against it would overstate a period whose
     claims are already in.
+
+    Gross premium here is WRITTEN premium, attributed wholly to the year
+    the policy incepts - the standard accounting split, and what keeps a
+    book-wide total from counting a year-spanning policy twice. Earned
+    premium is the time-apportioned figure and is what both loss ratios
+    are measured against.
     """
     if premium_basis not in PREMIUM_BASES:
         raise ValueError(f"premium_basis must be one of {PREMIUM_BASES}")
@@ -1914,11 +1920,27 @@ def account_calendar_loss_ratio_rows(
                     "gross_premium": 0.0, "earned_premium": 0.0,
                     "claim_count": 0, "days": 0, "open": False,
                     "policy_start_dates": set(),
+                    # A renewing member appears as two rows whose periods
+                    # MEET on the renewal date (old policy ends and new
+                    # one starts the same day). Both windows contain that
+                    # day and both land in this same calendar bucket, so a
+                    # claim treated on the boundary would otherwise be
+                    # counted twice. One claim is one payment - identity
+                    # here keeps it counted once, whichever policy row
+                    # reaches it first.
+                    "seen_claims": set(),
                 }
             days = (window_end - window_start).days + 1
             bucket["member_count"] += 1
             bucket["days"] = max(bucket["days"], days)
-            bucket["gross_premium"] += annual_premium
+            # WRITTEN premium belongs wholly to the year the policy
+            # INCEPTS, the standard accounting treatment - only EARNED
+            # premium spreads across the years the policy runs through.
+            # Adding the annual figure to every window a policy touches
+            # would count a year-spanning policy's premium twice in any
+            # book-wide total.
+            if year == policy_start.year:
+                bucket["gross_premium"] += annual_premium
             bucket["earned_premium"] += annual_premium * days / FULL_POLICY_TERM_DAYS
             bucket["policy_start_dates"].add(policy_start)
             if window_end >= as_of:
@@ -1930,6 +1952,9 @@ def account_calendar_loss_ratio_rows(
                     continue
                 if not _claim_matches_period(treated, enroll_start, enroll_end):
                     continue
+                if id(c) in bucket["seen_claims"]:
+                    continue
+                bucket["seen_claims"].add(id(c))
                 amount = c.get("final_amount") or 0.0
                 if _is_paid_claim_status(c.get("claim_status")):
                     bucket["paid"] += amount
