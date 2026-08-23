@@ -1,6 +1,7 @@
 import re
 import string
 from collections import defaultdict
+from datetime import date
 from typing import List, Optional, Union
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
@@ -322,6 +323,80 @@ def get_member_movement(case_id: int, db: Session = Depends(get_db)):
     movement = movement_with_claims(expiring, renewal, claims)
     movement["master_client"] = case.portfolio_master_client
     return movement
+
+
+@router.get("/{case_id}/renewal-premium")
+def get_renewal_premium(
+    case_id: int,
+    trend_pct: float = Query(0.10, description="Medical inflation between the experience period and the policy period"),
+    loading_pct: Optional[float] = Query(None, description="Total loading as a fraction. Defaults to the case's own fee components."),
+    non_recurring_claims: float = Query(0.0, description="Cost judged not to repeat - a completed maternity, a one-off event on a member who has left"),
+    forward_provision: float = Query(0.0, description="Expected but not-yet-incurred exposure to add back - e.g. a maternity provision for the members still on risk"),
+    as_of: Optional[date] = Query(None, description="Reference date for IBNR's elapsed-days calculation - defaults to today"),
+    db: Session = Depends(get_db),
+):
+    """The renewal price for the members who are actually renewing, built
+    from this account's own experience.
+
+    Leavers' claims are excluded (see member_movement): they do not carry
+    forward, and charging the continuing members for them prices the
+    account on risk it no longer holds. IBNR uses the same 30-day tail
+    rule the Loss Ratio board uses, so a renewal quote and the loss ratio
+    for the same account can't disagree about what the year cost.
+
+    `non_recurring_claims` and `forward_provision` are the underwriter's
+    two judgement inputs and are deliberately separate rather than netted:
+    a completed pregnancy comes out of the base because it is over, and a
+    maternity provision goes back in because the group still contains
+    members who may deliver. Both appear as their own line in the
+    build-up.
+    """
+    from app.api.routes_scoring import _case_loading_pct
+    from app.scoring.rules.expected_cost_pricing import renewal_premium_from_experience
+    from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
+
+    case = _get_case_or_404(db, case_id)
+    movement = get_member_movement(case_id, db)
+
+    reference = as_of or date.today()
+    start = case.policy_start_date
+    days = (min(reference, case.renewal_date or reference) - start).days + 1 if start else None
+    # Same elapsed-days convention as the Loss Ratio board (inclusive, and
+    # capped at the full term once the policy has expired), so a renewal
+    # quote and the loss ratio for one account measure the year the same
+    # way even though they apply the tail differently - see
+    # renewal_premium_from_experience.
+    if days is not None:
+        days = min(days, FULL_POLICY_TERM_DAYS) if days > 0 else None
+
+    priced = renewal_premium_from_experience(
+        continuing_incurred=movement["continuing_claims"]["incurred"],
+        elapsed_days=days,
+        ibnr_tail_days=ACCOUNT_IBNR_TAIL_DAYS,
+        loading_pct=loading_pct if loading_pct is not None else _case_loading_pct(case),
+        trend_pct=trend_pct,
+        non_recurring_claims=non_recurring_claims,
+        forward_provision=forward_provision,
+        member_count=movement["continuing_count"] + movement["joiner_count"],
+    )
+
+    expiring_premium = case.current_annual_premium
+    priced["expiring_premium"] = expiring_premium
+    priced["increase_pct"] = (
+        round((priced["gross_premium"] / expiring_premium - 1) * 100, 1)
+        if expiring_premium else None
+    )
+    priced["elapsed_days"] = days
+    priced["movement"] = {
+        "expiring_count": movement["expiring_count"],
+        "continuing_count": movement["continuing_count"],
+        "leaver_count": movement["leaver_count"],
+        "joiner_count": movement["joiner_count"],
+        "total_incurred": movement["total_incurred"],
+        "leaver_incurred": movement["leaver_claims"]["incurred"],
+        "leaver_claims_share": movement["leaver_claims_share"],
+    }
+    return priced
 
 
 @router.post("/detect-upload-kind")

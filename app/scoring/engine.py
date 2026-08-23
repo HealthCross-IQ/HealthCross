@@ -5,6 +5,7 @@ from app.reference.network_tiers import DEFAULT_NETWORK_TIER_SCORE, network_tier
 from app.scoring.rules.benefit_richness import benefit_richness_risk
 from app.scoring.rules.claims_experience import claims_experience_risk
 from app.scoring.rules.demographic import DEFAULT_OVERAGE_AGE_THRESHOLD, DEFAULT_OVERAGE_LOADING_CAP, demographic_risk
+from app.scoring.rules.expected_cost_pricing import DEFAULT_TREND_PCT, price_census_at_expected_cost
 from app.scoring.rules.industry import industry_risk
 
 
@@ -110,6 +111,9 @@ def compute_scorecard(
     industry: str,
     weights: ScoringWeights,
     estimated_annual_premium: Optional[float] = None,
+    cube: Optional[dict] = None,
+    trend_pct: float = DEFAULT_TREND_PCT,
+    loading_pct: Optional[float] = None,
 ) -> dict:
     case_network_tier_score = _case_network_tier_score(benefit_plans)
     demo = demographic_risk(
@@ -139,7 +143,37 @@ def compute_scorecard(
     )
 
     tier = _tier_for_score(composite_score)
-    suggested_loading_pct = round(max(0.0, (composite_score - 50) * 1.0), 1)
+
+    # The price, where the book has enough experience to produce one.
+    #
+    # `suggested_loading_pct` used to be (composite_score - 50) * 1.0 - a
+    # unitless score read as a percentage, so a case scoring 70 was
+    # "loaded 20%" only because 70 minus 50 is 20. Where a burning cost
+    # cube is available the loading is now derived from what this census
+    # is actually expected to cost relative to a book-average member (see
+    # expected_cost_pricing), which is a statement about money rather
+    # than about a scoring scale. The old formula remains as the fallback
+    # for a case with no cube - a brand-new deployment with no book
+    # uploaded yet - so scoring never simply stops working, but the
+    # scorecard says which of the two produced the number.
+    expected_cost = None
+    loading_basis = "composite_score"
+    if cube:
+        expected_cost = price_census_at_expected_cost(
+            census,
+            cube,
+            industry=industry,
+            trend_pct=trend_pct,
+            loading_pct=loading_pct or 0.0,
+        )
+        relativity = expected_cost.get("book_relativity")
+        if relativity is not None:
+            suggested_loading_pct = round(max(0.0, (relativity - 1.0) * 100), 1)
+            loading_basis = "expected_cost"
+        else:
+            suggested_loading_pct = round(max(0.0, (composite_score - 50) * 1.0), 1)
+    else:
+        suggested_loading_pct = round(max(0.0, (composite_score - 50) * 1.0), 1)
 
     return {
         "demographic_risk": demo["score"],
@@ -151,6 +185,13 @@ def compute_scorecard(
         "risk_tier": tier,
         "suggested_loading_pct": suggested_loading_pct,
         "details": {
+            # Carried inside details (a JSON column) rather than as its own
+            # top-level field so a saved Scorecard keeps the whole price
+            # build-up without a schema migration - the build-up is what
+            # makes the number defensible later, and a stored scorecard
+            # that kept only the final figure would lose exactly that.
+            "expected_cost": expected_cost,
+            "loading_basis": loading_basis,
             "demographic": demo,
             "benefit_richness": benefits,
             "claims_experience": claims_exp,

@@ -706,6 +706,7 @@
         <div class="hc-rail-label">Claims Analysis</div>
         <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-nationality" onclick="hcRailNationalityRisk()">Nationality Risk<span class="hc-rail-tag cl">CL</span></button>
+        <button class="hc-rail-item" id="hc-rail-burning-cost" onclick="hcRailBurningCostCube()">Burning Cost Cube<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
       </div>
@@ -924,6 +925,57 @@ function svgLineChart(points, opts) {
 }
 
 // Horizontal meter - a single score against fixed tier thresholds.
+/* The price, shown as the build-up that produced it.
+   A scorecard's headline used to be a 0-100 composite and a "suggested
+   loading" that was just that score minus 50 - a number with no units,
+   which no underwriter can defend to a broker. Where the book has enough
+   experience to price from, the headline is now the price itself and
+   every step that got there, so a broker arguing with one line (the
+   trend, the industry factor) can be answered on that line instead of
+   the whole figure being taken on trust. */
+function priceBuildUpHtml(sc) {
+  const ec = sc.details && sc.details.expected_cost;
+  if (!ec || ec.gross_premium == null) return '';
+  const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+  const rows = ec.build_up.map((s, i) => `
+    <tr>
+      <td>${escapeHtml(s.label)}${s.note ? `<div class="hint" style="margin:2px 0 0;">${escapeHtml(s.note)}</div>` : ''}</td>
+      <td class="num">${s.factor != null ? '&times;' + s.factor.toFixed(3) : ''}</td>
+      <td class="num" style="font-weight:${i === ec.build_up.length - 1 ? 700 : 400};">${money(s.amount)}</td>
+    </tr>`).join('');
+
+  const rel = ec.book_relativity;
+  const relLabel = rel == null ? '-'
+    : rel >= 1 ? `${((rel - 1) * 100).toFixed(0)}% above book`
+    : `${((1 - rel) * 100).toFixed(0)}% below book`;
+
+  return `
+    <div class="card">
+      <h3>Price build-up</h3>
+      <div class="hint">What this census is expected to cost according to HealthCross's own book, member by member, and the premium that funds it. Every step is a number you can argue with separately.</div>
+      <div class="kpi-grid" style="margin-top:14px;">
+        <div class="kpi"><span class="label">Gross premium</span><div class="value">${money(ec.gross_premium)}</div>
+          <span class="label" style="margin:4px 0 0;">${ec.member_count} members</span></div>
+        <div class="kpi"><span class="label">Per member</span><div class="value">${money(ec.premium_per_member)}</div>
+          <span class="label" style="margin:4px 0 0;">annual</span></div>
+        <div class="kpi"><span class="label">Expected claims</span><div class="value">${money(ec.expected_claims)}</div>
+          <span class="label" style="margin:4px 0 0;">before trend and loading</span></div>
+        <div class="kpi"><span class="label">Versus the book</span><div class="value">${relLabel}</div>
+          <span class="label" style="margin:4px 0 0;">this mix vs a book-average member</span></div>
+      </div>
+      <table style="margin-top:14px;">
+        <tr><th>Step</th><th class="num">Factor</th><th class="num">Running total</th></tr>
+        ${rows}
+      </table>
+      <div class="hint" style="margin-top:12px;">
+        ${(ec.weighted_credibility * 100).toFixed(0)}% of this price rests on the book's own experience for these members' own segments${ec.fallback_member_count ? `; ${ec.fallback_member_count} of ${ec.member_count} members fell back to a broader cell` : ' with no fallbacks needed'}.
+        ${sc.details.loading_basis === 'expected_cost' ? '' : ' The suggested loading below still comes from the composite score - the book has no experience to price these members against.'}
+      </div>
+    </div>
+  `;
+}
+
 function svgScoreMeter(score, tier) {
   const w = 600, h = 26;
   const tierColor = { Preferred: 'var(--good)', Standard: 'var(--accent)', Substandard: 'var(--serious)', 'Decline/Refer': 'var(--critical)' }[tier] || 'var(--accent)';
@@ -1047,6 +1099,75 @@ function hcRailNationalityRisk() {
 function hcRailClaimsExplorer() {
   _hcRailSetActive('hc-rail-claims-explorer');
   showPortfolioAnalysis();
+}
+
+/* The cube, as an inspectable table. `own_rate` is what a cell literally
+   cost; `expected_cost` is that rate after blending toward its parent.
+   Showing both side by side is the point - where they diverge is exactly
+   where the data is too thin to price on directly, and an underwriter
+   should be able to see that rather than take a single number on faith. */
+let cubeState = { level: 2, minYears: 5 };
+
+async function hcRailBurningCostCube() {
+  _hcRailSetActive('hc-rail-burning-cost');
+  currentCase = null;
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><h3>Burning Cost Cube</h3><div class="hint">Building the cube from the whole book...</div></div>';
+  try {
+    const r = await api(`/portfolio-analysis/burning-cost-cube?level=${cubeState.level}&min_member_years=${cubeState.minYears}`);
+    const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const dims = r.dimensions.slice(0, cubeState.level);
+
+    const rows = r.cells
+      .slice().sort((a, b) => (b.expected_cost || 0) - (a.expected_cost || 0))
+      .map(c => `
+        <tr>
+          ${dims.map(d => `<td>${escapeHtml(c.key[d] || '-')}</td>`).join('')}
+          <td class="num">${c.member_count.toLocaleString()}</td>
+          <td class="num">${c.earned_member_years.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+          <td class="num">${money(c.own_rate)}</td>
+          <td class="num">${(c.credibility * 100).toFixed(0)}%</td>
+          <td class="num" style="font-weight:600;">${money(c.expected_cost)}</td>
+          <td class="num">${c.relativity == null ? '-' : c.relativity.toFixed(2) + '&times;'}</td>
+        </tr>`).join('');
+
+    const levelOptions = r.dimensions.map((d, i) =>
+      `<option value="${i + 1}" ${cubeState.level === i + 1 ? 'selected' : ''}>${i + 1} - ${r.dimensions.slice(0, i + 1).join(' / ')}</option>`).join('');
+
+    main.innerHTML = `
+      <div class="card">
+        <h3>Burning Cost Cube</h3>
+        <div class="hint">What a member in each cell actually costs the book, and what they should therefore be priced at. Every cell is credibility-blended toward its parent, so a thin cell leans on the nearest broader cell that has real exposure instead of pricing off its own noise.</div>
+        <div class="hint"><strong>Own rate</strong> is what the cell literally cost. <strong>Expected cost</strong> is that rate after blending. They diverge exactly where the data is thin - which is where a raw burning-cost table would mislead you.</div>
+        <div class="row" style="align-items:flex-end; margin-bottom:14px; gap:10px;">
+          <div><label>Depth</label><select style="width:340px;" onchange="cubeState.level = parseInt(this.value); hcRailBurningCostCube();">${levelOptions}</select></div>
+          <div><label>Min member-years</label><input type="number" value="${cubeState.minYears}" style="width:110px;"
+            onchange="cubeState.minYears = parseFloat(this.value) || 0; hcRailBurningCostCube();"></div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">Book burning cost</span><div class="value">AED ${money(r.book.burning_cost)}</div>
+            <span class="label" style="margin:4px 0 0;">per member-year</span></div>
+          <div class="kpi"><span class="label">Exposure</span><div class="value">${money(r.book.earned_member_years)}</div>
+            <span class="label" style="margin:4px 0 0;">member-years</span></div>
+          <div class="kpi"><span class="label">Cells shown</span><div class="value">${r.returned_cell_count.toLocaleString()}</div>
+            <span class="label" style="margin:4px 0 0;">of ${r.cells.length ? r.levels.reduce((a, l) => a + l.cell_count, 0).toLocaleString() : 0} in the cube</span></div>
+          <div class="kpi"><span class="label">Full credibility at</span><div class="value">${r.full_credibility_member_years}</div>
+            <span class="label" style="margin:4px 0 0;">member-years</span></div>
+        </div>
+        <div style="overflow-x:auto;">
+        <table style="margin-top:8px;">
+          <tr>${dims.map(d => `<th>${escapeHtml(d.replace(/_/g, ' '))}</th>`).join('')}
+            <th class="num">Members</th><th class="num">Member-years</th><th class="num">Own rate</th>
+            <th class="num">Credibility</th><th class="num">Expected cost</th><th class="num">vs book</th></tr>
+          ${rows || `<tr><td colspan="${dims.length + 6}">No cells at this depth with at least ${cubeState.minYears} member-years.</td></tr>`}
+        </table>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    main.innerHTML = `<div class="card"><h3>Burning Cost Cube</h3><div class="hint">${escapeHtml(err.message)}</div>
+      <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button></div>`;
+  }
 }
 
 function hcRailUtilization() {
@@ -2308,6 +2429,7 @@ function renderCaseWorkspace() {
         </div>
         <div id="renewal-bench-census-area"></div>
         <div id="renewal-bench-member-movement-area"></div>
+        <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
         <div id="renewal-bench-scorecard-area"></div>
         <div class="rb-grid-2">
@@ -4516,6 +4638,71 @@ async function loadRenewalBenchMemberMovement() {
   } catch (err) {
     area.innerHTML = '';
   }
+  await loadRenewalPremiumBuildUp();
+}
+
+/* The renewal price, built from this account's own experience rather
+   than from a scaling of last year's premium. The two judgement inputs
+   (what won't repeat, what to provide for) are editable here because
+   they ARE judgements - a completed maternity is over, but the group
+   still contains members who may deliver, and only an underwriter can
+   say which. */
+let renewalPricingInputs = { trend: 10, loading: null, nonRecurring: 0, provision: 0 };
+
+async function loadRenewalPremiumBuildUp() {
+  const area = document.getElementById('renewal-premium-buildup-area');
+  if (!area) return;
+  try {
+    const p = new URLSearchParams({
+      trend_pct: (renewalPricingInputs.trend / 100).toString(),
+      non_recurring_claims: renewalPricingInputs.nonRecurring.toString(),
+      forward_provision: renewalPricingInputs.provision.toString(),
+    });
+    if (renewalPricingInputs.loading != null) p.set('loading_pct', (renewalPricingInputs.loading / 100).toString());
+    const r = await api(`/cases/${currentCase.id}/renewal-premium?${p}`);
+    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+    const rows = r.build_up.map((s, i) => `
+      <tr>
+        <td>${escapeHtml(s.label)}${s.note ? `<div class="hint" style="margin:2px 0 0;">${escapeHtml(s.note)}</div>` : ''}</td>
+        <td class="num">${s.factor != null ? '&times;' + s.factor.toFixed(3) : ''}</td>
+        <td class="num" style="font-weight:${i === r.build_up.length - 1 ? 700 : 400};">${money(s.amount)}</td>
+      </tr>`).join('');
+
+    const inc = r.increase_pct;
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Renewal premium</div>
+        <div class="rb-card-sub">Built from the continuing members' own claims - leavers excluded, since their experience does not carry forward.</div>
+        <div class="rb-kpi-strip" style="margin-top:14px;">
+          ${_rbKpi('Required premium', money(r.gross_premium), `${r.member_count} members`)}
+          ${_rbKpi('Per member', money(r.premium_per_member), 'annual')}
+          ${_rbKpi('Expiring premium', money(r.expiring_premium), r.expiring_premium ? '' : 'not set on the case')}
+          ${_rbKpi('Change', inc == null ? '-' : `${inc > 0 ? '+' : ''}${inc}%`, inc == null ? 'set the expiring premium to compare' : (inc > 0 ? 'increase required' : 'reduction possible'))}
+        </div>
+        <div class="row" style="align-items:flex-end; margin-top:14px; gap:10px;">
+          <div><label>Trend %</label><input type="number" step="0.5" value="${renewalPricingInputs.trend}" style="width:80px;"
+            onchange="renewalPricingInputs.trend = parseFloat(this.value) || 0; loadRenewalPremiumBuildUp();"></div>
+          <div><label>Loading %</label><input type="number" step="0.5" value="${(r.loading_pct * 100).toFixed(1)}" style="width:80px;"
+            onchange="renewalPricingInputs.loading = parseFloat(this.value); loadRenewalPremiumBuildUp();"></div>
+          <div><label>Non-recurring (AED)</label><input type="number" step="1000" value="${renewalPricingInputs.nonRecurring}" style="width:130px;"
+            onchange="renewalPricingInputs.nonRecurring = parseFloat(this.value) || 0; loadRenewalPremiumBuildUp();"></div>
+          <div><label>Forward provision (AED)</label><input type="number" step="1000" value="${renewalPricingInputs.provision}" style="width:140px;"
+            onchange="renewalPricingInputs.provision = parseFloat(this.value) || 0; loadRenewalPremiumBuildUp();"></div>
+        </div>
+        <div class="hint">Non-recurring takes out cost that is genuinely over - a completed maternity, a one-off event. Forward provision puts back cost the group is still exposed to but has not yet incurred. They stay separate lines so each can be defended on its own.</div>
+        <table class="rb-table" style="margin-top:14px;">
+          <tr><th>Step</th><th class="num">Factor</th><th class="num">Running total</th></tr>
+          ${rows}
+        </table>
+        <div class="hint" style="margin-top:10px;">
+          Of the ${money(r.movement.total_incurred)} the expiring year cost, ${money(r.movement.leaver_incurred)} (${(r.movement.leaver_claims_share * 100).toFixed(1)}%) belonged to the ${r.movement.leaver_count} member(s) who left and is excluded above.
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 
@@ -5300,6 +5487,7 @@ async function loadLatestScorecard() {
       { label: 'Industry', value: sc.industry_risk },
     ];
     area.innerHTML = `
+      ${priceBuildUpHtml(sc)}
       <div class="card">
         <h3>Risk scorecard <span class="tier-pill ${tierClass}">${sc.risk_tier}</span></h3>
         <div class="chart-wrap" style="margin-top:12px;">

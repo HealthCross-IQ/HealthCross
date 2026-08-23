@@ -642,6 +642,41 @@ def _portfolio_cases_by_client(db: Session) -> Dict[str, models.Case]:
     return by_client
 
 
+@router.get("/burning-cost-cube")
+def get_burning_cost_cube(
+    as_of: Optional[date] = Query(None),
+    policy_year: Optional[str] = Query(None),
+    level: Optional[int] = Query(None, description="Only return cells at this depth - 1 is Product alone, 6 the full demographic cell. Omit for every level."),
+    min_member_years: float = Query(0.0, description="Hide cells thinner than this much exposure - they are still used as fallbacks, just not listed."),
+    db: Session = Depends(get_db),
+):
+    """The book's own experience as a credibility-blended hierarchy - what
+    a member in each demographic cell actually costs, and what they should
+    therefore be priced at (see app/scoring/rules/burning_cost_cube.py).
+
+    `own_rate` is what a cell literally cost; `expected_cost` is that rate
+    after blending toward its parent. They diverge exactly where the cell
+    is thin, which is the point - a three-life cell's raw rate is not a
+    price.
+    """
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+
+    # Age bands come from the rate card where one exists, so a cube cell
+    # lines up with the card row that prices it - but the book's own
+    # experience is worth showing before pricing is set up, so a missing
+    # card falls back to conventional bands rather than 400-ing.
+    results = _run_analysis(
+        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, require_rate_card=False
+    )
+    cube = burning_cost_cube(results, _rate_card_dicts(db))
+    cells = cube["cells"]
+    if level is not None:
+        cells = [c for c in cells if c["level"] == level]
+    if min_member_years:
+        cells = [c for c in cells if c["earned_member_years"] >= min_member_years]
+    return {**cube, "cells": cells, "returned_cell_count": len(cells)}
+
+
 @router.get("/renewal-intake/{master_client}")
 def preview_renewal_intake(master_client: str, db: Session = Depends(get_db)):
     """What opening this account's renewal would pull through from the

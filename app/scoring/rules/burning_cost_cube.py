@@ -54,6 +54,15 @@ DEFAULT_CUBE_DIMENSIONS: Tuple[str, ...] = (
     "nationality_zone",
 )
 
+#: Age bands used when no rate card has been uploaded to take them from.
+#: Bands normally come from the card itself so a cube cell lines up
+#: exactly with the card row that prices it - but the book's own
+#: experience is worth having even before a card exists, and failing
+#: outright would make the cube unavailable on a fresh deployment that
+#: has claims but no pricing set up yet. These follow the conventional
+#: UAE medical banding.
+FALLBACK_AGE_BANDS = [(0, 17), (18, 25), (26, 35), (36, 45), (46, 55), (56, 65), (66, 120)]
+
 #: Value used when a member carries no value for a dimension at all.
 #: Kept as a real key rather than dropping the member, so book totals
 #: still reconcile against the executive summary - a member with no
@@ -116,7 +125,9 @@ def burning_cost_cube(
     """
     from app.scoring.rules.portfolio_analysis import age_bands_from_rate_cards
 
-    bands = age_bands_from_rate_cards(rate_cards)
+    bands = age_bands_from_rate_cards(rate_cards) if rate_cards else []
+    if not bands:
+        bands = list(FALLBACK_AGE_BANDS)
 
     # Accumulate exposure and claims at every level at once. Level 0 is
     # the empty key - the whole book - and level k is the first k

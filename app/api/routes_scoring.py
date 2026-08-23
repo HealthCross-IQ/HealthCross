@@ -16,7 +16,63 @@ from app.scoring.rules.portfolio_analysis import (
 router = APIRouter(prefix="/cases", tags=["scoring"])
 
 
-def _portfolio_reference(db: Session, case: models.Case) -> Optional[dict]:
+def _case_loading_pct(case: models.Case) -> float:
+    """This case's own total loading - commission, TPA, HealthCross and
+    QIC fees - as a fraction of gross premium. Uses whatever components
+    the case carries and falls back to the standard defaults for any it
+    doesn't, so a case nobody has set fees on is still priced at a real
+    expense level rather than at zero (which would quote pure risk
+    premium as if it were the price).
+    """
+    from app.scoring.rules.new_business_rating import (
+        DEFAULT_COMMISSION_PCT,
+        QIC_FEE_PCT,
+        TPA_FEE_PCT,
+        _DEFAULT_HEALTHCROSS_FEE_PCT,
+    )
+
+    return (
+        (case.commission_pct if case.commission_pct is not None else DEFAULT_COMMISSION_PCT)
+        + (case.tpa_fee_pct if case.tpa_fee_pct is not None else TPA_FEE_PCT)
+        + (case.hc_fee_pct if case.hc_fee_pct is not None else _DEFAULT_HEALTHCROSS_FEE_PCT)
+        + (case.qic_fee_pct if case.qic_fee_pct is not None else QIC_FEE_PCT)
+    )
+
+
+def _book_results(db: Session) -> Optional[list]:
+    """The book's own priced member results, or None when Portfolio
+    Analysis isn't set up yet. Computed once per scoring run and shared
+    between the reference context and the burning cost cube - running the
+    whole-book analysis twice for one scorecard is the expensive mistake
+    here, not building the cube.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+
+    try:
+        return _run_analysis(db, as_of=_get_stored_as_of(db))
+    except HTTPException:
+        return None
+
+
+def _book_cube(db: Session, results: Optional[list]) -> Optional[dict]:
+    """The credibility-blended burning cost cube this case is priced
+    against (see app/scoring/rules/burning_cost_cube.py). None whenever
+    the book has no experience to price from, in which case the scorecard
+    falls back to its old score-derived loading rather than failing.
+    """
+    from app.api.routes_portfolio_analysis import _rate_card_dicts
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+
+    if not results:
+        return None
+    rate_cards = _rate_card_dicts(db)
+    if not rate_cards:
+        return None
+    cube = burning_cost_cube(results, rate_cards)
+    return cube if cube["book"]["burning_cost"] is not None else None
+
+
+def _portfolio_reference(db: Session, case: models.Case, results: Optional[list] = None) -> Optional[dict]:
     """Best-effort 'book reference' context from Portfolio Analysis for this
     case's scorecard - HealthCross's own already-booked members' burning
     cost (matched to this case's own HealthCross quote network(s) when one
@@ -29,11 +85,9 @@ def _portfolio_reference(db: Session, case: models.Case) -> Optional[dict]:
     set up yet (no members/claims/rate card uploaded) - this is optional
     supporting context, not a requirement of scoring a case.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
-
-    try:
-        results = _run_analysis(db, as_of=_get_stored_as_of(db))
-    except HTTPException:
+    if results is None:
+        results = _book_results(db)
+    if not results:
         return None
 
     quoted_networks = sorted({
@@ -159,6 +213,7 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
         overage_loading_cap=weight_set.overage_loading_cap,
     )
 
+    book_results = _book_results(db)
     result = compute_scorecard(
         census=census,
         benefit_plans=benefit_plans,
@@ -166,9 +221,11 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
         industry=case.industry,
         weights=weights,
         estimated_annual_premium=payload.estimated_annual_premium,
+        cube=_book_cube(db, book_results),
+        loading_pct=_case_loading_pct(case),
     )
 
-    portfolio_reference = _portfolio_reference(db, case)
+    portfolio_reference = _portfolio_reference(db, case, results=book_results)
     if portfolio_reference is not None:
         result["details"]["portfolio_reference"] = portfolio_reference
 
