@@ -99,6 +99,12 @@ class CensusRecord(Base):
     case_id = Column(Integer, ForeignKey("cases.id"), nullable=False)
     employee_ref = Column(String, nullable=True)
     category = Column(String, nullable=True)  # broker plan tier, e.g. A/B/C/D
+    # Kept alongside the derived age because age is only stable within one
+    # policy year - the same person is 42 on the expiring census and 43 on
+    # the renewal one, so matching a renewal census back to the expiring
+    # population on age is guesswork, while DOB matches exactly. See
+    # app/scoring/rules/member_movement.py.
+    date_of_birth = Column(Date, nullable=True)
     age = Column(Integer, nullable=True)
     gender = Column(String, nullable=True)  # "M" / "F"
     marital_status = Column(String, nullable=True)  # "married" / "single"
@@ -566,6 +572,10 @@ class PortfolioMember(Base):
     msh_policy_number = Column(String, nullable=True)
     category = Column(String, nullable=True)  # this book's own raw category code, e.g. "QIC/HC/BR/FDG/DXB/A"
     network_type_raw = Column(String, nullable=True)  # see app/reference/network_type_mapping.py
+    # See CensusRecord.date_of_birth - carried through so a renewal census
+    # can be matched member-for-member against the book's own expiring
+    # population rather than only compared as counts.
+    date_of_birth = Column(Date, nullable=True)
     age = Column(Integer, nullable=True)
     gender = Column(String, nullable=True)
     marital_status = Column(String, nullable=True)

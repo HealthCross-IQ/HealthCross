@@ -233,6 +233,10 @@ def census_rows_from_members(members: List[dict]) -> List[dict]:
         rows.append({
             "employee_ref": m.get("beneficiary_id"),
             "category": (m.get("category") or None),
+            # Carried so the NEXT renewal can match this population member
+            # for member rather than only by headcount - see
+            # app/scoring/rules/member_movement.py.
+            "date_of_birth": m.get("date_of_birth"),
             "age": m.get("age"),
             "gender": m.get("gender"),
             "marital_status": m.get("marital_status"),

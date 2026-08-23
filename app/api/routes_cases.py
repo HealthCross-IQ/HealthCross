@@ -246,6 +246,84 @@ def get_census_movement(case_id: int, db: Session = Depends(get_db)):
     }
 
 
+@router.get("/{case_id}/member-movement")
+def get_member_movement(case_id: int, db: Session = Depends(get_db)):
+    """Which members actually left, which joined, and what each of them
+    claimed - the member-level counterpart to get_census-movement's
+    per-relation counts.
+
+    Only available for a case opened from HealthCross's own book (see
+    routes_portfolio_analysis' open_renewal_intake), because that is what
+    makes the expiring population recoverable: the Membership export
+    still holds the expiring term's roster, so it can be rebuilt on
+    demand rather than needing to have been preserved when the renewal
+    census replaced it. A manually-created case has no such source, and
+    gets the count-level comparison only.
+    """
+    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
+    from app.scoring.rules.member_movement import movement_with_claims
+    from app.scoring.rules.renewal_intake import (
+        account_members,
+        census_rows_from_members,
+        current_term_members,
+    )
+
+    case = _get_case_or_404(db, case_id)
+    if not case.portfolio_master_client:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Member-level movement needs a case opened from the book - "
+                "open this renewal from the Renewal Due List so its expiring "
+                "population can be recovered from the Membership export."
+            ),
+        )
+
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+
+    account = account_members(members, case.portfolio_master_client, _subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No members found for '{case.portfolio_master_client}' in the current Membership export",
+        )
+    expiring = census_rows_from_members(current_term_members(account))
+
+    renewal = [
+        {
+            "employee_ref": r.employee_ref,
+            "category": r.category,
+            "date_of_birth": r.date_of_birth,
+            "age": r.age,
+            "gender": r.gender,
+            "relation": r.relation,
+            "nationality": r.nationality,
+            "existing_annual_rate": r.existing_annual_rate,
+        }
+        for r in case.census_records
+    ]
+    if not renewal:
+        raise HTTPException(
+            status_code=400,
+            detail="No renewal census on this case yet - upload the renewal member list to compare against the expiring population.",
+        )
+
+    claims = [
+        {
+            "patient_id": c.patient_id,
+            "claim_status": c.claim_status,
+            "final_amount": c.final_amount,
+        }
+        for c in case.claims_ledger_entries
+    ]
+
+    movement = movement_with_claims(expiring, renewal, claims)
+    movement["master_client"] = case.portfolio_master_client
+    return movement
+
+
 @router.post("/detect-upload-kind")
 def detect_upload_kind(file: UploadFile = File(...)):
     """Best-effort guess at which upload slot this file belongs in

@@ -32,9 +32,23 @@ CENSUS_ALIASES: Dict[str, List[str]] = {
     "member_end_date": ["endodate (member end date)", "member end date"],
 }
 
-_EMPLOYEE_RELATIONS = {"employee", "principal", "principle", "main member", "member", "self"}
-_SPOUSE_RELATIONS = {"wife", "husband", "spouse"}
-_CHILD_RELATIONS = {"son", "daughter", "child", "children"}
+# "main insured" is HealthCross's own book's word for a principal - it is
+# what the Membership export's DEPENDENCY column and the claims export's
+# RELATION column both carry (see app/ingestion/portfolio_members.py). It
+# belongs here rather than in "other": a broker census saying "Self" and
+# the book saying "Main Insured" describe the same person, and classifying
+# them differently splits one population in two everywhere relation is
+# grouped on - census movement, relation mix, exposed-risk population, and
+# the member-for-member renewal matching in
+# app/scoring/rules/member_movement.py, which cannot pair a principal
+# against themselves if the two sources disagree about what they are.
+_EMPLOYEE_RELATIONS = {
+    "employee", "employees", "principal", "principle", "main member", "member",
+    "self", "main insured", "main", "insured", "primary", "primary insured",
+    "staff", "employee/self", "self/employee",
+}
+_SPOUSE_RELATIONS = {"wife", "husband", "spouse", "partner"}
+_CHILD_RELATIONS = {"son", "daughter", "child", "children", "dependent child"}
 
 
 def _calc_age(dob: date, as_of: date | None = None) -> int:
@@ -87,6 +101,10 @@ def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date 
         policy_start_date = _date_col("policy_start_date") or default_policy_start_date
 
         age = row.get("age")
+        date_of_birth = None
+        if "date_of_birth" in df.columns:
+            parsed_dob = pd.to_datetime(row.get("date_of_birth"), errors="coerce")
+            date_of_birth = parsed_dob.date() if pd.notna(parsed_dob) else None
         if pd.isna(age) and "date_of_birth" in df.columns:
             dob = pd.to_datetime(row.get("date_of_birth"), errors="coerce")
             if pd.notna(dob):
@@ -117,6 +135,7 @@ def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date 
             {
                 "employee_ref": str(row.get("employee_ref")) if pd.notna(row.get("employee_ref")) else None,
                 "category": (str(row.get("category")).strip().upper() or None) if pd.notna(row.get("category")) else None,
+                "date_of_birth": date_of_birth,
                 "age": int(age) if pd.notna(age) else None,
                 "gender": gender,
                 "marital_status": _normalize_marital_status(row.get("marital_status")),

@@ -70,6 +70,7 @@ def parse_portfolio_members(file: BinaryIO, filename: str) -> List[Dict]:
                 "msh_policy_number": _str_or_none(row.get("MSH_POLICYNUMBER")),
                 "category": _str_or_none(row.get("CATEGORY")),
                 "network_type_raw": _str_or_none(row.get("NETWORKTYPE")),
+                "date_of_birth": dob,
                 "age": _calc_age(dob) if dob else None,
                 "gender": _str_or_none(row.get("GENDER")),
                 "marital_status": _str_or_none(row.get("MARITALSTATUS")),

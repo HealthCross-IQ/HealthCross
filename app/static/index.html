@@ -2307,6 +2307,7 @@ function renderCaseWorkspace() {
           <div id="renewal-bench-trend-area"></div>
         </div>
         <div id="renewal-bench-census-area"></div>
+        <div id="renewal-bench-member-movement-area"></div>
         <div id="renewal-bench-claims-area"></div>
         <div id="renewal-bench-scorecard-area"></div>
         <div class="rb-grid-2">
@@ -4440,6 +4441,76 @@ async function loadRenewalBenchCensusMovement() {
           ${_rbKpi('Total change', `${r.total_change > 0 ? '+' : ''}${r.total_change}`, `${r.total_expiring} &rarr; ${r.total_renewal}`)}
           ${r.total_premium_impact != null ? _rbKpi('Total premium impact', `${r.total_premium_impact > 0 ? '+' : ''}AED ${r.total_premium_impact.toLocaleString()}`, '') : ''}
         </div>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+  await loadRenewalBenchMemberMovement();
+}
+
+/* Member-level movement: not how many left, but WHICH members left and
+   what they claimed. Only available on a case opened from the book (the
+   Membership export is what makes the expiring roster recoverable), so a
+   failure here is a normal state for a hand-built case, not an error -
+   the per-relation counts above still stand on their own. */
+async function loadRenewalBenchMemberMovement() {
+  const area = document.getElementById('renewal-bench-member-movement-area');
+  if (!area) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/member-movement`);
+    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    const who = m => `${escapeHtml(m.relation || '-')}, ${escapeHtml(m.gender || '-')}, age ${m.age != null ? m.age : '-'}${m.nationality ? ', ' + escapeHtml(m.nationality) : ''}`;
+
+    const leaverRows = r.leavers.map(m => `
+      <tr>
+        <td>${escapeHtml(m.employee_ref || '-')}</td>
+        <td>${who(m)}</td>
+        <td class="num">${m.claims.claim_count}</td>
+        <td class="num">${money(m.claims.incurred)}</td>
+      </tr>`).join('');
+
+    const joinerRows = r.joiners.map(m => `
+      <tr><td>${escapeHtml(m.employee_ref || 'new')}</td><td>${who(m)}</td></tr>`).join('');
+
+    // Continuing members are shown biggest claimer first - at renewal the
+    // question is which of the people who STAYED drive the price.
+    const continuingRows = r.continuing
+      .slice().sort((a, b) => b.claims.incurred - a.claims.incurred)
+      .map(m => `
+      <tr>
+        <td>${escapeHtml(m.employee_ref || '-')}</td>
+        <td>${who(m)}</td>
+        <td>${m.match === 'dob' ? '<span class="tier-pill dir-improved">exact</span>' : '<span class="tier-pill dir-review">inferred</span>'}</td>
+        <td class="num">${m.claims.claim_count}</td>
+        <td class="num">${money(m.claims.incurred)}</td>
+      </tr>`).join('');
+
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Who left, who joined - and what they claimed</div>
+        <div class="rb-card-sub">The expiring population from the book matched member by member against the renewal census. Leavers' claims do not carry forward: the experience the renewing members actually bring is <strong>${money(r.continuing_claims.incurred)}</strong>, not the ${money(r.total_incurred)} the expiring year cost in total.</div>
+        <div class="rb-kpi-strip" style="margin-top:14px;">
+          ${_rbKpi('Continuing', r.continuing_count, `of ${r.expiring_count} expiring`)}
+          ${_rbKpi('Left', r.leaver_count, money(r.leaver_claims.incurred) + ' in claims')}
+          ${_rbKpi('Joined', r.joiner_count, 'no claims history')}
+          ${_rbKpi('Leavers’ share of claims', (r.leaver_claims_share * 100).toFixed(1) + '%', r.leaver_claims_share > 0.3 ? 'expiring LR overstates the renewing risk' : 'experience largely carries forward')}
+        </div>
+        ${r.demographic_match_count ? `<div class="hint" style="margin-top:10px;">${r.demographic_match_count} of ${r.continuing_count} continuing members were matched on demographics rather than date of birth - those pairings are inferred, not certain.</div>` : ''}
+        ${r.unattributed_incurred ? `<div class="hint" style="margin-top:10px;">${money(r.unattributed_incurred)} of claims belong to member IDs not on the expiring census - the split below excludes them.</div>` : ''}
+
+        ${leaverRows ? `
+          <div class="rb-card-title" style="font-size:13px; margin-top:18px;">Left the scheme (${r.leaver_count})</div>
+          <table class="rb-table"><tr><th>Member</th><th>Who</th><th class="num">Claims</th><th class="num">Incurred</th></tr>${leaverRows}</table>` : ''}
+
+        ${joinerRows ? `
+          <div class="rb-card-title" style="font-size:13px; margin-top:18px;">New on the renewal census (${r.joiner_count})</div>
+          <div class="rb-card-sub">Added exposure with no claims history of their own - typically newborns and new hires.</div>
+          <table class="rb-table"><tr><th>Member</th><th>Who</th></tr>${joinerRows}</table>` : ''}
+
+        <div class="rb-card-title" style="font-size:13px; margin-top:18px;">Continuing members (${r.continuing_count})</div>
+        <div class="rb-card-sub">Highest claimers first - this is the experience being renewed.</div>
+        <table class="rb-table"><tr><th>Member</th><th>Who</th><th>Match</th><th class="num">Claims</th><th class="num">Incurred</th></tr>${continuingRows}</table>
       </div>
     `;
   } catch (err) {

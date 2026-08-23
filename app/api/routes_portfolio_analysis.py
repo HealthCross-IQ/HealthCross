@@ -221,6 +221,7 @@ def _member_dicts(db: Session) -> List[dict]:
             "product_name": m.product_name,
             "category": m.category,
             "network_type_raw": m.network_type_raw,
+            "date_of_birth": m.date_of_birth,
             "age": m.age,
             "gender": m.gender,
             "marital_status": m.marital_status,
