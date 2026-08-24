@@ -2003,6 +2003,160 @@ function printTabAsPdf(tabId, title) {
   win.document.close();
 }
 
+/* The two documents a new-business case actually produces.
+
+   "internal" is the underwriting file: what the members should cost,
+   what the card charges, what went out, and the risk factors behind the
+   decision. "broker" is the offer - plan design, categories, premium -
+   and deliberately carries NONE of the risk price, expected claims or
+   implied loss ratio. Those are HealthCross's own view of the account
+   and putting them in a broker's hands is how a negotiation is lost
+   before it starts. The variant is not a styling choice; it decides
+   which numbers exist in the document at all. */
+async function printNewBusinessSummary(variant) {
+  if (!currentCase) return;
+  const internal = variant === 'internal';
+
+  const get = async path => { try { return await api(path); } catch (err) { return null; } };
+  const id = currentCase.id;
+  const [census, byCategory, comparison, prices, opportunity] = await Promise.all([
+    get(`/cases/${id}/census-summary`),
+    get(`/cases/${id}/premium-by-category`),
+    get(`/cases/${id}/existing-vs-proposed`),
+    internal ? get(`/cases/${id}/price-comparison`) : Promise.resolve(null),
+    internal ? get(`/cases/${id}/opportunity-assessment`) : Promise.resolve(null),
+  ]);
+
+  if (!byCategory && !comparison) {
+    toast('Nothing to print yet - compute the quote first', true);
+    return;
+  }
+
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const esc = escapeHtml;
+  const today = new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric'});
+
+  const section = (title, body) => body ? `<section><h2>${esc(title)}</h2>${body}</section>` : '';
+
+  // --- the offer, on both documents ------------------------------------
+  const categoryTable = !byCategory || !byCategory.categories.length ? null : `
+    <table>
+      <tr><th>Category</th><th>Product</th><th>Network</th><th class="num">Members</th><th class="num">Annual premium (AED)</th><th class="num">Per member</th></tr>
+      ${byCategory.categories.map(c => `
+        <tr>
+          <td><strong>${esc(c.category)}</strong></td>
+          <td>${esc(c.product || '')}</td>
+          <td>${esc(c.network || '')}</td>
+          <td class="num">${c.member_count}</td>
+          <td class="num">${aed(c.gross_annual_premium)}</td>
+          <td class="num">${aed(c.premium_per_member)}</td>
+        </tr>`).join('')}
+      <tr class="total">
+        <th colspan="3">Total</th>
+        <td class="num"><strong>${byCategory.total_members}</strong></td>
+        <td class="num"><strong>${aed(byCategory.total_gross_premium)}</strong></td>
+        <td class="num">${aed(byCategory.total_members ? byCategory.total_gross_premium / byCategory.total_members : null)}</td>
+      </tr>
+    </table>`;
+
+  const benefitTables = !comparison || !comparison.categories.length ? null :
+    comparison.categories.map(c => `
+      <h3>Category ${esc(c.category)}${c.product ? ' &mdash; ' + esc(c.product) : ''}${c.network ? ' / ' + esc(c.network) : ''}</h3>
+      <table>
+        <tr><th style="width:26%;">Benefit</th><th>${internal ? "Client's existing" : 'Current cover'}</th><th>HealthCross proposed</th>${internal ? '<th style="width:12%;">Change</th>' : ''}</tr>
+        ${c.rows.map(row => `
+          <tr>
+            <td><strong>${esc(row.label)}</strong></td>
+            <td>${row.existing ? esc(row.existing) : '<span class="muted">not stated</span>'}</td>
+            <td>${row.proposed ? esc(row.proposed) : '<span class="muted">&mdash;</span>'}</td>
+            ${internal ? `<td>${esc(row.direction || '')}</td>` : ''}
+          </tr>`).join('')}
+      </table>`).join('');
+
+  const censusTable = !census || !census.relation_breakdown ? null : `
+    <table>
+      <tr><th>Relation</th><th class="num">Members</th></tr>
+      ${census.relation_breakdown.map(r => `<tr><td>${esc(r.relation || 'Unspecified')}</td><td class="num">${r.member_count}</td></tr>`).join('')}
+      <tr class="total"><th>Total</th><td class="num"><strong>${census.member_count}</strong></td></tr>
+    </table>
+    ${census.average_age != null ? `<p class="muted">Average age ${census.average_age.toFixed(1)}.</p>` : ''}`;
+
+  // --- internal only ----------------------------------------------------
+  const priceTable = !internal || !prices ? null : `
+    <table>
+      <tr><th style="width:34%;">Price</th><th class="num">Total (AED)</th><th class="num">Per member</th><th class="num">Implied loss ratio</th></tr>
+      <tr><td>Expected claims</td><td class="num">${aed(prices.prices.expected_claims)}</td><td class="num">${aed(prices.per_member.expected_claims)}</td><td class="num">&mdash;</td></tr>
+      <tr><td>Risk-based price</td><td class="num">${aed(prices.prices.risk_price)}</td><td class="num">${aed(prices.per_member.risk_price)}</td><td class="num">${pct(prices.implied_loss_ratio.at_risk_price)}</td></tr>
+      <tr><td>Rate card quote</td><td class="num">${aed(prices.prices.card_price)}</td><td class="num">${aed(prices.per_member.card_price)}</td><td class="num">${pct(prices.implied_loss_ratio.at_card_price)}</td></tr>
+      <tr class="total"><th>Issued quote</th><td class="num"><strong>${aed(prices.prices.issued_price)}</strong></td><td class="num">${aed(prices.per_member.issued_price)}</td><td class="num"><strong>${pct(prices.implied_loss_ratio.at_issued_price)}</strong></td></tr>
+    </table>
+    <p class="muted">Loss ratio is measured against the part of each premium that funds claims
+      (premium &times; ${(1 - prices.loading_pct).toFixed(3)} at this case's ${pct(prices.loading_pct)} loading),
+      never against gross premium.</p>
+    ${prices.discount ? `<p><strong>${prices.discount.direction === 'discount' ? 'Discount given' : prices.discount.direction === 'loaded' ? 'Issued above the card' : 'Price held'}:</strong>
+      ${pct(Math.abs(prices.discount.pct))} (AED ${aed(Math.abs(prices.discount.amount_aed))}) &mdash;
+      implied loss ratio ${pct(prices.discount.implied_loss_ratio_before)} &rarr; ${pct(prices.discount.implied_loss_ratio_after)}.</p>` : ''}`;
+
+  const verdictBlock = !internal || !opportunity ? null : `
+    <p class="verdict"><strong>${esc(opportunity.verdict.headline)}</strong><br>${esc(opportunity.verdict.detail)}</p>
+    <table>
+      <tr><th style="width:26%;">Factor</th><th>Finding</th><th style="width:16%;">Treatment</th></tr>
+      ${opportunity.factors.map(f => `
+        <tr><td><strong>${esc(f.label)}</strong></td><td>${esc(f.finding)}</td><td>${esc((f.treatment || '').replace(/_/g, ' '))}</td></tr>`).join('')}
+    </table>
+    <h3>Still to ask</h3>
+    <ul>${opportunity.open_questions.map(q => `<li><strong>${esc(q.label)}:</strong> ${esc(q.finding)}</li>`).join('')}</ul>`;
+
+  const title = internal ? 'New Business Summary' : 'Quotation';
+  const liveStyles = Array.from(document.querySelectorAll('head > style')).map(x => x.innerHTML).join('\n');
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${esc(title)} - ${esc(currentCase.company_name)}</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>${liveStyles}</style>
+<style>
+  body { margin: 28px auto !important; max-width: 900px !important; background: #fff !important; overflow: visible !important; height: auto !important; }
+  header.doc { border-bottom: 2px solid var(--deep); padding-bottom: 12px; margin-bottom: 22px; }
+  header.doc h1 { font-family: var(--font-display); font-size: 24px; margin: 0 0 4px; }
+  header.doc .meta { color: var(--ink-2); font-size: 13px; }
+  section { page-break-inside: avoid; margin-bottom: 26px; }
+  section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-2);
+               border-bottom: 1px solid var(--border); padding-bottom: 5px; margin: 0 0 12px; }
+  section h3 { font-size: 14px; margin: 16px 0 6px; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 10px; }
+  th, td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  td.num, th.num { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+  tr.total th, tr.total td { border-top: 2px solid var(--border-strong); border-bottom: none; }
+  .muted { color: var(--ink-muted); }
+  .verdict { background: var(--surface-2); border-left: 3px solid var(--deep); padding: 10px 14px; }
+  footer.doc { margin-top: 30px; padding-top: 10px; border-top: 1px solid var(--border);
+               color: var(--ink-muted); font-size: 11.5px; }
+  button { display: none !important; }
+  @media print { body { margin: 10px auto !important; } }
+</style></head><body>
+  <header class="doc">
+    <h1>${esc(title)}</h1>
+    <div class="meta">${esc(currentCase.company_name)}${currentCase.broker_name ? ' &middot; via ' + esc(currentCase.broker_name) : ''} &middot; ${today}</div>
+  </header>
+  ${section('The offer', categoryTable)}
+  ${section('Membership', censusTable)}
+  ${section(internal ? 'Existing vs proposed benefits' : 'Table of benefits', benefitTables)}
+  ${internal ? section('Pricing', priceTable) : ''}
+  ${internal ? section('Risk assessment', verdictBlock) : ''}
+  <footer class="doc">${internal
+    ? 'Internal underwriting document. Contains HealthCross risk pricing and loss-ratio analysis &mdash; not for release to a broker or client.'
+    : 'This quotation is subject to the terms, conditions and exclusions of the policy wording, and to satisfactory completion of underwriting.'}</footer>
+  <script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
 // Renewal Client Summary - a 3-page printed export (Executive Summary,
 // Census Analysis, Benefits & Premium Comparison) combining case info,
 // the renewal rating, the book-wide benchmark, and the premium's
@@ -2594,8 +2748,14 @@ function renderCaseWorkspace() {
     <div class="tab-panel" data-tab="claims">
       <div style="text-align:right; margin-bottom:8px;">
         <button onclick="printTabAsPdf('claims', 'Claims Analysis')">Print / Save as PDF</button>
-        <button onclick="printRenewalClientSummary('internal')">Renewal Summary (Internal)</button>
-        <button onclick="printRenewalClientSummary('external')">Renewal Summary (External)</button>
+        <!-- A new-business case has no expiring premium to renew from, so
+             a "Renewal Summary" on one is an empty document with a
+             misleading name. The New Business tab carries its own two
+             exports instead. -->
+        <span data-renewal-only>
+          <button onclick="printRenewalClientSummary('internal')">Renewal Summary (Internal)</button>
+          <button onclick="printRenewalClientSummary('external')">Renewal Summary (External)</button>
+        </span>
       </div>
       <div id="claims-report-year-area"></div>
       <div id="claims-report-comparison-area"></div>
@@ -2620,6 +2780,11 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="tab-panel" data-tab="new-business">
+      <div style="text-align:right; margin-bottom:8px;">
+        <button onclick="printTabAsPdf('new-business', 'New Business Rating')">Print / Save as PDF</button>
+        <button onclick="printNewBusinessSummary('internal')">New Business Summary (Internal)</button>
+        <button class="primary" onclick="printNewBusinessSummary('broker')">Quotation (Broker)</button>
+      </div>
       <div id="new-business-rating-area"></div>
     </div>
 
@@ -2680,6 +2845,7 @@ function renderCaseWorkspace() {
   switchTab('census');
   selectedClaimsReportId = null; // a new case's claims views default to its latest report
   loadExecutiveSummary();
+  applyBusinessTypeVisibility();
   loadCaseCompleteness();
   loadLatestScorecard();
   loadCensusSummary();
@@ -2717,6 +2883,16 @@ function _statTileHtml(label, value, sub) {
       ${sub ? `<div style="font-size:11px; color:var(--ink-muted); margin-top:4px;">${sub}</div>` : ''}
     </div>
   `;
+}
+
+/* Exports that only mean something on a renewal. A new-business case has
+   no expiring premium to renew from, so a "Renewal Summary" printed on
+   one is an empty document with a confident name on it. */
+function applyBusinessTypeVisibility() {
+  const isRenewal = currentCase && currentCase.business_type === 'existing';
+  document.querySelectorAll('[data-renewal-only]').forEach(el => {
+    el.style.display = isRenewal ? '' : 'none';
+  });
 }
 
 async function loadExecutiveSummary() {
@@ -3335,6 +3511,12 @@ async function quickUploadConfirm() {
   if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
+  // The executive summary sits ABOVE the upload panel and reads the case
+  // as a whole, so it went stale on every quick upload - a census could
+  // land 108 rows and the card at the top of the same page still read
+  // "No census yet", which reads as a failed upload rather than an
+  // unrefreshed card.
+  await loadExecutiveSummary();
   if (uploadedKinds.size) toast('Quick upload complete');
 }
 
