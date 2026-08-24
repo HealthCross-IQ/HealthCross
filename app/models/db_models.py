@@ -699,6 +699,15 @@ class ClientMasterInfo(Base):
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)
     source_filename = Column(String, nullable=True)
+    #: True once a record has been created or edited by hand in the
+    #: portal rather than coming from an uploaded sheet. A fresh upload
+    #: wholesale-replaces this table, which would silently discard a
+    #: figure an underwriter had just corrected - so the upload clears
+    #: only the rows it owns and leaves these standing. It also means a
+    #: hand-edited client stops tracking the sheet, which is the trade
+    #: being made and why the flag is visible on screen rather than
+    #: hidden behind the behaviour.
+    manually_edited = Column(Boolean, default=False, nullable=True)
     uploaded_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 

@@ -174,7 +174,15 @@ def upload_client_master(file: UploadFile = File(...), db: Session = Depends(get
     if not rows:
         raise HTTPException(status_code=400, detail="No client rows found in this file")
 
-    db.query(models.ClientMasterInfo).delete()
+    # Wholesale-replace, but only the rows the sheet owns. A record an
+    # underwriter corrected by hand in the portal survives an upload -
+    # discarding it would mean a figure they had just fixed silently
+    # reverting to whatever the sheet still says, which is the worst
+    # possible failure for a number that drives combined ratio.
+    db.query(models.ClientMasterInfo).filter(
+        (models.ClientMasterInfo.manually_edited.is_(None))
+        | (models.ClientMasterInfo.manually_edited == False)  # noqa: E712 - SQL, not Python
+    ).delete(synchronize_session=False)
     db.bulk_insert_mappings(models.ClientMasterInfo, rows)
     db.commit()
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
@@ -1408,3 +1416,171 @@ def get_annual_limit_exposure(
     if members_above is not None:
         report["members_above_limit"] = members_above_limit(claims, members_above)
     return report
+
+
+def _client_loading_row(record: models.ClientMasterInfo) -> dict:
+    return {
+        "id": record.id,
+        "master_client_name": record.master_client_name,
+        "opex_pct": record.opex_pct,
+        "product": record.product,
+        "start_date": record.start_date.isoformat() if record.start_date else None,
+        "end_date": record.end_date.isoformat() if record.end_date else None,
+        "manually_edited": bool(record.manually_edited),
+        "source_filename": record.source_filename,
+        # Sent so the screen can render a closed window as fixed, rather
+        # than letting someone type into it and only then be refused.
+        "window_has_closed": _window_has_closed(record),
+    }
+
+
+@router.get("/client-loading")
+def get_client_loading(db: Session = Depends(get_db)):
+    """Every client's own OPEX/loading record, plus the accounts still
+    running on the book default.
+
+    The second list is the point of the screen. An account with premium
+    and claims but no OPEX record has its combined ratio measured against
+    an assumption, and nothing on any other screen says so - it just
+    quietly reads as though the figure were known.
+    """
+    from app.scoring.rules.portfolio_analysis import DEFAULT_EXPENSE_RATIO_PCT
+
+    records = (
+        db.query(models.ClientMasterInfo)
+        .order_by(models.ClientMasterInfo.master_client_name, models.ClientMasterInfo.start_date.desc())
+        .all()
+    )
+    on_file = {_normalize_client_key(r.master_client_name) for r in records}
+
+    # Clients carrying real exposure that no record covers. Read off the
+    # membership table directly rather than through _run_analysis, so the
+    # screen still works before an analysis has been run.
+    gaps: Dict[str, dict] = {}
+    subgroup_master = _subgroup_master_by_name(db)
+    for member in db.query(models.PortfolioMember).all():
+        name = resolve_master_client(
+            {
+                "master_client_name": member.master_client_name,
+                "contract": member.contract,
+                "master_contract": member.master_contract,
+            },
+            subgroup_master,
+        )
+        if not name or _normalize_client_key(name) in on_file:
+            continue
+        bucket = gaps.setdefault(name, {"master_client_name": name, "lives": 0, "gross_premium": 0.0})
+        bucket["lives"] += 1
+        bucket["gross_premium"] += member.gross_premium or 0.0
+
+    return {
+        "default_opex_pct": DEFAULT_EXPENSE_RATIO_PCT,
+        "records": [_client_loading_row(r) for r in records],
+        "without_a_record": sorted(
+            ({**g, "gross_premium": round(g["gross_premium"], 2)} for g in gaps.values()),
+            key=lambda g: -g["gross_premium"],
+        ),
+    }
+
+
+def _normalize_client_key(name: Optional[str]) -> str:
+    return " ".join(str(name or "").split()).casefold()
+
+
+def _subgroup_master_by_name(db: Session) -> Dict[str, str]:
+    return {
+        normalize_subgroup_key(sm.subgroup_name): sm.master_name
+        for sm in db.query(models.SubgroupMasterMapping).all()
+    }
+
+
+@router.post("/client-loading")
+def upsert_client_loading(payload: schemas.ClientLoadingIn, db: Session = Depends(get_db)):
+    """Create or edit one client's loading record by hand.
+
+    Marks the record manually_edited, which is what keeps it from being
+    wiped by the next Client Master upload - and also means this client
+    stops tracking the sheet. That trade is deliberate and is stated on
+    the screen rather than left to be discovered.
+    """
+    if not (payload.master_client_name or "").strip():
+        raise HTTPException(status_code=400, detail="A client name is required")
+    if payload.opex_pct is None:
+        raise HTTPException(status_code=400, detail="A loading is required")
+    if not 0 <= payload.opex_pct < 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Loading must be a fraction of premium between 0 and 1 (0.265 for 26.5%)",
+        )
+    if payload.start_date and payload.end_date and payload.end_date <= payload.start_date:
+        raise HTTPException(status_code=400, detail="The end date must fall after the start date")
+
+    record = db.get(models.ClientMasterInfo, payload.id) if payload.id else None
+    if payload.id and not record:
+        raise HTTPException(status_code=404, detail="No such loading record")
+    if record is not None and _window_has_closed(record) and not payload.correcting_an_error:
+        raise HTTPException(status_code=409, detail=_CLOSED_WINDOW_DETAIL)
+    if record is None:
+        record = models.ClientMasterInfo()
+        db.add(record)
+
+    record.master_client_name = payload.master_client_name.strip()
+    record.opex_pct = payload.opex_pct
+    record.start_date = payload.start_date
+    record.end_date = payload.end_date
+    # Product stays whatever it was: it is reference data sourced from the
+    # membership export's own PRODUCTNAME column, not something this
+    # screen is entitled to overwrite.
+    record.manually_edited = True
+    db.commit()
+    db.refresh(record)
+    return _client_loading_row(record)
+
+
+#: A window whose end date has passed has already been used: any
+#: combined ratio reported for that period was measured against the
+#: loading in it. Changing it now silently changes a number that has
+#: been seen, so it is fixed unless the change is explicitly a
+#: correction of a wrong entry.
+_CLOSED_WINDOW_DETAIL = (
+    "This window has already closed, so the figures reported for it were measured against "
+    "this loading. If the loading changed at renewal, add a new window instead. If this "
+    "figure was entered wrongly, resend with correcting_an_error set."
+)
+
+
+def _window_has_closed(record: models.ClientMasterInfo, as_of: Optional[date] = None) -> bool:
+    """True once this window's own end date is behind us. A window with
+    no end date is open-ended and never closes.
+    """
+    if not record.end_date:
+        return False
+    return record.end_date < (as_of or date.today())
+
+
+@router.delete("/client-loading/{record_id}")
+def delete_client_loading(
+    record_id: int,
+    correcting_an_error: bool = Query(
+        False,
+        description="Required to remove a window that has already closed - see _CLOSED_WINDOW_DETAIL.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Remove one dated record.
+
+    Deletes a single window, never a client's whole history: an earlier
+    renewal's loading is what makes a past year's combined ratio
+    reproducible, so removing it changes numbers that have already been
+    reported. A window that has already closed is fixed for that reason -
+    removing it needs correcting_an_error, which is the one legitimate
+    case (the figure in it was typed wrongly).
+    """
+    record = db.get(models.ClientMasterInfo, record_id)
+    if not record:
+        raise HTTPException(status_code=404, detail="No such loading record")
+    if _window_has_closed(record) and not correcting_an_error:
+        raise HTTPException(status_code=409, detail=_CLOSED_WINDOW_DETAIL)
+    db.delete(record)
+    db.commit()
+    return {"deleted": record_id}

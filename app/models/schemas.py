@@ -546,3 +546,27 @@ class ChatQuestionIn(BaseModel):
 
 class ChatAnswerOut(BaseModel):
     answer: str
+
+
+class ClientLoadingIn(BaseModel):
+    """One client's own OPEX/loading, keyed by its dated window.
+
+    id is absent when adding a record and present when editing one. The
+    same client legitimately holds several records - a loading changes at
+    renewal - so this identifies a window rather than a client.
+    """
+
+    id: Optional[int] = None
+    master_client_name: str
+    #: A fraction of premium (0.265 for 26.5%), matching how the Client
+    #: Master sheet parser stores it however underwriting typed it in.
+    opex_pct: Optional[float] = None
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+    #: Required to touch a window that has already closed. A loading that
+    #: changed at renewal wants a NEW window, not an edit to the old one -
+    #: the old one is what keeps that period's combined ratio
+    #: reproducible. The only legitimate reason to reach back into a
+    #: closed window is that the figure in it was typed wrongly, and
+    #: saying so out loud is the point of this flag.
+    correcting_an_error: bool = False

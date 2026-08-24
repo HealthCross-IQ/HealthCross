@@ -7038,6 +7038,12 @@ function portfolioAnalysisPanelHtml() {
       <div id="pa-utilization-area">${paLastUtilization ? paUtilizationHtml(paLastUtilization) : ''}</div>
     </div>
     <div class="card">
+      <h3>Client loading (OPEX)</h3>
+      <div class="hint">Each client's own commission + TPA + admin + HC fees, as a share of premium. Used in place of the flat book default wherever a client's real figure is on file, so a combined ratio is measured against what that account actually costs to run. A loading changes at renewal, so the same client can hold more than one dated record - whichever window covers a member's own policy period is the one that applies to them, and the two are never blended.</div>
+      <div class="row"><button onclick="paLoadClientLoading()">Load</button></div>
+      <div id="pa-client-loading-area"></div>
+    </div>
+    <div class="card">
       <h3>Annual limit exposure</h3>
       <div class="hint">How many members in the book would actually have breached a given annual limit, and what that limit would not have paid. The question behind every annual-limit dropdown, answered off the portfolio's own claims. Measured over a rolling 365 days rather than per calendar year, because an annual limit runs on the member's own policy year and this book renews in every month of it - a member whose expensive December runs into January is one breach, not two half-years of nothing.</div>
       <div class="row"><button onclick="paLoadAnnualLimitExposure()">Load</button></div>
@@ -7294,6 +7300,177 @@ function paUtilizationHtml(data) {
    members, not claim lines, because an annual limit is breached by a
    person over a year rather than by an invoice. */
 let paLastAnnualLimit = null;
+
+/* Maintaining each client's own OPEX by hand. Two things this screen has
+   to make legible rather than hide: that one client legitimately holds
+   several dated windows, and that a hand-edited record stops tracking
+   the uploaded sheet - see routes_portfolio_analysis.upsert_client_loading. */
+let paLastClientLoading = null;
+//: Closed windows the user has explicitly reopened to fix a wrong entry.
+//: Held for the session only - reloading the screen locks them again, so
+//: an unlock is a deliberate act each time rather than a mode the screen
+//: quietly stays in.
+let paUnlockedLoadingRows = new Set();
+
+async function paLoadClientLoading() {
+  try {
+    paLastClientLoading = await api('/portfolio-analysis/client-loading');
+    paUnlockedLoadingRows = new Set();
+    paRenderClientLoading();
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+/* 0.265, 26.5 and "26.5%" are all how underwriting writes the same
+   figure - the Client Master sheet parser accepts all three, so refusing
+   two of them here would just move the error into the spreadsheet. */
+function paParseOpex(raw) {
+  const text = String(raw == null ? '' : raw).trim().replace('%', '');
+  if (!text) return null;
+  const n = Number(text);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n > 1 ? n / 100 : n;
+}
+
+function paRenderClientLoading() {
+  const d = paLastClientLoading;
+  const area = document.getElementById('pa-client-loading-area');
+  if (!d || !area) return;
+  const today = new Date().toISOString().slice(0, 10);
+  const pct = v => v == null ? '-' : (v * 100).toFixed(1) + '%';
+
+  // Newest window first per client; earlier ones sit indented beneath so
+  // a figure that looks wrong can be traced to the renewal that changed it.
+  const byClient = {};
+  d.records.forEach(r => (byClient[r.master_client_name] = byClient[r.master_client_name] || []).push(r));
+  const ordered = Object.keys(byClient).sort().flatMap(name =>
+    byClient[name].sort((a, b) => String(b.start_date || '').localeCompare(String(a.start_date || ''))));
+
+  const seen = new Set();
+  const rows = ordered.map(r => {
+    const first = !seen.has(r.master_client_name);
+    seen.add(r.master_client_name);
+    const inForce = first && (!r.end_date || r.end_date >= today);
+    // A closed window is fixed: the combined ratios reported for that
+    // period were measured against the loading in it. Rendered locked so
+    // nobody types into a field whose save would be refused.
+    const locked = r.window_has_closed && !paUnlockedLoadingRows.has(r.id);
+    const dis = locked ? ' disabled' : '';
+    const name = escapeHtml(r.master_client_name).replace(/'/g, "\\'");
+    return `
+      <tr data-id="${r.id}">
+        <td>${first
+          ? `<strong>${escapeHtml(r.master_client_name)}</strong>${r.manually_edited
+              ? ' <span class="tier-pill dir-review" title="Kept through Client Master uploads - and no longer tracking the sheet">edited by hand</span>' : ''}`
+          : '<span class="hint" style="padding-left:18px;">&#8627; earlier window</span>'}</td>
+        <td>${r.product ? escapeHtml(r.product) : '<span class="hint">-</span>'}</td>
+        <td class="num"><input type="text" inputmode="decimal" style="width:80px;text-align:right;"
+              value="${r.opex_pct == null ? '' : (r.opex_pct * 100).toFixed(1)}" data-field="opex"${dis}></td>
+        <td><input type="date" value="${r.start_date || ''}" data-field="start"${dis}></td>
+        <td><input type="date" value="${r.end_date || ''}" data-field="end"${dis}></td>
+        <td>${inForce ? '<span class="tier-pill dir-improved">In force</span>'
+              : r.window_has_closed ? '<span class="tier-pill dir-same" title="This window has closed - the figures reported for it were measured against this loading">Closed</span>'
+              : '<span class="tier-pill dir-same">Superseded</span>'}</td>
+        <td>
+          ${locked
+            ? `<button class="small" onclick="paUnlockClientLoading(${r.id})" title="Only for a figure entered wrongly">Correct an error</button>`
+            : `<button class="small" onclick="paSaveClientLoading(${r.id})">Save</button>
+               <button class="small" onclick="paDeleteClientLoading(${r.id}, '${name}')">Remove</button>`}
+        </td>
+      </tr>`;
+  }).join('');
+
+  const gaps = d.without_a_record.map(g => `
+    <tr>
+      <td>${escapeHtml(g.master_client_name)}</td>
+      <td class="num">${g.lives.toLocaleString()}</td>
+      <td class="num">${Math.round(g.gross_premium).toLocaleString()}</td>
+      <td class="num"><span class="tier-pill dir-review">${pct(d.default_opex_pct)} assumed</span></td>
+      <td><button class="small" onclick="paAddClientLoading('${escapeHtml(g.master_client_name).replace(/'/g, "\\'")}')">Add a figure</button></td>
+    </tr>`).join('');
+
+  area.innerHTML = `
+    <div class="row" style="margin-top:12px; gap:12px; align-items:flex-end; flex-wrap:wrap;">
+      <div><div class="hint">Clients on file</div><div style="font-size:18px;font-weight:600;">${Object.keys(byClient).length}</div></div>
+      <div><div class="hint">Book default</div><div style="font-size:18px;font-weight:600;">${pct(d.default_opex_pct)}</div></div>
+      <div><div class="hint">In the book, no figure</div><div style="font-size:18px;font-weight:600;">${d.without_a_record.length}</div></div>
+      <button class="primary" style="margin-left:auto;" onclick="paAddClientLoading('')">Add client</button>
+    </div>
+    <div class="hint" style="margin-top:10px;">Loading accepts <strong>0.265</strong>, <strong>26.5</strong> or <strong>26.5%</strong> - all three store as the same fraction. Product comes from the membership export's own PRODUCTNAME column and is shown for reference only. Saving a row marks it <strong>edited by hand</strong>: it then survives the next Client Master upload, and stops tracking that sheet until it is removed.</div>
+    <div style="overflow-x:auto;">
+    <table style="margin-top:12px;">
+      <tr><th style="min-width:240px;">Master client</th><th>Product</th><th class="num">Loading</th><th>From</th><th>To</th><th>Status</th><th></th></tr>
+      ${rows || '<tr><td colspan="7" class="hint">No loading records yet - upload a Client Master sheet or add one here.</td></tr>'}
+    </table>
+    </div>
+    ${d.without_a_record.length ? `
+      <h4 style="margin-top:22px;">In the book with no loading on file</h4>
+      <div class="hint">These accounts carry premium and members but no OPEX record, so their combined ratio is measured against the ${pct(d.default_opex_pct)} book default. That is an assumption standing in for a measurement, and nothing on any other screen says so.</div>
+      <div style="overflow-x:auto;">
+      <table style="margin-top:10px;">
+        <tr><th style="min-width:240px;">Master client</th><th class="num">Lives</th><th class="num">Gross premium</th><th class="num">Assumed loading</th><th></th></tr>
+        ${gaps}
+      </table>
+      </div>` : ''}
+  `;
+}
+
+function _paRowValues(id) {
+  const row = document.querySelector(`#pa-client-loading-area tr[data-id="${id}"]`);
+  if (!row) return null;
+  const get = f => row.querySelector(`[data-field="${f}"]`).value;
+  return {opex: paParseOpex(get('opex')), start: get('start') || null, end: get('end') || null};
+}
+
+async function paSaveClientLoading(id) {
+  const record = paLastClientLoading.records.find(r => r.id === id);
+  const values = _paRowValues(id);
+  if (!record || !values) return;
+  if (values.opex == null) { toast('Enter a loading, e.g. 26.5', true); return; }
+  try {
+    await api('/portfolio-analysis/client-loading', {
+      method: 'POST',
+      body: JSON.stringify({
+        id, master_client_name: record.master_client_name,
+        opex_pct: values.opex, start_date: values.start, end_date: values.end,
+        correcting_an_error: paUnlockedLoadingRows.has(id),
+      }),
+    });
+    toast('Loading saved');
+    await paLoadClientLoading();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function paAddClientLoading(prefillName) {
+  const name = (prompt('Master client name', prefillName || '') || '').trim();
+  if (!name) return;
+  const raw = prompt(`Loading for ${name} - 0.265, 26.5 or 26.5%`, '26.5');
+  const opex = paParseOpex(raw);
+  if (opex == null) { toast('That is not a loading I can read', true); return; }
+  const start = (prompt('Window starts (YYYY-MM-DD, blank for none)', new Date().toISOString().slice(0, 10)) || '').trim();
+  const end = (prompt('Window ends (YYYY-MM-DD, blank for none)', '') || '').trim();
+  try {
+    await api('/portfolio-analysis/client-loading', {
+      method: 'POST',
+      body: JSON.stringify({master_client_name: name, opex_pct: opex, start_date: start || null, end_date: end || null}),
+    });
+    toast('Loading added');
+    await paLoadClientLoading();
+  } catch (err) { toast(err.message, true); }
+}
+
+/* Removing a window is for a figure entered wrongly. A loading that
+   genuinely changed at renewal wants a NEW window instead - the old one
+   is what keeps that year's combined ratio reproducible. */
+async function paDeleteClientLoading(id, name) {
+  if (!confirm(`Remove this loading window for ${name}?\n\nUse this for a figure entered wrongly. If the loading changed at renewal, add a new window instead - removing the old one changes any combined ratio already reported for that period.`)) return;
+  try {
+    await api(`/portfolio-analysis/client-loading/${id}`, {method: 'DELETE'});
+    toast('Window removed');
+    await paLoadClientLoading();
+  } catch (err) { toast(err.message, true); }
+}
 
 async function paLoadAnnualLimitExposure() {
   try {
