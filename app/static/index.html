@@ -1976,7 +1976,7 @@ function printTabAsPdf(tabId, title) {
   // view ever had rules for, so it rendered as unstyled plain text).
   const liveStyles = Array.from(document.querySelectorAll('head > style')).map(s => s.innerHTML).join('\n');
 
-  const html = `<!doctype html>
+  const document_html = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -2033,12 +2033,71 @@ async function printNewBusinessSummary(variant) {
     return;
   }
 
+  // Everything below builds one string. A throw anywhere in it used
+  // to leave the button doing nothing at all, with the reason only in
+  // a console the user never opens - so the failure is caught and
+  // named here instead of disappearing.
+  let html;
+  try {
+  html = document_html;
+  } catch (err) {
+    toast('Could not build the document: ' + err.message, true);
+    return;
+  }
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
+}
+
+/* The two documents a new-business case actually produces.
+
+   "internal" is the underwriting file: what the members should cost,
+   what the card charges, what went out, and the risk factors behind the
+   decision. "broker" is the offer - plan design, categories, premium -
+   and deliberately carries NONE of the risk price, expected claims or
+   implied loss ratio. Those are HealthCross's own view of the account
+   and putting them in a broker's hands is how a negotiation is lost
+   before it starts. The variant is not a styling choice; it decides
+   which numbers exist in the document at all. */
+async function printNewBusinessSummary(variant) {
+  if (!currentCase) return;
+  const internal = variant === 'internal';
+
+  const get = async path => { try { return await api(path); } catch (err) { return null; } };
+  const id = currentCase.id;
+  const [census, byCategory, comparison, prices, opportunity, experience] = await Promise.all([
+    get(`/cases/${id}/census-summary`),
+    get(`/cases/${id}/premium-by-category`),
+    get(`/cases/${id}/existing-vs-proposed`),
+    internal ? get(`/cases/${id}/price-comparison`) : Promise.resolve(null),
+    internal ? get(`/cases/${id}/opportunity-assessment`) : Promise.resolve(null),
+    internal ? get(`/cases/${id}/experience-price`) : Promise.resolve(null),
+  ]);
+
+  if (!byCategory && !comparison) {
+    toast('Nothing to print yet - compute the quote first', true);
+    return;
+  }
+
   const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
   const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
   const esc = escapeHtml;
   const today = new Date().toLocaleDateString('en-GB', {day: 'numeric', month: 'long', year: 'numeric'});
 
-  const section = (title, body) => body ? `<section><h2>${esc(title)}</h2>${body}</section>` : '';
+  // Each section is rendered inside its own try. A block whose data does
+  // not match what this expects should cost the document that one
+  // section and say so - not throw and leave the button doing nothing,
+  // which is exactly what a single wrong field name did here once.
+  const section = (title, body) => {
+    let rendered;
+    try {
+      rendered = typeof body === 'function' ? body() : body;
+    } catch (err) {
+      rendered = `<p class="note">This section could not be rendered: ${esc(err.message)}</p>`;
+    }
+    return rendered ? `<section><h2>${esc(title)}</h2>${rendered}</section>` : '';
+  };
 
   // --- the offer, on both documents ------------------------------------
   const categoryTable = !byCategory || !byCategory.categories.length ? null : `
@@ -2075,13 +2134,31 @@ async function printNewBusinessSummary(variant) {
           </tr>`).join('')}
       </table>`).join('');
 
-  const censusTable = !census || !census.relation_breakdown ? null : `
-    <table>
-      <tr><th>Relation</th><th class="num">Members</th></tr>
-      ${census.relation_breakdown.map(r => `<tr><td>${esc(r.relation || 'Unspecified')}</td><td class="num">${r.member_count}</td></tr>`).join('')}
-      <tr class="total"><th>Total</th><td class="num"><strong>${census.member_count}</strong></td></tr>
-    </table>
-    ${census.average_age != null ? `<p class="muted">Average age ${census.average_age.toFixed(1)}.</p>` : ''}`;
+  // census-summary returns relation_counts as an OBJECT keyed by relation
+  // (see app/scoring/rules/census_summary.py's own return), not an array
+  // of rows. Reading it as an array threw, and because the whole document
+  // is built in one expression the throw took the entire print with it -
+  // the button appeared to do nothing at all.
+  const censusTable = !census || !census.relation_counts ? null : (function () {
+    const rows = Object.entries(census.relation_counts);
+    const total = rows.reduce(function (sum, entry) { return sum + entry[1]; }, 0);
+    const body = rows.map(function (entry) {
+      const share = total ? (entry[1] / total * 100).toFixed(1) + '%' : '&mdash;';
+      return '<tr><td>' + esc(entry[0] || 'Unspecified') + '</td>'
+           + '<td class="num">' + entry[1] + '</td>'
+           + '<td class="num">' + share + '</td></tr>';
+    }).join('');
+    const note = census.avg_age != null
+      ? '<p class="note">Average age ' + census.avg_age.toFixed(1) + '.'
+        + (census.maternity_risk_count ? ' ' + census.maternity_risk_count + ' member(s) of maternity age.' : '')
+        + '</p>'
+      : '';
+    return '<div class="scroll"><table>'
+      + '<tr><th>Relation</th><th class="num">Members</th><th class="num">Share</th></tr>'
+      + body
+      + '<tr class="total"><th>Total</th><td class="num"><strong>' + total + '</strong></td><td></td></tr>'
+      + '</table></div>' + note;
+  })();
 
   // --- internal only ----------------------------------------------------
   // The report has to say what it thinks before it shows its working.
@@ -2206,12 +2283,12 @@ async function printNewBusinessSummary(variant) {
     <div class="meta">${esc(currentCase.company_name)}${currentCase.broker_name ? ' &middot; via ' + esc(currentCase.broker_name) : ''} &middot; ${today}</div>
   </header>
   ${internal && decision ? decision : ''}
-  ${section('The offer', categoryTable)}
-  ${section('Membership', censusTable)}
-  ${section(internal ? 'Existing vs proposed benefits' : 'Table of benefits', benefitTables)}
-  ${internal ? section('Why this price', experienceTable) : ''}
-  ${internal ? section('Pricing', priceTable) : ''}
-  ${internal ? section('Risk assessment', verdictBlock) : ''}
+  ${section('The offer', () => categoryTable)}
+  ${section('Membership', () => censusTable)}
+  ${section(internal ? 'Existing vs proposed benefits' : 'Table of benefits', () => benefitTables)}
+  ${internal ? section('Why this price', () => experienceTable) : ''}
+  ${internal ? section('Pricing', () => priceTable) : ''}
+  ${internal ? section('Risk assessment', () => verdictBlock) : ''}
   <footer class="doc">${internal
     ? 'Internal underwriting document. Contains HealthCross risk pricing and loss-ratio analysis &mdash; not for release to a broker or client.'
     : 'This quotation is subject to the terms, conditions and exclusions of the policy wording, and to satisfactory completion of underwriting.'}</footer>
