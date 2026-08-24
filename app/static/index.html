@@ -6061,16 +6061,128 @@ async function nbRenderArea() {
       <div id="nb-plan-details-result"></div>
     </div>
     <div id="nb-readiness-area"></div>
+    <div id="nb-opportunity-area"></div>
     <div id="nb-existing-vs-proposed-area"></div>
     <div id="nb-annual-limit-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
   loadNbQuoteReadiness();
+  loadNbOpportunityAssessment();
   loadNbExistingVsProposed();
   loadNbAnnualLimitExposure();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* The conclusion the whole New Business tab exists to reach. See
+   app/scoring/rules/opportunity_risk.py - the discipline is that a
+   factor the burning-cost cube already prices is shown and contributes
+   nothing, so the same risk is never charged twice. */
+const VERDICT_STYLE = {
+  go_aggressive:     {pill: 'dir-improved', label: 'Go aggressive'},
+  priced_right:      {pill: 'dir-same',     label: 'Priced about right'},
+  needs_loading:     {pill: 'dir-review',   label: 'Needs loading'},
+  decline_or_reprice:{pill: 'dir-review',   label: 'Decline or reprice'},
+  not_enough_to_say: {pill: '',             label: 'Not enough to say'},
+};
+
+const TREATMENT_STYLE = {
+  already_in_price: {pill: 'dir-same',    label: 'already in the price'},
+  load:             {pill: 'dir-review',  label: 'loads'},
+  widen_margin:     {pill: 'dir-review',  label: 'widen the margin'},
+  ask:              {pill: '',            label: 'ask'},
+};
+
+async function loadNbOpportunityAssessment() {
+  const area = document.getElementById('nb-opportunity-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/opportunity-assessment`);
+    const v = VERDICT_STYLE[r.verdict.verdict] || VERDICT_STYLE.not_enough_to_say;
+    const aed = n => n == null ? '-' : Math.round(n).toLocaleString();
+    const pc = n => n == null ? '-' : (n * 100).toFixed(1) + '%';
+
+    // Factors that move the number, and factors that explain it. Kept
+    // visually apart because reading them as one list is exactly how an
+    // underwriter ends up loading for something already charged for.
+    const moving = r.factors.filter(f => f.treatment === 'load' || f.treatment === 'widen_margin');
+    const explaining = r.factors.filter(f => f.treatment === 'already_in_price');
+
+    const factorRow = f => {
+      const t = TREATMENT_STYLE[f.treatment] || TREATMENT_STYLE.ask;
+      return `<tr>
+        <td><strong>${escapeHtml(f.label)}</strong></td>
+        <td>${escapeHtml(f.finding)}</td>
+        <td><span class="tier-pill ${t.pill}">${t.label}</span></td>
+      </tr>`;
+    };
+
+    const contributions = r.required_margin_contributions.map(c => `
+      <tr><th>${escapeHtml(c.key.replace(/_/g, ' '))}</th><td>+${pc(c.pct)}</td><td>${escapeHtml(c.why)}</td></tr>
+    `).join('');
+
+    const adjustments = r.aed_adjustments.map(a => `
+      <tr><th>${escapeHtml(a.key.replace(/_/g, ' '))}</th><td>${a.aed < 0 ? '-' : '+'}AED ${aed(Math.abs(a.aed))}</td><td>${escapeHtml(a.why)}</td></tr>
+    `).join('');
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>Opportunity assessment <span class="tier-pill ${v.pill}">${v.label}</span></h3>
+        <div style="font-size:16px; font-weight:600; margin-top:6px;">${escapeHtml(r.verdict.headline)}</div>
+        <div class="hint">${escapeHtml(r.verdict.detail)}</div>
+        <div class="row" style="margin-top:14px; gap:24px; flex-wrap:wrap;">
+          <div><div class="hint">Risk price</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.risk_price_aed)}</div></div>
+          <div><div class="hint">Adjusted for what the cube can't see</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.adjusted_risk_price_aed)}</div></div>
+          <div><div class="hint">Quoted</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.quoted_price_aed)}</div></div>
+          <div><div class="hint">Margin carried</div><div style="font-size:18px;font-weight:600;">${pc(r.actual_margin_pct)}</div></div>
+          <div><div class="hint">Margin required</div><div style="font-size:18px;font-weight:600;">${pc(r.required_margin_pct)}</div></div>
+        </div>
+      </div>
+
+      ${moving.length ? `<div class="card">
+        <h3>What moves the price</h3>
+        <div class="hint">Only risk the burning-cost cube cannot already see. Everything below is a property of the offer, of how well the book knows this population, or of members who are not on the census - never a demographic the cube has already costed.</div>
+        <div style="overflow-x:auto;">
+        <table style="margin-top:12px;">
+          <tr><th style="width:22%;">Factor</th><th>Finding</th><th style="width:16%;">Treatment</th></tr>
+          ${moving.map(factorRow).join('')}
+        </table>
+        </div>
+        ${contributions ? `<table style="margin-top:14px;">
+          <tr><th style="width:22%;">Required margin</th><th style="width:12%;">Adds</th><th>Because</th></tr>
+          <tr><th>base</th><td>+${pc(r.assumptions.base_required_margin_pct)}</td><td>a straightforward account</td></tr>
+          ${contributions}
+          <tr><th><strong>total</strong></th><td><strong>${pc(r.required_margin_pct)}</strong></td><td></td></tr>
+        </table>` : ''}
+        ${adjustments ? `<table style="margin-top:14px;">
+          <tr><th style="width:22%;">Risk price adjusted</th><th style="width:16%;">By</th><th>Because</th></tr>
+          ${adjustments}
+        </table>` : ''}
+      </div>` : ''}
+
+      ${explaining.length ? `<div class="card">
+        <h3>Already in the risk price</h3>
+        <div class="hint">Shown to explain the number, and deliberately contributing nothing to it. The cube costs every member through product, network, age band, gender, relation and nationality zone - an older or more dependant-heavy group already prices higher on its own, and loading again for it charges twice.</div>
+        <div style="overflow-x:auto;">
+        <table style="margin-top:12px;">
+          <tr><th style="width:22%;">Factor</th><th>Finding</th><th style="width:16%;">Treatment</th></tr>
+          ${explaining.map(factorRow).join('')}
+        </table>
+        </div>
+      </div>` : ''}
+
+      <div class="card">
+        <h3>Still to ask</h3>
+        <div class="hint">Nothing we hold answers these, and none of them is safely assumed benign.</div>
+        <table style="margin-top:12px;">
+          ${r.open_questions.map(q => `<tr><th style="width:22%;">${escapeHtml(q.label)}</th><td>${escapeHtml(q.finding)}</td></tr>`).join('')}
+        </table>
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 /* The client's existing cover beside what HealthCross is proposing.

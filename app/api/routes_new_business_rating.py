@@ -1076,3 +1076,128 @@ def get_case_annual_limit_exposure(case_id: int, db: Session = Depends(get_db)):
     if not claims:
         raise HTTPException(status_code=400, detail="No portfolio claims uploaded yet")
     return exposure_for_quoted_limits(claims, quoted_limits)
+
+
+def _maternity_claims_by_member(db: Session) -> dict:
+    """Maternity claims summed per member, straight off the claims book.
+
+    Kept out of the member-result pipeline deliberately: maternity is the
+    one benefit whose cost is conditional on the plan design being
+    quoted, so it has to be separable from the rest of a member's claims
+    rather than blended into one number with them.
+    """
+    totals: dict = {}
+    rows = db.query(
+        models.PortfolioClaimEntry.patient_id,
+        models.PortfolioClaimEntry.final_amount,
+        models.PortfolioClaimEntry.ip_op_maternity,
+    ).all()
+    for patient_id, amount, ip_op_maternity in rows:
+        if not patient_id or "matern" not in str(ip_op_maternity or "").lower():
+            continue
+        totals[patient_id] = totals.get(patient_id, 0.0) + (amount or 0.0)
+    return totals
+
+
+@router.get("/cases/{case_id}/opportunity-assessment")
+def get_opportunity_assessment(
+    case_id: int,
+    trend_pct: float = Query(0.10),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Is this opportunity worth writing, and at what price.
+
+    Everything the portal already knows about the case, put through one
+    conclusion - see app/scoring/rules/opportunity_risk.py. The factors
+    the burning-cost cube already prices are shown and explicitly do NOT
+    move the number; only the ones it cannot see are allowed to.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
+    from app.scoring.rules.benefits_comparison import extract_amount_aed
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube, expected_cost_for_census
+    from app.scoring.rules.opportunity_risk import assess_opportunity, book_benchmarks
+    from app.scoring.rules.proposed_benefits import proposed_benefit_rows, proposed_benefit_summary
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+
+    try:
+        results = _run_analysis(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+    except HTTPException:
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to assess against",
+        )
+
+    cube = burning_cost_cube(results, _rate_card_dicts(db))
+    # A case with a census but no plan design yet still gets an
+    # assessment. Product and Network are two of the cube's dimensions,
+    # so without them each member prices at a broader cell - which the
+    # credibility factor then reports honestly, rather than the whole
+    # view refusing to appear until every dropdown is set.
+    categories = _resolve_auto_quote_categories(case, db) or []
+    design_by_category = {c["category"]: c for c in categories}
+    priced_census = [
+        {
+            **member,
+            "product": (design_by_category.get(member.get("category")) or {}).get("product"),
+            "network": _burning_cost_lookup_network(
+                (design_by_category.get(member.get("category")) or {}).get("network")
+            ),
+        }
+        for member in census
+    ]
+    priced = expected_cost_for_census(priced_census, cube)
+    priced_members = [m for m in priced["members"] if m.get("expected_cost") is not None]
+
+    # The risk price and the card price, from the same two places the
+    # Risk-based price card already reads them, so the two views can
+    # never disagree about what is being compared.
+    risk_price = None
+    try:
+        risk_price = get_risk_based_price(case_id, trend_pct=trend_pct, as_of=as_of, db=db)["suggested_premium"]
+    except HTTPException:
+        pass
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    quoted_price = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+
+    # The plan being proposed, and how it sits against the incumbent's.
+    variant_rates = _variant_rate_dicts(db)
+    quoted_categories = _normalize_quote_categories(quote.categories or []) if quote else []
+    selections = quoted_categories[0].get("variant_selections") if quoted_categories else {}
+    proposed_summary = proposed_benefit_summary(selections or {}, variant_rates)
+    existing_plan = next((p for p in case.benefit_plans if p.role == "existing"), None)
+    comparison_rows = proposed_benefit_rows(
+        existing_plan.standard_summary if existing_plan else None, selections or {}, variant_rates
+    )
+
+    maternity_value = proposed_summary.get("maternity_limit") or ""
+    maternity_covered = bool(maternity_value) and "not covered" not in maternity_value.lower()
+    existing_maternity = (existing_plan.standard_summary or {}).get("maternity_limit") if existing_plan else None
+    proposed_amount = extract_amount_aed(maternity_value)
+    existing_amount = extract_amount_aed(existing_maternity)
+    maternity_richer = bool(proposed_amount and existing_amount and proposed_amount > existing_amount)
+
+    return assess_opportunity(
+        census_rows=census,
+        priced_members=priced_members,
+        benchmarks=book_benchmarks(results, _maternity_claims_by_member(db)),
+        risk_price_aed=risk_price,
+        quoted_price_aed=quoted_price,
+        comparison_rows=comparison_rows,
+        proposed_summary=proposed_summary,
+        maternity_covered=maternity_covered,
+        maternity_richer_than_incumbent=maternity_richer,
+    )

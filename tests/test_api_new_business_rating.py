@@ -532,3 +532,91 @@ def test_new_business_quote_by_tier_matches_a_stale_un_normalized_category_from_
     bronze = next(r for r in resp.json() if r["product"] == "Bronze")
     assert bronze["case_gross_annual_premium"] == pytest.approx(4200.0 / (1 - 0.265), rel=1e-6)
     assert bronze["categories"][0]["member_count"] == 2
+
+
+# --- GET /cases/{id}/opportunity-assessment -----------------------------
+
+def _upload_portfolio_book(client):
+    """A minimal book with claims, so there is experience to assess
+    against - the assessment reads every benchmark off it.
+    """
+    from datetime import date
+
+    from app.models import db_models as models
+
+    db = client.db_session_local()
+    members, claims = [], []
+    for i in range(60):
+        beneficiary = f"B{i}"
+        relation = "Employee" if i % 3 else "Child"
+        members.append(dict(
+            beneficiary_id=beneficiary, relation=relation,
+            age=35 if relation == "Employee" else (0 if i % 6 == 0 else 10),
+            gender="M", nationality_zone="Zone 1",
+            policy_start_date=date(2025, 1, 1), policy_end_date=date(2026, 1, 1),
+            member_start_date=date(2025, 1, 1), member_end_date=date(2026, 1, 1),
+            gross_premium=10_000.0, net_premium=8_000.0,
+        ))
+        claims.append(dict(
+            patient_id=beneficiary, final_amount=5_000.0, claim_status="Paid Claims",
+            date_of_treatment=date(2025, 6, 1), ip_op_maternity="OP",
+            policy_start_date=date(2025, 1, 1), policy_end_date=date(2026, 1, 1),
+            member_start_date=date(2025, 1, 1), member_end_date=date(2026, 1, 1),
+        ))
+    db.bulk_insert_mappings(models.PortfolioMember, members)
+    db.bulk_insert_mappings(models.PortfolioClaimEntry, claims)
+    db.commit()
+    db.close()
+
+
+def test_opportunity_assessment_needs_a_census_first(client):
+    db = client.db_session_local()
+    from app.models import db_models as models
+
+    case = models.Case(broker_name="B", company_name="C", industry="trading")
+    db.add(case)
+    db.commit()
+    case_id = case.id
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/opportunity-assessment")
+    assert resp.status_code == 400
+    assert "census" in resp.json()["detail"].lower()
+
+
+def test_opportunity_assessment_says_so_when_there_is_no_book_to_assess_against(client):
+    case_id = _make_case(client)
+    resp = client.get(f"/cases/{case_id}/opportunity-assessment")
+    assert resp.status_code == 400
+    assert "experience" in resp.json()["detail"].lower()
+
+
+def test_opportunity_assessment_returns_factors_and_one_conclusion(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    _upload_portfolio_book(client)
+    case_id = _make_case(client)
+
+    resp = client.get(f"/cases/{case_id}/opportunity-assessment")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["factors"], "an assessment with no factors is not an assessment"
+    assert body["verdict"]["verdict"]
+    assert body["required_margin_pct"] >= 0
+    # Every factor states how it should be treated, and nothing that the
+    # cube already prices is allowed to move the number.
+    assert all(f["treatment"] in
+               {"already_in_price", "load", "widen_margin", "ask"} for f in body["factors"])
+    moving = {c["key"] for c in body["required_margin_contributions"]}
+    priced_in = {f["key"] for f in body["factors"] if f["treatment"] == "already_in_price"}
+    assert not (moving & priced_in)
+
+
+def test_opportunity_assessment_carries_the_open_questions_it_cannot_answer(client, rate_card_files):
+    _upload_rate_cards(client, rate_card_files)
+    _upload_portfolio_book(client)
+    case_id = _make_case(client)
+
+    body = client.get(f"/cases/{case_id}/opportunity-assessment").json()
+    assert {q["key"] for q in body["open_questions"]} == {
+        "participation", "incumbent_loss_ratio", "reason_for_moving"
+    }
