@@ -6048,7 +6048,65 @@ async function nbRenderArea() {
       <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
+    <div id="nb-nationality-mix-area"></div>
   `;
+  loadNbNationalityMix();
+}
+
+/* What this enquiry's nationality mix is worth on the price.
+   A scheme that is mostly a nationality running at 0.75x on the book is
+   genuinely cheaper to insure than the card assumes and can be chased;
+   one that is mostly a 1.4x nationality is not, and quoting it at card
+   rates is how a book ends up underwater. The adjusted price sits beside
+   the card price rather than replacing it - this is a competitive
+   judgement, not a correction. */
+async function loadNbNationalityMix() {
+  const area = document.getElementById('nb-nationality-mix-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/nationality-mix-pricing`);
+    if (r.factor == null) { area.innerHTML = ''; return; }
+    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+    const dirClass = r.direction === 'favourable' ? 'dir-improved' : r.direction === 'adverse' ? 'dir-review' : 'dir-same';
+
+    const rows = r.contributions.map(c => `
+      <tr>
+        <td>${escapeHtml(c.nationality)}</td>
+        <td>${escapeHtml(c.nationality_zone || '-')}</td>
+        <td class="num">${c.member_count}</td>
+        <td class="num">${(c.share_of_census * 100).toFixed(0)}%</td>
+        <td class="num"><span class="tier-pill ${c.relativity < 0.98 ? 'dir-improved' : c.relativity > 1.02 ? 'dir-review' : 'dir-same'}">${c.relativity.toFixed(2)}&times;</span></td>
+        <td class="num">${c.credibility == null ? '-' : (c.credibility * 100).toFixed(0) + '%'}</td>
+        <td class="num">${c.book_exposure_member_years == null ? '-' : Number(c.book_exposure_member_years).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
+      </tr>`).join('');
+
+    const q = r.quote;
+    area.innerHTML = `
+      <div class="card">
+        <h3>Nationality mix <span class="tier-pill ${dirClass}">${escapeHtml(r.direction)}</span></h3>
+        <div class="hint">What this census's own nationality mix has cost on HealthCross's own book, relative to a book-average member. Each nationality's factor is credibility-blended toward its zone, so a thin one cannot swing on a single claim.</div>
+        <div class="kpi-grid" style="margin-top:14px;">
+          <div class="kpi"><span class="label">Mix factor</span><div class="value">${r.factor.toFixed(2)}&times;</div>
+            <span class="label" style="margin:4px 0 0;">${r.capped ? `capped from ${r.raw_factor.toFixed(2)}&times;` : 'within normal bounds'}</span></div>
+          <div class="kpi"><span class="label">Measurable</span><div class="value">${(r.measurable_share * 100).toFixed(0)}%</div>
+            <span class="label" style="margin:4px 0 0;">${r.measured_member_count} of ${r.member_count} members</span></div>
+          ${q ? `
+            <div class="kpi"><span class="label">Card price</span><div class="value">${money(q.card_premium)}</div></div>
+            <div class="kpi"><span class="label">Mix-adjusted</span><div class="value">${money(q.mix_adjusted_premium)}</div>
+              <span class="label" style="margin:4px 0 0;">${q.difference_pct > 0 ? '+' : ''}${q.difference_pct}% (${money(q.difference)})</span></div>` : ''}
+        </div>
+        ${q ? `<div class="hint" style="margin-top:10px;"><strong>${q.applied ? 'Applied' : 'Not applied'}:</strong> ${escapeHtml(q.reason)}. The card price stands on its own - this is what the mix justifies chasing, not a correction to the quote.</div>` : ''}
+        <table style="margin-top:14px;">
+          <tr><th>Nationality</th><th>Zone</th><th class="num">Members</th><th class="num">Share</th>
+            <th class="num">Factor</th><th class="num">Credibility</th><th class="num">Book exposure</th></tr>
+          ${rows}
+        </table>
+        ${r.unmeasured && r.unmeasured.length ? `<div class="hint" style="margin-top:10px;">${r.unmeasured.reduce((a, u) => a + u.member_count, 0)} member(s) have a nationality with too little book experience to price on (${r.unmeasured.slice(0, 5).map(u => escapeHtml(u.nationality)).join(', ')}${r.unmeasured.length > 5 ? '&hellip;' : ''}). They are left out of the factor rather than averaged in at neutral, which would drag it toward 1.00 and hide the real signal.</div>` : ''}
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 function nbCategoryCardHtml(cat, idx) {

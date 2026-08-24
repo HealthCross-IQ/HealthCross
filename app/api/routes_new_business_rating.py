@@ -194,6 +194,12 @@ def _case_census_dicts(case: models.Case) -> List[dict]:
             "marital_status": c.marital_status,
             "relation": c.relation,
             "emirates": c.emirates,
+            # Not used by rate-card pricing (the card has no nationality
+            # dimension) - carried for the nationality mix factor, which
+            # prices off the book's own experience by nationality rather
+            # than off the card. See nationality_mix_pricing.
+            "nationality": c.nationality,
+            "nationality_zone": c.nationality_zone,
         }
         for c in case.census_records
     ]
@@ -422,6 +428,56 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     rate_cards = _rate_card_dicts(db)
     variant_rates = _variant_rate_dicts(db)
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
+
+
+@router.get("/cases/{case_id}/nationality-mix-pricing")
+def get_case_nationality_mix_pricing(
+    case_id: int,
+    require_pricing_ready: bool = Query(True, description="Only let nationalities with enough book exposure contribute their own factor"),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """What this enquiry's nationality mix is worth on the price.
+
+    A scheme that is mostly a nationality running at 0.75x on the book is
+    genuinely cheaper to insure than the rate card assumes and can be
+    priced to win; one that is mostly a 1.4x nationality is not, and
+    quoting it at card rates is how a book ends up underwater. Returns the
+    factor, what it rests on, and the quote with and without it - the
+    decision stays with the underwriter.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+    from app.scoring.rules.nationality_mix_pricing import apply_mix_to_quote, nationality_mix_factor
+    from app.scoring.rules.portfolio_analysis import nationality_risk_table
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Case has no census to measure a nationality mix from")
+
+    try:
+        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+    except HTTPException:
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio Analysis has no membership/claims uploaded - there is no nationality experience to price against",
+        )
+
+    mix = nationality_mix_factor(
+        census, nationality_risk_table(results), require_pricing_ready=require_pricing_ready
+    )
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    gross = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+    return {**mix, "quote": apply_mix_to_quote(gross, mix) if gross else None}
 
 
 @router.get("/new-business/rate-card-calibration")
