@@ -427,6 +427,71 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
 
 
+@router.get("/cases/{case_id}/quote-readiness")
+def get_quote_readiness(case_id: int, db: Session = Depends(get_db)):
+    """Why this case will not price, said out loud.
+
+    Auto-quoting is silent by design - it must never turn a successful
+    upload into a failed one - which leaves a user who uploaded a table of
+    benefits and saw nothing change with no way to tell whether the portal
+    is broken, still working, or waiting on them. This runs the same
+    resolution and reports what it found.
+
+    It separates "not done yet" from "wrong", because they look identical
+    on screen and need opposite responses: a category with no Product
+    chosen is waiting for a decision, while a benefit plan whose category
+    letter matches nothing in the census will never resolve however long
+    anyone waits.
+    """
+    from app.scoring.rules.quote_readiness import quote_readiness
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    counts: Dict[str, int] = defaultdict(int)
+    for record in case.census_records:
+        category = _normalize_category(record.category)
+        if category:
+            counts[category] += 1
+
+    plans = [
+        {
+            "plan_name": p.plan_name,
+            "category": p.category,
+            "product": p.nb_product,
+            "network": p.nb_network,
+            "tpa": p.nb_tpa,
+        }
+        for p in case.benefit_plans
+        if p.role == "existing"
+    ]
+
+    latest = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    prior = _normalize_quote_categories(latest.categories or []) if latest else []
+
+    readiness = quote_readiness(dict(counts), plans, prior_quote_categories=prior)
+    readiness["uncategorised_member_count"] = sum(
+        1 for r in case.census_records if not _normalize_category(r.category)
+    )
+    readiness["census_member_count"] = len(case.census_records)
+    readiness["has_rate_card"] = bool(_rate_card_dicts(db))
+    if not readiness["has_rate_card"]:
+        readiness["blockers"].insert(0, {
+            "severity": "blocking",
+            "issue": "No rate card uploaded",
+            "detail": "Nothing can be priced without one, whatever else is set on the case.",
+            "fix_at": "Rate Cards",
+        })
+        readiness["can_price"] = False
+    return readiness
+
+
 @router.get("/cases/{case_id}/risk-based-price")
 def get_risk_based_price(
     case_id: int,

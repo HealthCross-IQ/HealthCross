@@ -6048,11 +6048,74 @@ async function nbRenderArea() {
       <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
+    <div id="nb-readiness-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
+  loadNbQuoteReadiness();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* Why this case will not price, said out loud.
+   Auto-quoting is silent by design - it must never turn a successful
+   upload into a failed one - which leaves someone who uploaded a table of
+   benefits and saw nothing change with no way to tell whether the portal
+   is broken, still working, or waiting on them. This says which. */
+async function loadNbQuoteReadiness() {
+  const area = document.getElementById('nb-readiness-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/quote-readiness`);
+    if (r.can_price && !r.blockers.length) {
+      area.innerHTML = `
+        <div class="card">
+          <h3>Ready to price <span class="tier-pill dir-improved">${r.ready_category_count} of ${r.category_count} categories</span></h3>
+          <div class="hint">Every category has a Product, Network and TPA. Quotes re-compute automatically whenever the census, benefits or rate card change.</div>
+        </div>`;
+      return;
+    }
+
+    const blockers = r.blockers.map(b => `
+      <tr>
+        <td><span class="tier-pill ${b.severity === 'mistake' ? 'dir-review' : 'dir-same'}">${b.severity === 'mistake' ? 'Needs correcting' : 'Not set yet'}</span></td>
+        <td><strong>${escapeHtml(b.issue)}</strong><div class="hint" style="margin:3px 0 0;">${escapeHtml(b.detail)}</div></td>
+        <td>${escapeHtml(b.fix_at)}</td>
+      </tr>`).join('');
+
+    const cats = r.categories.map(c => `
+      <tr>
+        <td>${escapeHtml(c.category)}</td>
+        <td class="num">${c.member_count}</td>
+        <td>${c.product ? escapeHtml(c.product) : '<span class="hint">not set</span>'}</td>
+        <td>${c.network ? escapeHtml(c.network) : '<span class="hint">not set</span>'}</td>
+        <td>${c.tpa ? escapeHtml(c.tpa) : '<span class="hint">not set</span>'}</td>
+        <td>${c.ready ? '<span class="tier-pill dir-improved">ready</span>' : `<span class="tier-pill dir-review">missing ${c.missing.join(', ')}</span>`}</td>
+        <td class="hint">${Object.values(c.sources || {}).length ? [...new Set(Object.values(c.sources))].join(', ') : '-'}</td>
+      </tr>`).join('');
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>This case is not pricing yet</h3>
+        <div class="hint">Auto-quoting stays silent when it cannot resolve every category - it must never turn a successful upload into a failed one. Here is what it found instead of nothing.</div>
+        <div class="hint"><strong>Pricing is all-or-nothing:</strong> one unresolved category and no category prices, so ${r.ready_category_count} of ${r.category_count} ready is not partial progress.</div>
+        <table style="margin-top:14px;">
+          <tr><th>Status</th><th>What is standing in the way</th><th>Where to fix it</th></tr>
+          ${blockers}
+        </table>
+        ${cats ? `
+          <h4 style="margin-top:18px;">Category by category</h4>
+          <table>
+            <tr><th>Category</th><th class="num">Members</th><th>Product</th><th>Network</th><th>TPA</th><th>Status</th><th>Set from</th></tr>
+            ${cats}
+          </table>
+          <div class="hint" style="margin-top:8px;">"Set from" says where each value came from: <strong>benefits</strong> (the Benefits tab), <strong>prior quote</strong> (inherited from your last quote, which may be stale), or <strong>offer</strong> (set deliberately on this case).</div>` : ''}
+        ${r.uncategorised_member_count ? `<div class="hint" style="margin-top:10px;">${r.uncategorised_member_count} of ${r.census_member_count} census members have no Category value and will not be priced under any category.</div>` : ''}
+      </div>
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 /* The price the book says this enquiry costs, from the census and the
