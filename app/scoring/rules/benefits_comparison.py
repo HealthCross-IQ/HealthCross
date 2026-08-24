@@ -13,6 +13,11 @@ a human to look.
 import re
 from typing import Any, Dict, Optional
 
+from app.scoring.rules.benefit_equivalence import (
+    equivalent_areas,
+    equivalent_networks,
+    equivalent_values,
+)
 from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
 AED_PER_USD = 3.6725
@@ -21,8 +26,12 @@ AED_PER_USD = 3.6725
 # form OCR returns - matching only "AED" and "USD" left every limit read
 # off one of those documents uncomparable, so fields whose numbers were
 # plainly there still fell through to "review".
-_AMOUNT_RE = re.compile(r"(AED|USD|US\$|\$)\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
-_USD_MARKERS = ("USD", "US$", "$")
+# "US 200" - no dollar sign at all - is what OCR returns when the "$"
+# in "US$200" renders as a glyph it cannot read. Accepting it costs
+# nothing (the letters "US" before a number mean only one thing) and
+# without it a stated optical limit reads as no limit at all.
+_AMOUNT_RE = re.compile(r"(AED|USD|US\$|US|\$)\s*([\d,]+(?:\.\d+)?)", re.IGNORECASE)
+_USD_MARKERS = ("USD", "US$", "US", "$")
 
 
 def extract_amount_aed(text: Optional[str]) -> Optional[float]:
@@ -49,7 +58,11 @@ def extract_amount_aed(text: Optional[str]) -> Optional[float]:
 _extract_amount_aed = extract_amount_aed
 
 
-def compare_benefit_value(existing_text: Optional[str], quoted_text: Optional[str]) -> Dict[str, Any]:
+def compare_benefit_value(
+    existing_text: Optional[str],
+    quoted_text: Optional[str],
+    field: Optional[str] = None,
+) -> Dict[str, Any]:
     existing_amount = _extract_amount_aed(existing_text)
     quoted_amount = _extract_amount_aed(quoted_text)
 
@@ -70,9 +83,20 @@ def compare_benefit_value(existing_text: Optional[str], quoted_text: Optional[st
             "direction": direction,
         }
 
+    # Differently-worded statements of identical cover are the common
+    # case, not the exception - "Covered" against "Covered up to Policy
+    # Limit", "0%" against "NIL". Reporting each of them as "review"
+    # buries the two rows that are genuinely different among ten that are
+    # not, and an underwriter who has to check every row stops checking.
     existing_norm = (existing_text or "").strip().lower()
     quoted_norm = (quoted_text or "").strip().lower()
-    direction = "same" if existing_norm and quoted_norm and existing_norm == quoted_norm else "review"
+    same = (
+        (existing_norm and quoted_norm and existing_norm == quoted_norm)
+        or equivalent_values(existing_text, quoted_text, field)
+        or equivalent_areas(existing_text, quoted_text)
+        or equivalent_networks(existing_text, quoted_text)
+    )
+    direction = "same" if same else "review"
     return {
         "existing": existing_text,
         "quoted": quoted_text,
@@ -85,6 +109,6 @@ def compare_benefit_value(existing_text: Optional[str], quoted_text: Optional[st
 
 def compare_benefit_summaries(existing_summary: Dict[str, str], quoted_summary: Dict[str, str]) -> Dict[str, Dict[str, Any]]:
     return {
-        field: compare_benefit_value(existing_summary.get(field), quoted_summary.get(field))
+        field: compare_benefit_value(existing_summary.get(field), quoted_summary.get(field), field)
         for field in STANDARD_FIELDS
     }

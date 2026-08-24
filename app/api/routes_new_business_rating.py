@@ -363,6 +363,11 @@ def _resolve_auto_quote_categories(case: models.Case, db: Session) -> Optional[L
                 "product": product,
                 "network": network,
                 "tpa": tpa,
+                # Carried from the prior quote so a Plan Details import's
+                # own Zone survives an automatic re-quote - dropping it
+                # would blank the proposal's area of cover the first time
+                # anything else on the case changed.
+                "zone": prior.get("zone"),
                 "commission_pct": prior.get("commission_pct"),
                 "variant_selections": prior.get("variant_selections") or {},
             }
@@ -504,6 +509,12 @@ def upload_hc_plan_details(case_id: int, file: UploadFile = File(...), db: Sessi
             "product": entry["product"],
             "network": entry["network"],
             "tpa": entry["tpa"],
+            # The export's Zone is the proposal's area of cover. It is
+            # parsed and was then dropped here, which is why the
+            # existing-vs-proposed table showed an area of cover on the
+            # incumbent's side and nothing on HealthCross's - for a
+            # proposal that had in fact stated one.
+            "zone": entry.get("zone"),
             "variant_selections": entry["variant_selections"],
         })
 
@@ -596,11 +607,16 @@ def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
                 (plan.standard_summary if plan else None),
                 selections_by_category.get(category),
                 variant_rates,
-                # Network is chosen on the case, not on a benefit
-                # dropdown - but it is still part of the proposal, and
-                # the row that frames every limit under it should not
-                # read as blank.
-                proposed_overrides={"network": design.get("network")},
+                # Network and Area of Cover are both chosen on the case
+                # rather than on a benefit dropdown - Area of Cover is
+                # the rate card's own Zone - but both are still part of
+                # the proposal. Left blank they read as something
+                # HealthCross had not offered, when in fact they are the
+                # two lines that frame every limit underneath them.
+                proposed_overrides={
+                    "network": design.get("network"),
+                    "area_of_cover": design.get("zone"),
+                },
             ),
         })
     return {"categories": out, "has_quote": bool(quote)}

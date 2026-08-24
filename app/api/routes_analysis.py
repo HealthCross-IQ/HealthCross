@@ -691,7 +691,7 @@ def get_benefits_comparison(case_id: int, db: Session = Depends(get_db)):
         quoted_summary = _benefit_summary(quoted_plan)
 
         fields = compare_benefit_summaries(existing_summary, quoted_summary)
-        fields["network"] = compare_benefit_value(existing_plan.network_type, quoted_plan.network_type)
+        fields["network"] = compare_benefit_value(existing_plan.network_type, quoted_plan.network_type, "network")
 
         comparisons.append(
             {

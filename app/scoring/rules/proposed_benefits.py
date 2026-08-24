@@ -164,7 +164,7 @@ def proposed_benefit_rows(
     for field in fields:
         existing_value = existing_summary.get(field)
         proposed_value = proposed.get(field)
-        comparison = compare_benefit_value(existing_value, proposed_value)
+        comparison = compare_benefit_value(existing_value, proposed_value, field)
 
         rows.append({
             "field": field,
