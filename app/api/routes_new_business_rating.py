@@ -467,11 +467,17 @@ def get_risk_based_price(
 
     categories = _resolve_auto_quote_categories(case, db)
     if not categories:
+        # Two routes get a category its plan design, and a case with a
+        # census but no benefits document uses the second one - so the
+        # message must name it. Saying only "Benefits tab" sends an
+        # underwriter who is deliberately keying the benefits in by hand
+        # to the one place that cannot help them.
         raise HTTPException(
             status_code=400,
             detail=(
-                "Every census category needs a Product/Network/TPA on the Benefits tab "
-                "before this can price - that is what says which plan each category is buying"
+                "Each census category needs a Product, Network and TPA before this can price. "
+                "Set them per category on the New Business Quote tab below and press Compute quote, "
+                "or upload a table of benefits and set them on the Benefits tab - either works."
             ),
         )
 

@@ -282,3 +282,47 @@ def test_the_comparison_reports_the_books_own_cost_not_a_forward_projection(
     ).json()
     assert flat["categories"][0]["net_annual_premium"] == 90.0
     assert trended["categories"][0]["net_annual_premium"] == pytest.approx(99.0)
+
+
+def test_a_census_with_no_benefits_document_can_still_be_risk_priced(
+    client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx
+):
+    """The common new-business shape: a census arrives, no table of
+    benefits does, and the underwriter keys the plan design in by hand on
+    the New Business Quote tab. That route has to reach a risk-based
+    price - routing them to the Benefits tab, which they deliberately are
+    not using, is a dead end.
+    """
+    _upload_portfolio_book(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx)
+    case_id = client.post(
+        "/cases", json={"broker_name": "B", "company_name": "Census Only", "industry": "trading"}
+    ).json()["id"]
+
+    db = client.db_session_local()
+    from app.models import db_models as models
+    db.add(models.CensusRecord(case_id=case_id, category="A", age=35, gender="M",
+                               marital_status="single", relation="employee",
+                               emirates="Dubai", nationality="India"))
+    db.commit()
+    db.close()
+
+    # Nothing configured yet: refused, but the message names BOTH routes.
+    resp = client.get(f"/cases/{case_id}/risk-based-price")
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "New Business Quote tab" in detail
+    assert "Benefits tab" in detail
+
+    # Plan design set on the quote tab - no benefits document anywhere.
+    assert not client.get(f"/cases/{case_id}/benefit-plans").json()
+    client.post(f"/cases/{case_id}/new-business-quote", json={"categories": [
+        {"category": "A", "product": "Gold", "network": "MSH Platinum",
+         "tpa": "MSH MENA", "variant_selections": {}}]})
+
+    resp = client.get(f"/cases/{case_id}/risk-based-price")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["suggested_premium"] > 0
+    assert body["rate_card_premium"] > 0
+    assert body["gap_pct"] is not None
+    assert body["categories"][0]["product"] == "Gold"
