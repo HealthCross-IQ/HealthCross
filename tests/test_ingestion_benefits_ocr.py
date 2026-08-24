@@ -161,3 +161,88 @@ def test_recognizes_trucare_style_maternity_limit_wording_across_a_long_clarific
     # this template.
     summary = build_ocr_benefit_summary([_TRUCARE_PAGE_5])
     assert summary["maternity_limit"] == "10,000"
+
+
+# --- "has text" is not the same question as "has readable text" ---------
+
+def test_readable_share_treats_private_use_glyphs_as_unreadable():
+    from app.ingestion.benefits_ocr import _readable_share
+
+    # A subsetted font with no ToUnicode map extracts its glyphs into the
+    # Private Use Area. Mechanically this is text; usefully it is nothing.
+    pua = "".join(chr(0xF000 + i) for i in range(0x20, 0x60))
+    assert _readable_share(pua) == 0.0
+    assert _readable_share("Annual Limit USD 1,000,000") == 1.0
+    assert _readable_share("   \n  ") == 0.0
+
+
+def test_a_little_pua_among_real_text_stays_on_the_text_path():
+    # An icon font or a bullet glyph must not push a perfectly readable
+    # page onto the slow OCR path.
+    from app.ingestion.benefits_ocr import _MIN_READABLE_SHARE, _readable_share
+
+    mostly_text = "Dental USD 2,000 Co-pay 20%" + chr(0xF041) + chr(0xF042)
+    assert _readable_share(mostly_text) > _MIN_READABLE_SHARE
+
+
+def test_a_page_of_scrambled_glyphs_is_treated_as_needing_ocr(monkeypatch):
+    """The bug this guards, seen on a real Haworth table of benefits.
+
+    The document extracted 1,763 characters on one page and not a single
+    readable letter - every glyph in the Private Use Area. The old check
+    asked "is there text?", got yes, and skipped OCR. The parser then
+    matched nothing against gibberish and produced a plan whose every
+    field read "not specified in source document" - which looks like a
+    document that omitted them rather than one that was never read.
+    """
+    import io
+    from app.ingestion import benefits_ocr
+
+    scrambled = "".join(chr(0xF000 + (i % 0x5E) + 0x20) for i in range(1500))
+
+    class _Page:
+        def __init__(self, text):
+            self._text = text
+
+        def extract_text(self):
+            return self._text
+
+    class _Pdf:
+        def __init__(self, pages):
+            self.pages = pages
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(benefits_ocr.pdfplumber, "open", lambda f: _Pdf([_Page(""), _Page(scrambled)]))
+    assert benefits_ocr.is_scanned_pdf(io.BytesIO(b"x")) is True
+
+    monkeypatch.setattr(
+        benefits_ocr.pdfplumber, "open",
+        lambda f: _Pdf([_Page(""), _Page("Annual Limit USD 1,000,000 Dental USD 2,000")]),
+    )
+    assert benefits_ocr.is_scanned_pdf(io.BytesIO(b"x")) is False
+
+
+def test_a_pdf_with_no_text_at_all_still_reads_as_scanned(monkeypatch):
+    import io
+    from app.ingestion import benefits_ocr
+
+    class _Page:
+        def extract_text(self):
+            return ""
+
+    class _Pdf:
+        pages = [_Page(), _Page()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(benefits_ocr.pdfplumber, "open", lambda f: _Pdf())
+    assert benefits_ocr.is_scanned_pdf(io.BytesIO(b"x")) is True

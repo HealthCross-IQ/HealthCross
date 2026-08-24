@@ -100,16 +100,60 @@ _COVERED_RE = re.compile(r"\bNot Covered\b|\bCovered\b", re.IGNORECASE)
 _WORD_RE = re.compile(r"\S+")
 
 
+#: Below this share of readable characters, an "extractable" page is not
+#: worth reading. A page of Private Use Area codepoints extracts as
+#: thousands of characters and contains no words - see is_scanned_pdf.
+_MIN_READABLE_SHARE = 0.35
+
+
+def _readable_share(text: str) -> float:
+    """How much of this text is characters a parser can actually match on.
+
+    Private Use Area codepoints (U+E000-U+F8FF) are the giveaway: a PDF
+    built from a subsetted font with no ToUnicode map extracts its glyphs
+    as PUA, which is text by every mechanical test and unreadable by any
+    useful one.
+    """
+    stripped = "".join(text.split())
+    if not stripped:
+        return 0.0
+    readable = sum(
+        1 for ch in stripped
+        if ch.isprintable() and ord(ch) < 0x2000 and not (0xE000 <= ord(ch) <= 0xF8FF)
+    )
+    return readable / len(stripped)
+
+
 def is_scanned_pdf(file: BinaryIO) -> bool:
-    """True if none of the PDF's pages have any extractable text at all -
-    i.e. every page is a raster image with no underlying text layer."""
+    """True if the PDF has no text worth reading - so the caller should
+    OCR it rather than parse its text layer.
+
+    The question is deliberately "is the text usable?", not "is there
+    text?". Those differ on a whole class of real documents, and the
+    difference is silent: a table of benefits built from a subsetted font
+    with no ToUnicode map extracts thousands of Private Use Area
+    codepoints per page. Every mechanical test says it has text, so OCR
+    never runs, the parser matches nothing against gibberish, and the
+    result is a plan whose every field reads "not specified in source
+    document" - which looks like a document that omitted them rather than
+    one that was never read.
+
+    A page mixing a little PUA with real text (an icon font, a bullet
+    glyph) stays on the text path; only a page that is mostly unreadable
+    is treated as needing OCR.
+    """
     file.seek(0)
     try:
         with pdfplumber.open(file) as pdf:
-            has_text = any((page.extract_text() or "").strip() for page in pdf.pages[:5])
+            pages = pdf.pages[:5]
+            has_readable_text = any(
+                _readable_share(page.extract_text() or "") >= _MIN_READABLE_SHARE
+                and (page.extract_text() or "").strip()
+                for page in pages
+            )
     finally:
         file.seek(0)
-    return not has_text
+    return not has_readable_text
 
 
 def ocr_pdf_pages(file: BinaryIO, resolution: int = 300) -> List[str]:
