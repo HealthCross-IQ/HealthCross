@@ -2013,6 +2013,17 @@ function printTabAsPdf(tabId, title) {
    and putting them in a broker's hands is how a negotiation is lost
    before it starts. The variant is not a styling choice; it decides
    which numbers exist in the document at all. */
+// The internal document is a URL now, so opening it is one synchronous
+// call inside the click. Nothing is awaited first, which is what made
+// the old button fail: by the time six fetches had returned, the browser
+// no longer treated the new tab as something the user had asked for and
+// killed it without a word. The server renders the same figures the
+// screen shows - see app/reports/underwriting_report.py.
+function openUnderwritingDashboard() {
+  if (!currentCase) { toast('Open a case first', true); return; }
+  window.open(`${API}/cases/${currentCase.id}/underwriting-report.html`, '_blank');
+}
+
 async function printNewBusinessSummary(variant) {
   if (!currentCase) return;
   const internal = variant === 'internal';
@@ -2898,7 +2909,7 @@ function renderCaseWorkspace() {
     <div class="tab-panel" data-tab="new-business">
       <div style="text-align:right; margin-bottom:8px;">
         <button onclick="printTabAsPdf('new-business', 'New Business Rating')">Print / Save as PDF</button>
-        <button onclick="printNewBusinessSummary('internal')">New Business Summary (Internal)</button>
+        <button onclick="openUnderwritingDashboard()">Underwriting Dashboard (Internal)</button>
         <button class="primary" onclick="printNewBusinessSummary('broker')">Quotation (Broker)</button>
       </div>
       <div id="new-business-rating-area"></div>

@@ -10,6 +10,7 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
@@ -1591,17 +1592,22 @@ def get_underwriting_report(
     )
 
     proposed, comparison_rows = _proposed_and_comparison(case, db)
+    # The same call the Benefits tab makes, so the printed comparison and
+    # the on-screen one cannot disagree about what was offered.
+    comparison_categories = get_existing_vs_proposed(case_id, db=db)["categories"]
     maternity_value = (proposed or {}).get("maternity_limit") or ""
     pharmacy_value = (proposed or {}).get("pharmacy_limit_and_coinsurance") or ""
     deductible_value = (proposed or {}).get("deductible") or ""
 
     employees = [m for m in census if str(m.get("relation") or "").strip().lower() == "employee"]
     employee_ages = [m["age"] for m in employees if m.get("age") is not None]
-    maternity_females = [
-        m for m in census
-        if str(m.get("gender") or "").strip().upper().startswith("F")
-        and m.get("age") is not None and 20 <= m["age"] <= 45
-    ]
+    # Maternity exposure is read off the census summary rather than
+    # counted again here. Counting it twice gave the report two answers
+    # for one question - the dashboard said 24.1% and the census page
+    # 18.5%, because one counted every female 20-45 and the other the
+    # married 18-40 the rest of the portal prices on.
+    census_summary = _census_summary_or_none(case) or {}
+    maternity_share = census_summary.get("maternity_risk_pct")
 
     own_vs_book = None
     if experience.get("experience"):
@@ -1616,7 +1622,7 @@ def get_underwriting_report(
             sum(employee_ages) / len(employee_ages) if employee_ages else None
         ),
         "gender_maternity": gender_maternity_score(
-            len(maternity_females) / len(census) if census else None,
+            maternity_share,
             maternity_capped=bool(_amount_in(maternity_value)),
         ),
         "benefit_design": benefit_design_score(
@@ -1673,6 +1679,137 @@ def get_underwriting_report(
             f"{int(t * 100)}%": premium_for_target_loss_ratio(expected_claims, loading_pct, t)
             for t in (1.0, 0.95, 0.90, 0.85, 0.80)
         } if expected_claims else {},
+        "census": census_summary or None,
+        "by_category": _premium_by_category_or_none(case),
+        "benefits": {"categories": [
+            {"category": c["category"], "existing_plan_name": c["existing_plan_name"],
+             "product": c["product"], "network": c["network"], "rows": c["rows"]}
+            for c in comparison_categories
+        ]},
+        "decision": _decision(quoted, technical, break_even, scorecard, expected_claims, loading_pct),
+    }
+
+
+@router.get("/cases/{case_id}/underwriting-report.html", response_class=HTMLResponse,
+            include_in_schema=False)
+def get_underwriting_report_html(
+    case_id: int,
+    trend_pct: float = Query(0.10),
+    target_loss_ratio: float = Query(0.85),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """The same report as a page the browser can just open.
+
+    This exists because of how the print used to work. The button ran six
+    fetches and then called window.open, by which time the browser no
+    longer counted the new tab as a response to the click and silently
+    blocked it - a button that appeared to do nothing. Pointing it at a
+    URL instead makes the open synchronous and the blocker has nothing to
+    object to.
+    """
+    from app.reports.underwriting_report import render_underwriting_report
+
+    payload = get_underwriting_report(
+        case_id, trend_pct=trend_pct, target_loss_ratio=target_loss_ratio, as_of=as_of, db=db
+    )
+    return HTMLResponse(render_underwriting_report(payload))
+
+
+#: Below this share of the technical price, a discount stops being a
+#: commercial decision and becomes an underwriting one.
+DISCOUNT_AUTHORITY_FLOOR = 0.95
+
+
+def _decision(
+    quoted: Optional[float],
+    technical: Optional[float],
+    break_even: Optional[float],
+    scorecard: dict,
+    expected_claims: Optional[float],
+    loading_pct: float,
+) -> dict:
+    """What to do, and who is allowed to decide it.
+
+    A report that stops at "the loss ratio is 173%" leaves the reader to
+    work out on their own whether that means decline, re-rate, or sign.
+    This says it: the minimum price, how far the quote sits from it, and
+    the point past which the answer stops being the account handler's to
+    give.
+    """
+    recommended_minimum = technical
+    room = None
+    if quoted and recommended_minimum:
+        room = round(quoted / recommended_minimum - 1, 4)
+
+    if not quoted or not break_even:
+        verdict, headline = "incomplete", "Not enough on file to price this"
+    elif quoted < break_even:
+        verdict, headline = "decline", "Below break-even - do not issue at this price"
+    elif recommended_minimum and quoted < recommended_minimum:
+        verdict, headline = "refer", "Priced below the technical minimum - refer before issuing"
+    else:
+        verdict, headline = "proceed", "Priced at or above the technical minimum"
+
+    floor = round(recommended_minimum * DISCOUNT_AUTHORITY_FLOOR, 2) if recommended_minimum else None
+    return {
+        "verdict": verdict,
+        "headline": headline,
+        "recommended_minimum": recommended_minimum,
+        "break_even": break_even,
+        "quoted": quoted,
+        "room_vs_minimum_pct": room,
+        # Discount is taken off the claims-funding part of the price, not
+        # off the whole of it, so a 5% cut in price is more than a 5%
+        # move in loss ratio. Stating the floor in money avoids that
+        # arithmetic being done in a meeting.
+        "discount_authority_floor": floor,
+        "referral_required": verdict in {"decline", "refer"},
+        "risk_band": scorecard.get("overall_band"),
+        "risk_score": scorecard.get("overall_score"),
+        "expected_claims": expected_claims,
+        "loading_pct": loading_pct,
+    }
+
+
+def _census_summary_or_none(case) -> Optional[dict]:
+    from app.scoring.rules.census_summary import census_demographic_summary
+
+    if not case.census_records:
+        return None
+    return census_demographic_summary([
+        {"age": c.age, "gender": c.gender, "marital_status": c.marital_status,
+         "relation": c.relation, "nationality_zone": c.nationality_zone,
+         "nationality": c.nationality}
+        for c in case.census_records
+    ])
+
+
+def _premium_by_category_or_none(case) -> Optional[dict]:
+    quoted_plans = [p for p in case.benefit_plans if p.role == "quoted"]
+    if not quoted_plans:
+        return None
+    categories = [
+        {
+            "category": p.category,
+            "plan_name": p.plan_name,
+            "network": p.network_type,
+            "member_count": p.member_count,
+            "gross_premium": p.gross_premium,
+            "premium_per_member": (
+                round(p.gross_premium / p.member_count, 2)
+                if p.gross_premium is not None and p.member_count else None
+            ),
+        }
+        for p in quoted_plans
+    ]
+    total_members = sum(c["member_count"] or 0 for c in categories)
+    total_premium = sum(c["gross_premium"] or 0 for c in categories)
+    return {
+        "categories": categories,
+        "total_members": total_members,
+        "total_gross_premium": total_premium,
+        "blended_premium_per_member": round(total_premium / total_members, 2) if total_members else None,
     }
 
 
