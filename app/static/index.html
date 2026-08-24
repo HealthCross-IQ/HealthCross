@@ -6061,6 +6061,7 @@ async function nbRenderArea() {
       <div id="nb-plan-details-result"></div>
     </div>
     <div id="nb-readiness-area"></div>
+    <div id="nb-price-comparison-area"></div>
     <div id="nb-opportunity-area"></div>
     <div id="nb-existing-vs-proposed-area"></div>
     <div id="nb-annual-limit-area"></div>
@@ -6068,11 +6069,83 @@ async function nbRenderArea() {
     <div id="nb-nationality-mix-area"></div>
   `;
   loadNbQuoteReadiness();
+  loadNbPriceComparison();
   loadNbOpportunityAssessment();
   loadNbExistingVsProposed();
   loadNbAnnualLimitExposure();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* Four prices and the gaps between them - see
+   app/scoring/rules/price_comparison.py. The last gap is the one nothing
+   else in the portal has ever shown: a discount agreed in a meeting
+   leaves the computed quote untouched and the issued document different,
+   and the two are never reconciled until the account renews badly. */
+async function loadNbPriceComparison() {
+  const area = document.getElementById('nb-price-comparison-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/price-comparison`);
+    const p = r.prices, pm = r.per_member;
+    if (p.card_price == null && p.issued_price == null) { area.innerHTML = ''; return; }
+
+    const aed = v => v == null ? '—' : Math.round(v).toLocaleString();
+    const pct = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
+    const signed = v => v == null ? '—' : (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
+    const lrPill = v => v == null ? '<span class="hint">—</span>'
+      : `<span class="tier-pill ${v > 1 ? 'dir-review' : v > 0.9 ? '' : 'dir-improved'}">${pct(v)}</span>`;
+
+    // The discount block only appears when there is an issued quote to
+    // compare against - an absent one is not a 100% discount.
+    const d = r.discount;
+    const discountBlock = !d ? '' : `
+      <div class="card">
+        <h3>${d.direction === 'discount' ? 'Discount given' : d.direction === 'loaded' ? 'Issued above the card' : 'Price held'}
+          <span class="tier-pill ${d.direction === 'discount' ? 'dir-review' : d.direction === 'loaded' ? 'dir-improved' : 'dir-same'}">${signed(d.pct)}</span>
+        </h3>
+        <div class="hint">A discount does not come off margin - it comes off the money that funds claims. At a
+          ${pct(r.loading_pct)} loading, premium &times; ${(1 - r.loading_pct).toFixed(3)} pays claims, and the expected
+          claims do not move. So a ${pct(Math.abs(d.pct))} move in price changes the loss ratio by more than
+          ${pct(Math.abs(d.pct))}.</div>
+        <div class="row" style="margin-top:14px; gap:28px; flex-wrap:wrap;">
+          <div><div class="hint">Amount</div><div style="font-size:18px;font-weight:600;">AED ${aed(Math.abs(d.amount_aed))}</div></div>
+          <div><div class="hint">Implied LR at the card price</div><div style="font-size:18px;font-weight:600;">${pct(d.implied_loss_ratio_before)}</div></div>
+          <div><div class="hint">Implied LR as issued</div><div style="font-size:18px;font-weight:600;">${pct(d.implied_loss_ratio_after)}</div></div>
+          <div><div class="hint">Movement</div><div style="font-size:18px;font-weight:600;">${signed(d.loss_ratio_movement)}</div></div>
+        </div>
+      </div>`;
+
+    const unpriced = r.issued_quote.categories_without_a_premium;
+    area.innerHTML = `
+      <div class="card">
+        <h3>What the price should have been, and what went out</h3>
+        <div class="hint">Loss ratio is measured against the part of each premium that actually funds claims
+          (premium &times; ${(1 - r.loading_pct).toFixed(3)} at this case's ${pct(r.loading_pct)} loading), never against
+          gross premium - measuring against gross flatters every account by exactly the loading.</div>
+        <div style="overflow-x:auto;">
+        <table style="margin-top:12px;">
+          <tr><th style="width:26%;">Price</th><th class="num">Total (AED)</th><th class="num">Per member</th><th class="num">Implied LR</th><th>What it answers</th></tr>
+          <tr><th>Expected claims</th><td class="num">${aed(p.expected_claims)}</td><td class="num">${aed(pm.expected_claims)}</td><td class="num"><span class="hint">—</span></td><td class="hint">what these members should cost, from our own book</td></tr>
+          <tr><th>Risk-based price</th><td class="num">${aed(p.risk_price)}</td><td class="num">${aed(pm.risk_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_risk_price)}</td><td class="hint">expected claims, carried for trend and industry, grossed up</td></tr>
+          <tr><th>Rate card quote</th><td class="num">${aed(p.card_price)}</td><td class="num">${aed(pm.card_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_card_price)}</td><td class="hint">what the card charges for this plan design</td></tr>
+          <tr><th><strong>Issued quote</strong></th><td class="num"><strong>${aed(p.issued_price)}</strong></td><td class="num">${aed(pm.issued_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_issued_price)}</td><td class="hint">what the broker actually received</td></tr>
+        </table>
+        </div>
+        <table style="margin-top:14px;">
+          <tr><th style="width:26%;">Card vs risk price</th><td class="num" style="width:14%;">${signed(r.gaps.card_vs_risk_pct)}</td><td class="hint">is the card adequate for this population?</td></tr>
+          <tr><th>Issued vs card</th><td class="num">${signed(r.gaps.issued_vs_card_pct)}</td><td class="hint">what was given away in the room</td></tr>
+          <tr><th>Issued vs risk price</th><td class="num">${signed(r.gaps.issued_vs_risk_pct)}</td><td class="hint">does the deal actually done still clear the risk?</td></tr>
+        </table>
+        ${unpriced.length ? `<div class="hint" style="margin-top:10px;">No premium read for category
+          ${unpriced.map(escapeHtml).join(', ')} on the issued document - the issued total is short by whatever
+          those carry, so treat it as a floor rather than the figure.</div>` : ''}
+      </div>
+      ${discountBlock}
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 /* The conclusion the whole New Business tab exists to reach. See

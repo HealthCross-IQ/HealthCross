@@ -620,3 +620,87 @@ def test_opportunity_assessment_carries_the_open_questions_it_cannot_answer(clie
     assert {q["key"] for q in body["open_questions"]} == {
         "participation", "incumbent_loss_ratio", "reason_for_moving"
     }
+
+
+# --- the issued quote outranks the rate card's variants ------------------
+
+def _insert_quoted_plan_document(client, case_id, category, summary):
+    from app.models import db_models as models
+
+    db = client.db_session_local()
+    db.add(models.BenefitPlan(
+        case_id=case_id, role="quoted", category=category,
+        plan_name=f"Gold - CAT {category}", source_format="pdf",
+        standard_summary=summary,
+    ))
+    db.commit()
+    db.close()
+
+
+def test_the_issued_quote_document_supplies_the_proposed_side(client, rate_card_files):
+    # A benefit the card prices as part of the product rather than as a
+    # dropdown reads as "not priced as a variant" - but it IS quoted, and
+    # stated, in the document the broker received. Values off the real
+    # Haworth quote PDF.
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+    _insert_quoted_plan_document(client, case_id, "A", {
+        "health_screening_wellness": "USD 500 Once per policy year",
+        "maternity_limit": "USD 14,000",
+        "area_of_cover": "Worldwide Excluding USA",
+    })
+
+    rows = {
+        r["field"]: r
+        for r in client.get(f"/cases/{case_id}/existing-vs-proposed").json()["categories"][0]["rows"]
+    }
+    assert rows["health_screening_wellness"]["proposed"] == "USD 500 Once per policy year"
+    assert rows["maternity_limit"]["proposed"] == "USD 14,000"
+
+
+def test_a_field_the_quote_parser_could_not_read_does_not_blank_the_card_value(client, rate_card_files):
+    # The parser returns "Not specified in source document" for a field
+    # it could not find. Letting that through would replace an answer the
+    # rate card DID resolve with an apology.
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+    _insert_quoted_plan_document(client, case_id, "A", {
+        "annual_limit": "Not specified in source document",
+        "dental": "USD 2,000",
+    })
+
+    rows = {
+        r["field"]: r
+        for r in client.get(f"/cases/{case_id}/existing-vs-proposed").json()["categories"][0]["rows"]
+    }
+    assert rows["annual_limit"]["proposed"] != "Not specified in source document"
+    assert rows["dental"]["proposed"] == "USD 2,000"
+
+
+# --- GET /cases/{id}/price-comparison -----------------------------------
+
+def test_price_comparison_reads_the_issued_premium_off_the_quote_document(client, rate_card_files):
+    from app.models import db_models as models
+
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+    db = client.db_session_local()
+    db.add(models.BenefitPlan(
+        case_id=case_id, role="quoted", category="A", plan_name="Gold - CAT A",
+        gross_premium=179_192.0, member_count=9, standard_summary={},
+    ))
+    db.commit()
+    db.close()
+
+    body = client.get(f"/cases/{case_id}/price-comparison").json()
+    assert body["prices"]["issued_price"] == 179_192.0
+    assert body["issued_quote"]["categories_priced"] == 1
+
+
+def test_price_comparison_without_an_issued_quote_reports_no_discount(client, rate_card_files):
+    # A case nobody has issued yet has not been discounted by 100%.
+    _upload_rate_cards(client, rate_card_files)
+    case_id = _make_case(client)
+    body = client.get(f"/cases/{case_id}/price-comparison").json()
+    assert body["prices"]["issued_price"] is None
+    assert body["discount"] is None

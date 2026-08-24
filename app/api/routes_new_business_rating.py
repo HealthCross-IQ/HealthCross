@@ -590,9 +590,26 @@ def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
         for p in case.benefit_plans
         if p.role == "existing" and p.category
     }
+    # The issued quote document, where one has been uploaded. It outranks
+    # the rate card's variant selections for the proposed side, because it
+    # is what the broker actually received: the card says "Maternity
+    # Limit: <the variant that was picked>", the issued quote says
+    # "USD 14,000", and only one of those is the offer. It also carries
+    # benefit lines the card prices as part of the product rather than as
+    # a dropdown - Routine Health Examination among them - which is why
+    # they read as "not priced as a variant" when they are in fact
+    # quoted, and stated, on page 12.
+    quoted_by_category = {
+        _normalize_category(p.category): p
+        for p in case.benefit_plans
+        if p.role == "quoted" and p.category and p.standard_summary
+    }
     variant_rates = _variant_rate_dicts(db)
 
-    categories = sorted(set(selections_by_category) | set(existing_by_category))
+    # The issued quote counts as a category too: a case whose only
+    # benefit information is the document the broker received would
+    # otherwise produce no rows at all.
+    categories = sorted(set(selections_by_category) | set(existing_by_category) | set(quoted_by_category))
     out = []
     for category in categories:
         plan = existing_by_category.get(category)
@@ -616,6 +633,7 @@ def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
                 proposed_overrides={
                     "network": design.get("network"),
                     "area_of_cover": design.get("zone"),
+                    **_issued_quote_values(quoted_by_category.get(category)),
                 },
             ),
         })
@@ -1246,3 +1264,104 @@ def get_opportunity_assessment(
         maternity_richer_than_incumbent=maternity_richer,
         card_variant_uplift_pct=_card_variant_uplift_pct(quote.result if quote else None),
     )
+
+
+def _issued_quote_values(plan) -> dict:
+    """The proposed side as the issued quote document states it.
+
+    Placeholders are dropped rather than passed through: a field the
+    quote parser could not find comes back as "Not specified in source
+    document", and letting that override a value the rate card DID
+    resolve would replace a real answer with an apology.
+    """
+    from app.scoring.rules.benefits_summary import NOT_SPECIFIED
+
+    if plan is None or not plan.standard_summary:
+        return {}
+    return {
+        field: value
+        for field, value in plan.standard_summary.items()
+        if value and value != NOT_SPECIFIED and not str(value).lower().startswith("not found by ocr")
+    }
+
+
+@router.get("/cases/{case_id}/price-comparison")
+def get_price_comparison(
+    case_id: int,
+    trend_pct: float = Query(0.10),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """What the price should have been, and what actually went out.
+
+    Four numbers - expected claims, the risk-based price, the rate card
+    price, and the premium on the quote the broker actually received -
+    and the gaps between them. See
+    app/scoring/rules/price_comparison.py.
+
+    The last gap is the one nothing else in the portal has ever shown: a
+    discount agreed in a meeting leaves the computed quote untouched and
+    the issued document different, and the two are never reconciled until
+    the account renews badly.
+    """
+    from app.scoring.rules.price_comparison import compare_prices, issued_price_from_plans
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    card_price = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+
+    issued = issued_price_from_plans([
+        {
+            "gross_premium": p.gross_premium,
+            "member_count": p.member_count,
+            "category": p.category,
+            "plan_name": p.plan_name,
+        }
+        for p in case.benefit_plans
+        if p.role == "quoted"
+    ])
+
+    risk_price = None
+    expected_claims = None
+    try:
+        risk = get_risk_based_price(case_id, trend_pct=trend_pct, as_of=as_of, db=db)
+        risk_price = risk["suggested_premium"]
+        expected_claims = risk["risk_premium"]
+    except HTTPException:
+        # The risk price needs a census, a plan design and a book to
+        # price against. Without it the issued-vs-card comparison still
+        # stands on its own, and is the half of this view that does not
+        # depend on any model at all.
+        pass
+
+    member_count = issued["member_count"] or len(case.census_records) or None
+    loading_pct = category_loading_pct("")
+    if quote and quote.categories:
+        loadings = [
+            category_loading_pct(c.get("product"), c.get("commission_pct"))
+            for c in _normalize_quote_categories(quote.categories)
+            if c.get("product")
+        ]
+        if loadings:
+            loading_pct = sum(loadings) / len(loadings)
+
+    return {
+        **compare_prices(
+            expected_claims=expected_claims,
+            risk_price=risk_price,
+            card_price=card_price,
+            issued_price=issued["issued_price"],
+            loading_pct=loading_pct,
+            member_count=member_count,
+        ),
+        "issued_quote": issued,
+        "trend_pct": trend_pct,
+    }
