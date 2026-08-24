@@ -12,7 +12,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
-from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
 from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
@@ -760,7 +760,7 @@ def get_risk_based_price(
         )
 
     try:
-        results = _run_analysis(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+        results, cube = analysis_with_cube(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
@@ -768,7 +768,6 @@ def get_risk_based_price(
         )
 
     rate_cards = _rate_card_dicts(db)
-    cube = burning_cost_cube(results, rate_cards)
     if cube["book"]["burning_cost"] is None:
         raise HTTPException(status_code=400, detail="The book has no claims experience to price against")
 
@@ -861,7 +860,7 @@ def get_case_nationality_mix_pricing(
     factor, what it rests on, and the quote with and without it - the
     decision stays with the underwriter.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
     from app.scoring.rules.nationality_mix_pricing import apply_mix_to_quote, nationality_mix_factor
     from app.scoring.rules.portfolio_analysis import nationality_risk_table
 
@@ -913,7 +912,7 @@ def get_rate_card_calibration(
     is a commercial document too and a cell may be knowingly held below
     cost to win a segment.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
     from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.rate_card_calibration import (
         calibration_summary_by_product,
@@ -925,14 +924,13 @@ def get_rate_card_calibration(
         raise HTTPException(status_code=400, detail="No rate card uploaded to calibrate")
 
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+        results, cube = analysis_with_cube(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
             detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to calibrate against",
         )
 
-    cube = burning_cost_cube(results, rate_cards)
     if cube["book"]["burning_cost"] is None:
         raise HTTPException(status_code=400, detail="The book has no claims experience to calibrate against")
 
@@ -998,13 +996,12 @@ def get_new_business_quote_burning_cost_comparison(
         raise HTTPException(status_code=404, detail="No new business quote found for this case")
 
     try:
-        portfolio_results = _run_analysis(db, as_of=_stored_as_of(db), require_rate_card=False)
+        portfolio_results, cube = analysis_with_cube(db, as_of=_stored_as_of(db), require_rate_card=False)
     except HTTPException:
         return None
 
     census = _case_census_dicts(case)
     rate_cards = _rate_card_dicts(db)
-    cube = burning_cost_cube(portfolio_results, rate_cards)
     if cube["book"]["burning_cost"] is None:
         return None
 
@@ -1190,14 +1187,13 @@ def get_opportunity_assessment(
         raise HTTPException(status_code=400, detail="Upload a census for this case first")
 
     try:
-        results = _run_analysis(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+        results, cube = analysis_with_cube(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
             detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to assess against",
         )
 
-    cube = burning_cost_cube(results, _rate_card_dicts(db))
     # A case with a census but no plan design yet still gets an
     # assessment. Product and Network are two of the cube's dimensions,
     # so without them each member prices at a broader cell - which the

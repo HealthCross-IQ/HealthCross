@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File
 from sqlalchemy.orm import Session
 
+from app.api import analysis_cache
 from app.database import get_db
 from app.ingestion.client_master import parse_client_master
 from app.ingestion.group_product_mapping import parse_group_product_mapping
@@ -263,6 +264,72 @@ _FILTERABLE_RESULT_FIELDS = ("product", "network", "region", "nationality_zone",
 
 
 def _run_analysis(
+    db: Session,
+    as_of: Optional[date] = None,
+    policy_year: Optional[str] = None,
+    client: Optional[str] = None,
+    filters: Optional[Dict[str, str]] = None,
+    require_rate_card: bool = True,
+) -> List[dict]:
+    """Every member priced against the rate card, with their own claims.
+
+    Cached on the uploaded data plus these arguments (see
+    app/api/analysis_cache.py). A single screen - and a single printed
+    report especially - asks for the same analysis several times over,
+    and re-pricing the whole book each time is what made the report slow
+    enough for the browser to block its own print tab.
+
+    Callers must treat the returned rows as read-only: the list is
+    shared between everyone who asked the same question.
+    """
+    key = (
+        "run_analysis",
+        as_of,
+        policy_year,
+        client,
+        tuple(sorted((k, v) for k, v in (filters or {}).items() if v)),
+        require_rate_card,
+    )
+    return analysis_cache.cached(db, key, lambda: _analyse(
+        db, as_of=as_of, policy_year=policy_year, client=client,
+        filters=filters, require_rate_card=require_rate_card,
+    ))
+
+
+def analysis_with_cube(
+    db: Session,
+    as_of: Optional[date] = None,
+    policy_year: Optional[str] = None,
+    client: Optional[str] = None,
+    filters: Optional[Dict[str, str]] = None,
+    require_rate_card: bool = True,
+) -> tuple:
+    """The analysis and the burning-cost cube built from it, both cached.
+
+    The cube is a pure function of the analysis and the rate card, so it
+    is keyed on the same arguments the analysis was - which is what lets
+    one printed report build it once instead of once per endpoint it
+    happens to touch.
+    """
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+
+    results = _run_analysis(
+        db, as_of=as_of, policy_year=policy_year, client=client,
+        filters=filters, require_rate_card=require_rate_card,
+    )
+    key = (
+        "cube",
+        as_of,
+        policy_year,
+        client,
+        tuple(sorted((k, v) for k, v in (filters or {}).items() if v)),
+        require_rate_card,
+    )
+    cube = analysis_cache.cached(db, key, lambda: burning_cost_cube(results, _rate_card_dicts(db)))
+    return results, cube
+
+
+def _analyse(
     db: Session,
     as_of: Optional[date] = None,
     policy_year: Optional[str] = None,
@@ -754,16 +821,13 @@ def get_burning_cost_cube(
     is thin, which is the point - a three-life cell's raw rate is not a
     price.
     """
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
-
     # Age bands come from the rate card where one exists, so a cube cell
     # lines up with the card row that prices it - but the book's own
     # experience is worth showing before pricing is set up, so a missing
     # card falls back to conventional bands rather than 400-ing.
-    results = _run_analysis(
+    results, cube = analysis_with_cube(
         db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, require_rate_card=False
     )
-    cube = burning_cost_cube(results, _rate_card_dicts(db))
     cells = cube["cells"]
     if level is not None:
         cells = [c for c in cells if c["level"] == level]

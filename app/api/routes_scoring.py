@@ -60,15 +60,19 @@ def _book_cube(db: Session, results: Optional[list]) -> Optional[dict]:
     the book has no experience to price from, in which case the scorecard
     falls back to its old score-derived loading rather than failing.
     """
-    from app.api.routes_portfolio_analysis import _rate_card_dicts
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+    from app.api.routes_portfolio_analysis import (
+        _get_stored_as_of,
+        _rate_card_dicts,
+        analysis_with_cube,
+    )
 
     if not results:
         return None
-    rate_cards = _rate_card_dicts(db)
-    if not rate_cards:
+    if not _rate_card_dicts(db):
         return None
-    cube = burning_cost_cube(results, rate_cards)
+    # Same arguments _book_results used, so this reuses that analysis
+    # from the cache rather than re-pricing the book.
+    _, cube = analysis_with_cube(db, as_of=_get_stored_as_of(db))
     return cube if cube["book"]["burning_cost"] is not None else None
 
 
