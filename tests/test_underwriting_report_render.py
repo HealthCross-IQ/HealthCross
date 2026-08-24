@@ -16,6 +16,8 @@ from app.reports.underwriting_report import (
     area_chart,
     donut,
     gauge,
+    month_amount,
+    month_label,
     pct,
     render_underwriting_report,
     signed_pct,
@@ -69,9 +71,14 @@ def _payload(**overrides) -> dict:
         "chronic_share_of_claims": 0.215,
         "claims_report": {
             "report_period_start": "2025-10-12", "report_period_end": "2026-07-10",
+            # The shape the claims-report parsers really emit: "paid", and
+            # a three-letter month. A fixture using "amount" hid a crash
+            # that only ever happened on real reports.
             "total_paid": 742_182.0, "monthly_paid": [
-                {"month": "2025-11", "amount": 58_000}, {"month": "2025-12", "amount": 71_000},
-                {"month": "2026-01", "amount": 66_000}, {"month": "2026-02", "amount": 88_000},
+                {"year": 2025, "month": "Nov", "paid": 58_000, "partial": True},
+                {"year": 2025, "month": "Dec", "paid": 71_000, "partial": False},
+                {"year": 2026, "month": "Jan", "paid": 66_000, "partial": False},
+                {"year": 2026, "month": "Feb", "paid": 88_000, "partial": False},
             ],
             "diagnosis_breakdown": [{"label": "Diabetes mellitus", "value": 121_000.0}],
             "claims_by_member_type_value": [],
@@ -215,10 +222,30 @@ def test_the_donut_segments_add_up_to_the_whole_circle():
 def test_a_single_month_is_not_drawn_as_a_trend():
     # Two points make a line; one makes a claim about a direction that
     # the data cannot support.
-    assert area_chart([{"month": "2026-01", "amount": 5}]) == ""
+    assert area_chart([{"month": "Jan", "paid": 5}]) == ""
     assert area_chart([]) == ""
-    assert "<polyline" in area_chart([{"month": "2026-01", "amount": 5},
-                                     {"month": "2026-02", "amount": 9}])
+    assert "<polyline" in area_chart([{"month": "Jan", "paid": 5},
+                                     {"month": "Feb", "paid": 9}])
+
+
+def test_the_chart_reads_whichever_name_the_month_arrived_under():
+    # The claims-report parsers say "paid" and "Jan"; every other monthly
+    # series in the portal says "amount" and "2026-01". Reading only one
+    # of them raised on real reports and drew fine on fixtures.
+    assert month_amount({"paid": 58_000}) == 58_000
+    assert month_amount({"amount": 58_000}) == 58_000
+    assert month_amount({}) == 0.0
+    assert month_label({"month": "Jan"}) == "Jan"
+    assert month_label({"month": "2026-01"}) == "Jan"
+    assert month_label({}) == ""
+
+
+def test_a_real_parser_month_row_reaches_the_chart():
+    parser_rows = [{"year": 2025, "month": "Nov", "paid": 58_000, "partial": True},
+                   {"year": 2025, "month": "Dec", "paid": 71_000, "partial": False}]
+    svg = area_chart(parser_rows)
+    assert "<polyline" in svg
+    assert ">Nov<" in svg and ">Dec<" in svg
 
 
 def test_a_bar_never_runs_past_the_end_of_its_track():

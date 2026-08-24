@@ -172,11 +172,39 @@ def gauge(score: Optional[float], band: Optional[str], caption: str) -> str:
     )
 
 
+def month_amount(point: dict) -> float:
+    """The paid figure on one monthly row.
+
+    The claims-report parsers emit `paid`; every other monthly series in
+    the portal calls it `amount`. Reading only one of them meant the
+    chart raised on the real reports and drew fine on a fixture, which
+    is the wrong way round.
+    """
+    for key in ("paid", "amount", "value"):
+        if point.get(key) is not None:
+            return point[key]
+    return 0.0
+
+
+def month_label(point: dict) -> str:
+    """Three letters, whatever shape the month arrived in - the parsers
+    give "Jan", other series give "2026-01".
+    """
+    raw = str(point.get("month") or "")
+    if "-" in raw:
+        month_number = raw.split("-")[-1]
+        names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                 "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        if month_number.isdigit() and 1 <= int(month_number) <= 12:
+            return names[int(month_number) - 1]
+    return raw[:3].title()
+
+
 def area_chart(points: List[dict], width: int = 700, height: int = 140) -> str:
     """Monthly claims as a filled line. Reading a run of twelve figures
     off a table does not show a trend; this does.
     """
-    values = [p["amount"] or 0 for p in points]
+    values = [month_amount(p) for p in points]
     if len(values) < 2:
         return ""
     top = max(values) or 1
@@ -194,7 +222,7 @@ def area_chart(points: List[dict], width: int = 700, height: int = 140) -> str:
     mean_y = 6 + plot_h - (mean / top) * plot_h
     labels = "".join(
         f'<text x="{pad_l + i * step:.1f}" y="{height - 6}" text-anchor="middle" '
-        f'font-family="IBM Plex Mono" font-size="8" fill="#8e94a3">{esc((p.get("month") or "")[-2:])}</text>'
+        f'font-family="IBM Plex Mono" font-size="8" fill="#8e94a3">{esc(month_label(p))}</text>'
         for i, p in enumerate(points)
     )
     return (

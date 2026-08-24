@@ -38,8 +38,11 @@ def _rich_case(client):
         report_period_start=date(2025, 1, 1), report_period_end=date(2025, 12, 31),
         total_paid=903_000.0, reported_not_paid=61_000.0, incurred_not_reported=118_000.0,
         opening_members=104, closing_members=112,
-        monthly_paid=[{"month": f"2025-{m:02d}", "amount": v} for m, v in enumerate(
-            [58_000, 62_000, 71_000, 66_000, 88_000, 74_000, 69_000, 91_000, 77_000, 83_000, 79_000, 85_000], start=1)],
+        # Exactly what app/ingestion/claims_report.py produces - the key
+        # is "paid" and the month is three letters.
+        monthly_paid=[{"year": 2025, "month": m, "paid": v, "partial": False} for m, v in zip(
+            ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+            [58_000, 62_000, 71_000, 66_000, 88_000, 74_000, 69_000, 91_000, 77_000, 83_000, 79_000, 85_000])],
         diagnosis_breakdown=[
             {"label": "Diabetes mellitus", "value": 121_000.0},
             {"label": "Hypertension", "value": 73_000.0},
