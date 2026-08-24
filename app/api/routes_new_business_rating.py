@@ -427,6 +427,140 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
 
 
+@router.get("/cases/{case_id}/risk-based-price")
+def get_risk_based_price(
+    case_id: int,
+    trend_pct: float = Query(0.10, description="Medical trend between the book's experience period and the policy being priced"),
+    apply_nationality: bool = Query(True, description="Apply the within-zone nationality refinement on top of the cube price"),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """A suggested price for a new enquiry, built from risk rather than
+    from the rate card.
+
+    Upload a census and a table of benefits and this prices it: each
+    member costed against HealthCross's own book for their own
+    demographic cell, refined for the scheme's nationality mix, loaded for
+    industry and trend, then grossed up for expenses. The rate card price
+    sits beside it - the card is what HealthCross charges today, this is
+    what the book says this particular population costs, and the gap is
+    the underwriting decision.
+
+    Plan design comes from the Benefits tab exactly as auto-quoting takes
+    it (see _resolve_auto_quote_categories), so nothing has to be
+    re-entered: what makes this a suggestion rather than a form is that
+    the census and the benefits are the only inputs.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+    from app.scoring.rules.expected_cost_pricing import price_by_category
+    from app.scoring.rules.nationality_mix_pricing import nationality_mix_factor, within_zone_rows
+    from app.scoring.rules.portfolio_analysis import nationality_risk_table
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+
+    categories = _resolve_auto_quote_categories(case, db)
+    if not categories:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Every census category needs a Product/Network/TPA on the Benefits tab "
+                "before this can price - that is what says which plan each category is buying"
+            ),
+        )
+
+    try:
+        results = _run_analysis(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+    except HTTPException:
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to price against",
+        )
+
+    rate_cards = _rate_card_dicts(db)
+    cube = burning_cost_cube(results, rate_cards)
+    if cube["book"]["burning_cost"] is None:
+        raise HTTPException(status_code=400, detail="The book has no claims experience to price against")
+
+    design_by_category = {c["category"]: c for c in categories}
+    priced_census = [
+        {
+            **member,
+            "product": (design_by_category.get(member.get("category")) or {}).get("product"),
+            "network": _burning_cost_lookup_network(
+                (design_by_category.get(member.get("category")) or {}).get("network")
+            ),
+        }
+        for member in census
+    ]
+
+    # The cube already carries nationality_zone as a dimension, so only
+    # the WITHIN-ZONE part of a nationality's experience may be applied on
+    # top - see within_zone_rows. Applying the book-relative factor here
+    # would charge the zone effect twice.
+    mix = nationality_mix_factor(census, within_zone_rows(nationality_risk_table(results)))
+    nationality_factor = (
+        mix["factor"] if (apply_nationality and mix.get("pricing_ready") and mix.get("factor")) else 1.0
+    )
+
+    priced = price_by_category(
+        priced_census, cube,
+        loading_pct_by_category={
+            c["category"]: category_loading_pct(c["product"], c.get("commission_pct")) for c in categories
+        },
+        default_loading_pct=category_loading_pct(""),
+        industry=case.industry,
+        trend_pct=trend_pct,
+    )
+
+    suggested = priced["case_gross_premium"] * nationality_factor
+    for cat in priced["categories"]:
+        cat["suggested_premium"] = round((cat["gross_premium"] or 0.0) * nationality_factor, 2)
+        cat["product"] = (design_by_category.get(cat["category"]) or {}).get("product")
+        cat["network"] = (design_by_category.get(cat["category"]) or {}).get("network")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    card_premium = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+
+    return {
+        "member_count": len(census),
+        "suggested_premium": round(suggested, 2),
+        "suggested_per_member": round(suggested / len(census), 2) if census else None,
+        "risk_premium": priced["case_risk_premium"],
+        "trend_pct": trend_pct,
+        "industry": case.industry,
+        "nationality_factor": nationality_factor,
+        "nationality_applied": nationality_factor != 1.0,
+        "nationality_mix": mix,
+        "categories": priced["categories"],
+        "rate_card_premium": card_premium,
+        "gap_vs_rate_card": round(suggested - card_premium, 2) if card_premium else None,
+        "gap_pct": round((suggested / card_premium - 1) * 100, 1) if card_premium else None,
+        # How much of the price rests on this case's own segments rather
+        # than on broader fallbacks - the confidence statement on the total.
+        "weighted_credibility": (
+            round(
+                sum((c["weighted_credibility"] or 0) * (c["expected_claims"] or 0) for c in priced["categories"])
+                / sum(c["expected_claims"] or 0 for c in priced["categories"]),
+                4,
+            )
+            if sum(c["expected_claims"] or 0 for c in priced["categories"]) else 0.0
+        ),
+        "fallback_member_count": sum(c["fallback_member_count"] for c in priced["categories"]),
+    }
+
+
 @router.get("/cases/{case_id}/nationality-mix-pricing")
 def get_case_nationality_mix_pricing(
     case_id: int,

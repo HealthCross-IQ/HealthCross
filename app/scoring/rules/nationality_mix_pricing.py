@@ -142,6 +142,39 @@ def nationality_mix_factor(
     }
 
 
+def within_zone_rows(nationality_rows: List[dict]) -> List[dict]:
+    """Each nationality's factor relative to its OWN ZONE rather than to
+    the book.
+
+    This exists to avoid double counting. The burning cost cube already
+    carries nationality_zone as one of its dimensions, so a price built
+    from the cube has the zone effect in it already. Multiplying the
+    book-relative nationality factor on top would charge the zone
+    component twice - once inside the cube cell, once again as a factor.
+
+    What the cube does NOT know is how nationalities differ WITHIN a
+    zone: two nationalities in the same zone sit in the same cube cell
+    and are priced identically, even where the book says one costs
+    noticeably more than the other. That within-zone difference is the
+    only part it is legitimate to apply on top, and it is what this
+    returns - `credible_burning_cost / zone_burning_cost` rather than the
+    book-relative `relativity`.
+
+    A nationality with no zone rate to compare against is dropped rather
+    than falling back to its book-relative figure, which would quietly
+    reintroduce the double count for exactly the rows where it is least
+    visible.
+    """
+    out = []
+    for row in nationality_rows:
+        own = row.get("credible_burning_cost")
+        zone = row.get("zone_burning_cost")
+        if not own or not zone:
+            continue
+        out.append({**row, "relativity": round(own / zone, 4)})
+    return out
+
+
 def apply_mix_to_quote(gross_premium: float, mix: dict) -> dict:
     """The quote with the mix factor applied, and the same quote without
     it, side by side.

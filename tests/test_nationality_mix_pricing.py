@@ -7,6 +7,7 @@ from app.scoring.rules.nationality_mix_pricing import (
     MIN_MEASURABLE_SHARE,
     apply_mix_to_quote,
     nationality_mix_factor,
+    within_zone_rows,
 )
 
 
@@ -146,3 +147,51 @@ def test_an_adverse_mix_raises_the_quote():
     result = apply_mix_to_quote(100_000.0, mix)
     assert result["mix_adjusted_premium"] > 100_000.0
     assert result["difference"] > 0
+
+
+# --- not charging the zone effect twice ---------------------------------
+
+def _zoned(nationality, own, zone, ready=True):
+    return {
+        "nationality": nationality, "nationality_zone": "Zone 1",
+        "credible_burning_cost": own, "zone_burning_cost": zone,
+        "relativity": round(own / 10_000.0, 4),   # book-relative, book rate 10,000
+        "pricing_ready": ready, "credibility": 0.9, "earned_member_years": 200.0,
+    }
+
+
+def test_within_zone_factors_measure_against_the_zone_not_the_book():
+    # The cube already prices by nationality_zone, so the book-relative
+    # figure would charge the zone effect twice - once inside the cube
+    # cell, once again as a factor.
+    rows = within_zone_rows([_zoned("India", own=9_000.0, zone=12_000.0)])
+    assert rows[0]["relativity"] == pytest.approx(0.75)   # 9000/12000
+    # Its book-relative figure was 0.90 - materially different, and the
+    # difference IS the zone effect the cube has already applied.
+    assert rows[0]["relativity"] != pytest.approx(0.90)
+
+
+def test_a_nationality_at_its_zone_average_carries_no_extra_factor():
+    rows = within_zone_rows([_zoned("Typical", own=12_000.0, zone=12_000.0)])
+    assert rows[0]["relativity"] == pytest.approx(1.0)
+
+
+def test_a_nationality_with_no_zone_rate_is_dropped_not_fallen_back():
+    # Falling back to the book-relative figure would quietly reintroduce
+    # the double count on exactly the rows where it is least visible.
+    rows = within_zone_rows([
+        _zoned("HasZone", own=9_000.0, zone=12_000.0),
+        {"nationality": "NoZone", "credible_burning_cost": 9_000.0, "zone_burning_cost": None,
+         "relativity": 0.9, "pricing_ready": True},
+    ])
+    assert [r["nationality"] for r in rows] == ["HasZone"]
+
+
+def test_within_zone_factors_feed_the_mix_the_same_way():
+    rows = within_zone_rows([
+        _zoned("Cheap", own=9_000.0, zone=12_000.0),
+        _zoned("Dear", own=15_000.0, zone=12_000.0),
+    ])
+    mix = nationality_mix_factor(_census(Cheap=75, Dear=25), rows)
+    expected = (0.75 * 75 + 1.25 * 25) / 100
+    assert mix["raw_factor"] == pytest.approx(expected, abs=0.001)

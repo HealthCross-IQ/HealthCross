@@ -6048,9 +6048,82 @@ async function nbRenderArea() {
       <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
+    <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
+  loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* The price the book says this enquiry costs, from the census and the
+   table of benefits alone - no category configuration, no clicking
+   Compute. The rate card price sits beside it: the card is what
+   HealthCross charges today, this is what this particular population
+   costs, and the gap is the underwriting decision. */
+let riskPriceInputs = { trend: 10, nationality: true };
+
+async function loadNbRiskBasedPrice() {
+  const area = document.getElementById('nb-risk-price-area');
+  if (!area || !currentCase) return;
+  try {
+    const p = new URLSearchParams({
+      trend_pct: (riskPriceInputs.trend / 100).toString(),
+      apply_nationality: riskPriceInputs.nationality ? 'true' : 'false',
+    });
+    const r = await api(`/cases/${currentCase.id}/risk-based-price?${p}`);
+    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+    const rows = r.categories.map(c => `
+      <tr>
+        <td>${escapeHtml(c.category)}</td>
+        <td>${escapeHtml(c.product || '-')} / ${escapeHtml(c.network || '-')}</td>
+        <td class="num">${c.member_count}</td>
+        <td class="num">${money(c.expected_claims)}</td>
+        <td class="num">${(c.loading_pct * 100).toFixed(1)}%</td>
+        <td class="num" style="font-weight:600;">${money(c.suggested_premium)}</td>
+        <td class="num">${c.fallback_member_count ? `${c.fallback_member_count} fallback` : 'all matched'}</td>
+      </tr>`).join('');
+
+    const gap = r.gap_pct;
+    area.innerHTML = `
+      <div class="card">
+        <h3>Risk-based price suggestion</h3>
+        <div class="hint">Built from your census and table of benefits alone. Every member is costed against HealthCross's own book for their own demographic cell, refined for this scheme's nationality mix, loaded for industry and trend, then grossed up for expenses.</div>
+        <div class="kpi-grid" style="margin-top:14px;">
+          <div class="kpi"><span class="label">Suggested premium</span><div class="value">${money(r.suggested_premium)}</div>
+            <span class="label" style="margin:4px 0 0;">${r.member_count} members</span></div>
+          <div class="kpi"><span class="label">Per member</span><div class="value">${money(r.suggested_per_member)}</div></div>
+          <div class="kpi"><span class="label">Rate card price</span><div class="value">${money(r.rate_card_premium)}</div>
+            <span class="label" style="margin:4px 0 0;">${r.rate_card_premium ? 'from the quote below' : 'compute a quote to compare'}</span></div>
+          <div class="kpi"><span class="label">Gap</span><div class="value">${gap == null ? '-' : (gap > 0 ? '+' : '') + gap + '%'}</div>
+            <span class="label" style="margin:4px 0 0;">${gap == null ? '' : gap > 0 ? 'the card is charging less than the risk' : 'the card is charging more than the risk'}</span></div>
+        </div>
+        <div class="row" style="align-items:flex-end; margin-top:14px; gap:12px; flex-wrap:wrap;">
+          <div><label>Trend %</label><input type="number" step="0.5" value="${riskPriceInputs.trend}" style="width:90px;"
+            onchange="riskPriceInputs.trend = parseFloat(this.value) || 0; loadNbRiskBasedPrice();"></div>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:normal; margin:0;">
+            <input type="checkbox" style="width:auto;" ${riskPriceInputs.nationality ? 'checked' : ''}
+              onchange="riskPriceInputs.nationality = this.checked; loadNbRiskBasedPrice();">
+            Apply nationality refinement (${r.nationality_factor.toFixed(2)}&times;)
+          </label>
+        </div>
+        <div class="hint">The nationality refinement is measured <strong>within zone</strong>, not against the book: the demographic cell already prices by zone, so applying the book-relative factor would charge the zone effect twice.</div>
+        <table style="margin-top:14px;">
+          <tr><th>Category</th><th>Plan</th><th class="num">Members</th><th class="num">Expected claims</th>
+            <th class="num">Loading</th><th class="num">Suggested</th><th class="num">Cell match</th></tr>
+          ${rows}
+        </table>
+        <div class="hint" style="margin-top:10px;">
+          ${(r.weighted_credibility * 100).toFixed(0)}% of this price rests on the book's own experience for these members' own cells${r.fallback_member_count ? `; ${r.fallback_member_count} of ${r.member_count} members were priced from a broader cell` : ' with no fallbacks needed'}.
+          Industry loading: ${escapeHtml(r.industry || 'not set')}.
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    // A case without benefits picks, or a book with no experience yet,
+    // simply has no suggestion to make - not an error worth showing.
+    area.innerHTML = '';
+  }
 }
 
 /* What this enquiry's nationality mix is worth on the price.
