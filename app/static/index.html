@@ -6062,11 +6062,13 @@ async function nbRenderArea() {
     </div>
     <div id="nb-readiness-area"></div>
     <div id="nb-existing-vs-proposed-area"></div>
+    <div id="nb-annual-limit-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
   loadNbQuoteReadiness();
   loadNbExistingVsProposed();
+  loadNbAnnualLimitExposure();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
 }
@@ -6130,6 +6132,51 @@ async function loadNbExistingVsProposed() {
         <div class="hint"><strong>"Added"</strong> means the incumbent's document says nothing about that benefit while HealthCross is offering it - the case where a proposal is most likely to be adding cover nobody has priced for. <strong>"Review"</strong> means the two values are not comparable as numbers and need reading.</div>
       </div>
       ${blocks}
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+/* The annual limit on this quote, read against the book that will pay
+   it. Whole book rather than this client's own claims - one group's
+   members are far too few to say anything about a limit that binds on a
+   fraction of a percent of them. */
+async function loadNbAnnualLimitExposure() {
+  const area = document.getElementById('nb-annual-limit-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/annual-limit-exposure`);
+    if (!r.categories.length && !r.categories_without_a_readable_limit.length) { area.innerHTML = ''; return; }
+
+    const rows = r.categories.map(c => `
+      <tr>
+        <th>Category ${escapeHtml(c.category)}</th>
+        <td>AED ${Math.round(c.limit_aed).toLocaleString()}</td>
+        <td>${c.members_above.toLocaleString()}</td>
+        <td>${(c.share_of_members * 100).toFixed(2)}%</td>
+        <td>${Math.round(c.spend_above_limit).toLocaleString()}</td>
+      </tr>
+    `).join('');
+
+    const unreadable = r.categories_without_a_readable_limit.length
+      ? `<div class="hint" style="margin-top:8px;">No readable annual limit on category
+         ${r.categories_without_a_readable_limit.map(escapeHtml).join(', ')} - a limit written
+         as "Covered up to Policy Limit" is a real answer, but it is not a number this can check.</div>`
+      : '';
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>What this annual limit would have cost</h3>
+        <div class="hint">Every member in the book measured against the limit proposed here, over a rolling 365 days rather than per calendar year. <strong>Members above</strong> is how often the limit binds at all; <strong>spend above</strong> is what it would not have paid - the figure that prices the decision. Read against the whole portfolio, not this client's own claims: one group has far too few members to say anything about a limit that binds on a fraction of a percent of them. USD limits converted at ${r.aed_per_usd}.</div>
+        <div style="overflow-x:auto;">
+        <table style="margin-top:12px;">
+          <tr><th style="width:18%;">Category</th><th>Annual limit</th><th>Members above</th><th>Share</th><th>Spend above (AED)</th></tr>
+          ${rows || '<tr><td colspan="5" class="hint">No readable limit on any category.</td></tr>'}
+        </table>
+        </div>
+        ${unreadable}
+      </div>
     `;
   } catch (err) {
     area.innerHTML = '';
@@ -6879,6 +6926,12 @@ function portfolioAnalysisPanelHtml() {
       <div id="pa-utilization-area">${paLastUtilization ? paUtilizationHtml(paLastUtilization) : ''}</div>
     </div>
     <div class="card">
+      <h3>Annual limit exposure</h3>
+      <div class="hint">How many members in the book would actually have breached a given annual limit, and what that limit would not have paid. The question behind every annual-limit dropdown, answered off the portfolio's own claims. Measured over a rolling 365 days rather than per calendar year, because an annual limit runs on the member's own policy year and this book renews in every month of it - a member whose expensive December runs into January is one breach, not two half-years of nothing.</div>
+      <div class="row"><button onclick="paLoadAnnualLimitExposure()">Load</button></div>
+      <div id="pa-annual-limit-area">${paLastAnnualLimit ? paAnnualLimitHtml(paLastAnnualLimit) : ''}</div>
+    </div>
+    <div class="card">
       <h3>Large claims &amp; high-cost members</h3>
       <div class="hint">The usual large-loss cut before drilling into loss ratio by segment - one or two catastrophic claims can distort a small or medium group's numbers on their own. Independent of the rate card/members upload - works from the claims book alone.</div>
       <div class="row"><button onclick="paLoadLargeClaims()">Load</button></div>
@@ -7120,6 +7173,49 @@ function paUtilizationHtml(data) {
         <tr><th>Category</th><th>Claims</th><th>Total (AED)</th><th>% of total</th></tr>
         ${categoryRows || '<tr><td colspan="4" class="hint">No data.</td></tr>'}
       </table>
+    </div>
+  `;
+}
+
+/* The annual-limit dropdown, answered instead of guessed. See
+   app/scoring/rules/annual_limit_exposure.py - the counts are of
+   members, not claim lines, because an annual limit is breached by a
+   person over a year rather than by an invoice. */
+let paLastAnnualLimit = null;
+
+async function paLoadAnnualLimitExposure() {
+  try {
+    paLastAnnualLimit = await api('/portfolio-analysis/annual-limit-exposure');
+    document.getElementById('pa-annual-limit-area').innerHTML = paAnnualLimitHtml(paLastAnnualLimit);
+  } catch (err) {
+    toast(err.message, true);
+  }
+}
+
+function paAnnualLimitHtml(data) {
+  const rows = data.rows.map(r => `
+    <tr>
+      <th>AED ${r.limit_aed.toLocaleString()}</th>
+      <td>${r.members_above.toLocaleString()}</td>
+      <td>${(r.share_of_members * 100).toFixed(2)}%</td>
+      <td>${Math.round(r.spend_above_limit).toLocaleString()}</td>
+      <td>${Math.round(r.largest_breach).toLocaleString()}</td>
+    </tr>
+  `).join('');
+  return `
+    <div class="hint" style="margin-top:10px;">
+      <strong>${data.member_count.toLocaleString()}</strong> members with claims;
+      the highest twelve-month total any one of them ran up is
+      <strong>AED ${Math.round(data.highest_peak).toLocaleString()}</strong>.
+      <strong>Spend above</strong> is what the limit would not have paid -
+      the figure that prices the decision, where the member count is the
+      one that describes it.
+    </div>
+    <div style="overflow-x:auto;">
+    <table style="margin-top:12px;">
+      <tr><th style="width:20%;">Annual limit</th><th>Members above</th><th>Share</th><th>Spend above (AED)</th><th>Largest 12-month total (AED)</th></tr>
+      ${rows || '<tr><td colspan="5" class="hint">No data.</td></tr>'}
+    </table>
     </div>
   `;
 }

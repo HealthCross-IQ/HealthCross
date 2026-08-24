@@ -1371,3 +1371,40 @@ def large_claims(
             claims, claim_threshold=recurring_claim_threshold, min_claim_count=recurring_min_claim_count
         ),
     }
+
+
+@router.get("/annual-limit-exposure")
+def get_annual_limit_exposure(
+    limit: List[float] = Query(default=[], description="Candidate annual limits in AED. Repeat the param for several; omit for the standard set."),
+    master_client: Optional[str] = Query(None, description="Scope to one master client's own members instead of the whole book."),
+    members_above: Optional[float] = Query(None, description="Also return the members a limit of this many AED would have cut off, biggest first."),
+    db: Session = Depends(get_db),
+):
+    """How many members in the book would breach a given annual limit,
+    and what the limit would not have paid.
+
+    The question behind every annual-limit dropdown, answered off the
+    portfolio's own claims instead of by instinct. Claims are measured
+    over a rolling 365 days rather than per calendar year - see
+    app/scoring/rules/annual_limit_exposure.py for why that distinction
+    is the whole point rather than a detail.
+
+    Amounts are AED throughout, including limits written in USD on the
+    table of benefits (converted at the peg).
+    """
+    from app.scoring.rules.annual_limit_exposure import (
+        DEFAULT_LIMITS_AED,
+        annual_limit_exposure,
+        members_above_limit,
+    )
+
+    claims = _claim_dicts_for_large_claims(db)
+    if master_client:
+        claims = [c for c in claims if c.get("client_name") == master_client]
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims uploaded yet")
+
+    report = annual_limit_exposure(claims, limit or DEFAULT_LIMITS_AED)
+    if members_above is not None:
+        report["members_above_limit"] = members_above_limit(claims, members_above)
+    return report

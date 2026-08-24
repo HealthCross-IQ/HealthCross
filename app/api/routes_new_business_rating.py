@@ -596,6 +596,11 @@ def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
                 (plan.standard_summary if plan else None),
                 selections_by_category.get(category),
                 variant_rates,
+                # Network is chosen on the case, not on a benefit
+                # dropdown - but it is still part of the proposal, and
+                # the row that frames every limit under it should not
+                # read as blank.
+                proposed_overrides={"network": design.get("network")},
             ),
         })
     return {"categories": out, "has_quote": bool(quote)}
@@ -1029,3 +1034,45 @@ def get_new_business_quote_burning_cost_comparison(
         cat["rate_card_gross_annual_premium"] = quote_gross_by_category.get(cat["category"])
 
     return comparison
+
+
+@router.get("/cases/{case_id}/annual-limit-exposure")
+def get_case_annual_limit_exposure(case_id: int, db: Session = Depends(get_db)):
+    """What the annual limit on this quote would have cost against the
+    book, per category.
+
+    The limit is picked from a dropdown with nothing beside it, and the
+    portfolio already knows the answer - see
+    app/scoring/rules/annual_limit_exposure.py. Read against the whole
+    book rather than this client's own claims: a single group's members
+    are far too few to say anything about a limit that binds on a
+    fraction of a percent of them, and the limit is being priced against
+    the pool it will actually sit in.
+    """
+    from app.api.routes_portfolio_analysis import _claim_dicts_for_large_claims
+    from app.scoring.rules.annual_limit_exposure import exposure_for_quoted_limits
+    from app.scoring.rules.proposed_benefits import proposed_benefit_summary
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    if not quote:
+        raise HTTPException(status_code=404, detail="No quote on this case yet")
+
+    variant_rates = _variant_rate_dicts(db)
+    quoted_limits = {
+        c["category"]: proposed_benefit_summary(c.get("variant_selections") or {}, variant_rates).get("annual_limit")
+        for c in _normalize_quote_categories(quote.categories or [])
+    }
+
+    claims = _claim_dicts_for_large_claims(db)
+    if not claims:
+        raise HTTPException(status_code=400, detail="No portfolio claims uploaded yet")
+    return exposure_for_quoted_limits(claims, quoted_limits)

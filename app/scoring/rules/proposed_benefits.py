@@ -131,6 +131,7 @@ def proposed_benefit_rows(
     variant_rates: Optional[List[dict]] = None,
     field_labels: Optional[Dict[str, str]] = None,
     standard_fields: Optional[List[str]] = None,
+    proposed_overrides: Optional[Dict[str, str]] = None,
 ) -> List[dict]:
     """One row per benefit line: what the client has, what HealthCross is
     proposing, and how they compare.
@@ -141,6 +142,12 @@ def proposed_benefit_rows(
     quietly dropped - "the TOB says nothing about dental" is itself worth
     seeing, and is the case where a proposal is most likely to be adding
     cover nobody has priced for.
+
+    proposed_overrides fills the fields the proposal knows without a
+    dropdown behind them - Network above all, which is a dimension of the
+    rate card rather than a benefit variant. It is decided, it is priced,
+    and leaving it blank would show the one field that frames every limit
+    under it as something HealthCross had not proposed.
     """
     from app.scoring.rules.benefits_comparison import compare_benefit_value
     from app.scoring.rules.benefits_summary import FIELD_LABELS, STANDARD_FIELDS
@@ -149,6 +156,9 @@ def proposed_benefit_rows(
     fields = standard_fields or STANDARD_FIELDS
     existing_summary = existing_summary or {}
     proposed = proposed_benefit_summary(variant_selections, variant_rates)
+    for field, value in (proposed_overrides or {}).items():
+        if value:
+            proposed[field] = value
 
     rows = []
     for field in fields:
