@@ -507,6 +507,13 @@ def get_monthly_erp(case_id: int, db: Session = Depends(get_db)):
     }
 
 
+#: What an OCR'd plan shows for a field no pattern matched. Deliberately
+#: not "Not Covered": the difference between "the document excludes this"
+#: and "we could not read this" is the difference between a priced
+#: exclusion and an unread page.
+OCR_NOT_FOUND = "Not found by OCR - check the raw OCR text below"
+
+
 def _benefit_summary(plan: models.BenefitPlan) -> dict:
     # None (a plan predating the standard_summary column) falls back to its
     # older per-column fields; an empty dict {} is a deliberate, real state
@@ -517,17 +524,20 @@ def _benefit_summary(plan: models.BenefitPlan) -> dict:
         source = plan.standard_summary
     else:
         source = {
+            "network": plan.network_type,
             "annual_limit": f"USD {plan.annual_limit:,.0f}" if plan.annual_limit else None,
             "maternity_limit": f"USD {plan.maternity_limit:,.0f}" if plan.maternity_limit else None,
             "dental": "Covered" if plan.dental_covered else "Not covered",
             "optical": "Covered" if plan.optical_covered else "Not covered",
             "pre_existing_chronic_limit": "Covered" if plan.pre_existing_covered else "Not covered",
         }
-    # OCR (a lower-confidence, best-effort extraction - see
-    # app/ingestion/benefits_ocr.py) treats a field it never found a value
-    # for as "Not Covered" rather than the more neutral "Not specified in
-    # source document" every other, higher-confidence parser uses.
-    not_specified_text = "Not Covered" if plan.source_format == "pdf-ocr" else NOT_SPECIFIED
+    # A field OCR found no value for is not a field the document excluded.
+    # Rendering it as "Not Covered" - which this did - stated a benefit
+    # decision the source never made, and a document whose labels the
+    # patterns didn't recognise came back as a plan covering nothing at
+    # all. Say what actually happened instead, and point at the raw OCR
+    # text that is attached to the same plan for exactly this purpose.
+    not_specified_text = OCR_NOT_FOUND if plan.source_format == "pdf-ocr" else NOT_SPECIFIED
     return build_standard_benefit_summary(source, not_specified_text=not_specified_text)
 
 

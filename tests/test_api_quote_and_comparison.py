@@ -78,10 +78,13 @@ def test_benefits_summary_only_returns_existing_role(client):
     assert body[0]["plan_name"] == "Category 1"
 
 
-def test_benefits_summary_defaults_unresolved_ocr_fields_to_not_covered(client):
-    # OCR (a lower-confidence, best-effort extraction) marks a field it
-    # never found a value for "Not Covered" - every other, higher-confidence
-    # parser still uses the more neutral "Not specified in source document".
+def test_benefits_summary_does_not_report_an_unread_ocr_field_as_excluded(client):
+    # A field OCR found no value for is not a field the document
+    # excluded. Reporting it as "Not Covered" stated a benefit decision
+    # the source never made - and a booklet whose label wording the
+    # patterns didn't recognise came back as a plan covering nothing at
+    # all, which reads as a real (and alarming) finding rather than as a
+    # parser that didn't fire.
     case_id = _create_case(client)
     _insert_existing_plan(
         client, case_id, source_format="pdf-ocr", standard_summary={"annual_limit": "USD 4,000,000"}
@@ -91,8 +94,9 @@ def test_benefits_summary_defaults_unresolved_ocr_fields_to_not_covered(client):
     assert resp.status_code == 200
     summary = resp.json()[0]["summary"]
     assert summary["annual_limit"] == "USD 4,000,000"
-    assert summary["deductible"] == "Not Covered"
-    assert summary["dental"] == "Not Covered"
+    assert "Not Covered" not in summary["deductible"]
+    assert "OCR" in summary["deductible"]
+    assert summary["dental"] == summary["deductible"]
 
 
 def test_premium_by_category_returns_quoted_plans_with_per_member_figure(client):

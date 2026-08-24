@@ -54,24 +54,73 @@ _configure_tesseract_cmd()
 # than the default 200-char window - e.g. a long parenthetical clarification
 # wedged between a Dubai Insurance/iSON Secure-style label and its own
 # value) to search for in the flattened OCR text of the whole document.
+# A note on the (?=\s+(?:Not\s+)?Covered) lookaheads below. Cigna Global
+# Care-style booklets set the benefit table in three columns - label,
+# value, clarification - and Tesseract reads such a page across the row,
+# not down the column. A label that wraps onto a second line therefore
+# arrives split around its own value:
+#
+#   "19. Prescribed Medicines, Covered We pay for prescribed medications,
+#    drugs and Drugs and Dressings Co-pay: Nil dressings by a Medical..."
+#
+# Matching the full "Prescribed Medicines, Drugs and Dressings" never
+# succeeds on that text. Anchoring on the first line of the label and
+# requiring the value column to follow it does, and is stricter than
+# matching the bare word alone - "Out-patient" appears on nearly every
+# page, "Out-patient" immediately followed by "Covered" does not.
 _FIELD_LABEL_PATTERNS = {
-    "annual_limit": r"Indemnity Limit|Plan Annual [Ll]imit",
-    "area_of_cover": r"Basic Territory for Elective\s*&\s*Emergency treatment",
+    # Not a benefit so much as the frame around one: the same cover reads
+    # very differently on a restricted network than a comprehensive one,
+    # so it belongs next to the limits rather than buried in the case
+    # setup. The lookahead keeps this off the prose uses of the word -
+    # "In Network", "available within the network" - by requiring an
+    # all-caps network name ("COMPREHENSIVE", "RESTRICTED") after it.
+    # (?-i:) matters here: everything else in this table is matched case
+    # -insensitively, and "eligible provider network" appears a dozen
+    # times in the network explainer prose. Only the capitalised label
+    # followed by a capitalised network name is the row we want.
+    "network": r"Network Type|Network\s*/\s*Provider Tier|(?-i:Provider Network(?=\s+[A-Z])|Network(?=\s+[A-Z]{4,}))",
+    # "Plan Annual Maximum" wraps around its own value in the three-column
+    # layout ("Plan Annual US$7,500,000 ... Maximum per year of
+    # insurance"), so the second alternative anchors on the first line of
+    # the label plus the currency that follows it.
+    "annual_limit": r"Indemnity Limit|Plan Annual [Ll]imit|Plan Annual\s+Maximum|Plan Annual(?=\s+(?:US\$|USD|AED|\$))",
+    # (?!age) keeps this off "area of coverage", which the exclusions
+    # section uses in running prose a dozen pages later.
+    "area_of_cover": r"Basic Territory for Elective\s*&\s*Emergency treatment|Area of Cover(?!age)",
     # Negative lookbehind excludes the maternity-specific "Outpatient
     # Ante/Post Natal Consultation Deductible / Coinsurance" row, which
     # shares this same wording for a different (and usually differently
     # valued) benefit elsewhere in the document.
-    "deductible": r"(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
-    "pre_existing_chronic_limit": r"Pre-existing conditions",
+    "deductible": (
+        r"(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance"
+        r"|Out-?patient Co-?insurance\s*/\s*Deductible"
+        r"|Out-?patient(?=\s+(?:Not\s+)?Covered)"
+    ),
+    "pre_existing_chronic_limit": r"Pre-existing conditions|Pre-existing(?=\s+(?:Not\s+)?Covered)",
     # Dubai Insurance/iSON Secure's own label ("Maternity In-patient
     # Services and Complications") is followed by a long parenthetical
     # pre-approval clarification before its own "Covered up to USD ..."
     # value - much further away than this module's default 200-char
     # window reaches, so this one needs the wider window explicitly.
-    "maternity_limit": (r"Normal Delivery|Maternity In-?patient Services", 600),
-    "dental": r"Dental Benefit|Basic Dental",
-    "optical": r"Optical Benefit",
-    "coinsurance": r"Outpatient Co-Insurance|(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance",
+    "maternity_limit": (
+        r"Normal Delivery|Maternity In-?patient Services"
+        r"|Maternity Benefits\s+(?:Benefit Limit\s+)?Clarifications",
+        600,
+    ),
+    # "Dental Benefit" on its own also hits the contents page and every
+    # passing mention in the exclusions; requiring the table header that
+    # opens the dental section keeps it on the row that carries a limit.
+    "dental": r"Dental Benefits\s+(?:Benefit Limit\s+)?Clarifications|Dental Benefit Limit|Basic Dental",
+    "optical": r"Optical Benefit|Vision Benefits\s+(?:Benefit Limit\s+)?Clarifications",
+    "coinsurance": (
+        r"Outpatient Co-Insurance|(?<!Natal )Consultation Deductible\s*/?\s*Coinsurance"
+        # The member-reimbursement claims co-insurance: the percentage the
+        # member carries for treatment taken outside the network or on a
+        # reimbursement basis. Its label wraps across three lines, so the
+        # only reliable anchor is its own first word plus the percentage.
+        r"|Member(?:\s+reimbursement)?(?=\s+\d{1,3}%)"
+    ),
     # Same label-cluster-then-value-cluster layout as maternity_limit above
     # (Dubai Insurance/iSON Secure's own template lists several benefit
     # labels together, then their values in the same order, sometimes with
@@ -79,10 +128,18 @@ _FIELD_LABEL_PATTERNS = {
     # wider window to actually reach its own value rather than a fallback
     # grab of the next unrelated label's own text.
     "alternative_or_complementary_treatment": (
-        r"Alternative Medicine Co-Insurance|Enhanced Alternative Medicine|Alternative and Complementary", 600
+        r"Alternative Medicine Co-Insurance|Enhanced Alternative Medicine|Alternative and Complementary"
+        r"|Complementary and(?=\s+(?:Not\s+)?Covered)",
+        600,
     ),
-    "pharmacy_limit_and_coinsurance": r"Prescribed Pharmaceuticals",
-    "health_screening_wellness": r"Health Check\s*/?\s*Wellness Package|Wellness Package|Health Screening",
+    "pharmacy_limit_and_coinsurance": (
+        r"Prescribed Pharmaceuticals|Prescribed Medicines,?(?=\s+(?:Not\s+)?Covered)"
+    ),
+    "health_screening_wellness": (
+        r"Health Check\s*/?\s*Wellness Package|Wellness Package|Health Screening"
+        r"|Adult Wellness(?=\s+(?:Not\s+)?Covered)"
+        r"|Wellbeing Benefits\s+(?:Benefit Limit\s+)?Clarifications"
+    ),
 }
 
 # The original pattern only matched amounts with at least one comma group
@@ -91,13 +148,61 @@ _FIELD_LABEL_PATTERNS = {
 # as long as "AED" is present to distinguish a real amount from a stray
 # small number; the second alternative keeps the original comma-grouped
 # match for amounts that appear with no "AED" prefix at all.
-_MONEY_RE = re.compile(r"AED\s*[\d]{1,3}(?:,\d{3})*(?:/-)?|[\d]{1,3}(?:,\d{3})+(?:/-)?")
+_CURRENCY = r"(?:AED|USD|US\$|\$)"
+_MONEY_RE = re.compile(
+    _CURRENCY + r"\s?\d{1,3}(?:,\d{3})*(?:\.\d{2})?(?:/-)?|[\d]{1,3}(?:,\d{3})+(?:/-)?"
+)
 # A co-insurance/deductible value is often "20% up to a maximum of AED
 # 50/-" rather than a bare amount - tried first so the rate isn't dropped
 # in favor of just the capped AED figure.
 _PCT_MONEY_RE = re.compile(r"\d{1,3}%[^%\d]{0,40}?(?:" + _MONEY_RE.pattern + r")")
-_COVERED_RE = re.compile(r"\bNot Covered\b|\bCovered\b", re.IGNORECASE)
+# Case-sensitive on purpose. A value column writes "Covered" and "Not
+# Covered"; the clarification paragraph beside it writes "Elective
+# Caesarean Delivery is not covered" and "unless a Dental Plan has also
+# been selected". Matching case-insensitively lets a mid-sentence "not
+# covered" outrank the benefit's own limit a few words later, and turns a
+# US$10,000 maternity benefit into a flat "Not Covered".
+_COVERED_RE = re.compile(r"\bNot Covered\b|\bCovered\b|\bPaid in Full\b")
+# "Covered up to AED 29,440" is one value, not the word "Covered" followed
+# by an unrelated amount. Matched as a unit so the limit isn't lost to the
+# flag that introduces it - which is what happens when the earliest
+# candidate wins and "Covered" is always the earliest.
+#: The trailing alternative picks up the second currency in "USD 137/
+#: AED 500" - the same limit stated twice, and dropping either half makes
+#: the value look like a different number to whoever reads it next.
+_COVERED_UP_TO_RE = re.compile(
+    r"\bCovered\s+(?:up to|to a maximum of)\s+(?:" + _MONEY_RE.pattern + r")"
+    r"(?:\s*/\s*(?:" + _MONEY_RE.pattern + r"))?"
+)
+# A bare percentage is a real value ("Member reimbursement 0%") but a weak
+# one - a percentage also turns up inside clarification prose - so it is
+# only consulted once nothing stronger is in the window.
+_PCT_RE = re.compile(r"\d{1,3}%")
+# An all-caps run is how network tiers are set ("COMPREHENSIVE"). Anchored
+# to the start of the window so it only ever reads the value column, not a
+# heading further into the clarification text.
+_ALLCAPS_RE = re.compile(r"^(?:[A-Z][A-Z&/+.'-]{2,}\s*){1,3}")
 _WORD_RE = re.compile(r"\S+")
+
+# What turns a bare number into a benefit limit. "US$200" and "US$200 per
+# year of insurance" are different statements, and dropping the second
+# half leaves the reader unable to tell a per-visit cap from an annual
+# one; "Co-pay: Nil" is likewise part of the value, not a footnote.
+_PER_PERIOD_RE = re.compile(
+    r"per (?:year of insurance|policy year|year|annum|person|member|visit|treatment|lifetime)"
+    r"(?: of insurance)?",
+    re.IGNORECASE,
+)
+_COPAY_RE = re.compile(
+    r"Co-?pay:?\s*(?:Nil|None|\d{1,3}%|" + _CURRENCY + r"\s?[\d,]+)"
+    r"|\d{1,3}%\s*Co-?Pay",
+    re.IGNORECASE,
+)
+#: How far past a value to keep looking for the qualifier that belongs to
+#: it. Wide enough to cross the line break a wrapped value column puts
+#: between "US$200" and "per year of insurance", short enough not to
+#: annex the next row's own wording.
+_QUALIFIER_REACH = 120
 
 
 #: Below this share of readable characters, an "extractable" page is not
@@ -203,6 +308,25 @@ def ocr_pdf_pages(file: BinaryIO, resolution: int = 300) -> List[str]:
     return pages_text
 
 
+#: Tick boxes, rule lines and section markers have no letters to read, so
+#: Tesseract invents some: a checked box next to "Area I" comes back as
+#: "sd" or "aooome". They are recognisable without knowing the document -
+#: a run of one letter three times over, or a lower-case word with no
+#: vowel in it - and they only ever appear in the free-text fallback,
+#: where they crowd out the words that carry the actual answer.
+_REPEATED_LETTER_RE = re.compile(r"(.)\1{2,}")
+_VOWEL_RE = re.compile(r"[aeiouy]")
+
+
+def _is_noise_token(token: str) -> bool:
+    word = token.strip(".,;:()[]")
+    if not word or not any(ch.islower() for ch in word):
+        return False  # all-caps and digits are read as written - "III", "USA", "0%"
+    if _REPEATED_LETTER_RE.search(word):
+        return True
+    return word.isalpha() and not _VOWEL_RE.search(word.lower())
+
+
 def _nearby_text_value(window_text: str, max_words: int = 8) -> Optional[str]:
     """Fallback for a nearby value that's neither a currency amount nor a
     Covered/Not Covered flag - e.g. area of cover's "Worldwide Exc (USA)".
@@ -211,7 +335,7 @@ def _nearby_text_value(window_text: str, max_words: int = 8) -> Optional[str]:
     twice back-to-back, so this collapses an exact immediate repeat down
     to a single copy rather than reporting the duplicate.
     """
-    words = _WORD_RE.findall(window_text)[:max_words]
+    words = [w for w in _WORD_RE.findall(window_text) if not _is_noise_token(w)][:max_words]
     if not words:
         return None
     for split in range(1, len(words)):
@@ -222,25 +346,131 @@ def _nearby_text_value(window_text: str, max_words: int = 8) -> Optional[str]:
     return " ".join(words)
 
 
+#: A contents page names every benefit in the document and carries a value
+#: for none of them, so it is where label-anchored extraction goes wrong
+#: first: "Area of Cover" matches its own contents entry before it ever
+#: reaches page 6, and the "value" that comes back is the dot leader and
+#: the page number. Tesseract renders those leaders as dots on some lines
+#: and as runs of stray letters on others, so this looks for the dotted
+#: ones and drops the whole page on the strength of them.
+_DOT_LEADER_RE = re.compile(r"\.{4,}")
+_CONTENTS_HEADING_RE = re.compile(r"^\s*(?:TABLE OF )?CONTENTS\s*$|^\s*INDEX\s*$", re.IGNORECASE)
+_MIN_DOT_LEADER_LINES = 3
+
+
+def _is_contents_page(page_text: str) -> bool:
+    lines = page_text.splitlines()
+    if sum(1 for line in lines if _DOT_LEADER_RE.search(line)) >= _MIN_DOT_LEADER_LINES:
+        return True
+    return any(_CONTENTS_HEADING_RE.match(line) for line in lines[:3])
+
+
+def _with_qualifiers(value: str, rest: str) -> str:
+    """value plus the period and co-pay wording that qualifies it."""
+    reach = rest[:_QUALIFIER_REACH]
+    parts = [value]
+    period = _PER_PERIOD_RE.search(reach)
+    if period:
+        parts.append(period.group(0))
+    copay = _COPAY_RE.search(reach)
+    if copay:
+        parts.append(copay.group(0))
+    return " ".join(parts)
+
+
+class _ShiftedMatch:
+    """A match found in a sliced window, reported against the whole one.
+
+    The all-caps value regex is anchored, so it has to run against the
+    window with its leading space removed; ranking it against the other
+    candidates then needs its offsets back in the original coordinates.
+    """
+
+    def __init__(self, match: "re.Match", offset: int) -> None:
+        self._match = match
+        self._offset = offset
+
+    def start(self) -> int:
+        return self._match.start() + self._offset
+
+    def end(self) -> int:
+        return self._match.end() + self._offset
+
+    def group(self, index: int = 0) -> str:
+        return self._match.group(index)
+
+
+def _value_from_window(window_text: str) -> Optional[str]:
+    """The one value this label carries, out of the text that follows it.
+
+    Deliberately one value, not every number in the window: past the value
+    column sits a clarification paragraph, and it is full of numbers that
+    belong to other things - exclusion thresholds, note references, the
+    limits of adjacent benefits. Taking the earliest candidate keeps to
+    the value column; taking the longest of the ones that start together
+    prefers "20% up to a maximum of AED 50/-" over the bare "20%".
+    """
+    candidates = [
+        match
+        for match in (
+            regex.search(window_text)
+            for regex in (_COVERED_UP_TO_RE, _PCT_MONEY_RE, _MONEY_RE, _COVERED_RE, _PCT_RE)
+        )
+        if match
+    ]
+    # An all-caps run only counts where the value column is - immediately
+    # after the label - so it ranks by that position like everything else
+    # rather than jumping the queue or waiting behind it. "Network
+    # COMPREHENSIVE ... Member 0%" has to read COMPREHENSIVE, and
+    # "Member 0% ... Pre-existing Covered" has to read 0%; both fall out
+    # of ranking on where the value sits, not on which kind it is.
+    leading = len(window_text) - len(window_text.lstrip())
+    all_caps = _ALLCAPS_RE.match(window_text[leading:])
+    if all_caps and len(all_caps.group(0).strip()) >= 3:
+        candidates.append(_ShiftedMatch(all_caps, leading))
+
+    if candidates:
+        best = min(candidates, key=lambda m: (m.start(), -len(m.group(0).strip())))
+        return _with_qualifiers(best.group(0).strip(), window_text[best.end() :])
+
+    areas = _area_options(window_text)
+    if areas:
+        return areas
+
+    return _nearby_text_value(window_text)
+
+
+#: Area of cover is the one standard field a booklet routinely states as
+#: a tick against a list rather than as words. The tick is a box glyph
+#: with no text in it, so no amount of OCR tuning will say which area was
+#: chosen - the honest answer is the list of areas the document offers,
+#: plus why the choice isn't in it. Roman numerals are allowed to OCR as
+#: pipes and lower-case Ls, which is what they usually come back as.
+_AREA_OPTION_RE = re.compile(r"Area\s+(?:[IVXlt|]{1,4})\s*:?\s*((?:(?!Area\b)[A-Za-z ()]){3,40})")
+_MIN_AREA_OPTIONS = 2
+_AREA_TICKBOX_NOTE = "selected area is a tick box - read it off the source PDF"
+
+
+def _area_options(window_text: str) -> Optional[str]:
+    options = [
+        " ".join(w for w in m.group(0).split() if not _is_noise_token(w))
+        for m in _AREA_OPTION_RE.finditer(window_text)
+    ]
+    seen: List[str] = []
+    for option in options:
+        if option not in seen:
+            seen.append(option)
+    if len(seen) < _MIN_AREA_OPTIONS:
+        return None
+    return " | ".join(seen) + f" ({_AREA_TICKBOX_NOTE})"
+
+
 def _nearby_values(flat_text: str, label_pattern: str, window: int = 200) -> List[str]:
     values: List[str] = []
     for match in re.finditer(label_pattern, flat_text, re.IGNORECASE):
-        window_text = flat_text[match.end() : match.end() + window]
-        pct_money = _PCT_MONEY_RE.findall(window_text)
-        if pct_money:
-            values.extend(m.strip() for m in pct_money)
-            continue
-        money = _MONEY_RE.findall(window_text)
-        if money:
-            values.extend(m.strip() for m in money)
-            continue
-        covered = _COVERED_RE.search(window_text)
-        if covered:
-            values.append(covered.group(0))
-            continue
-        text_value = _nearby_text_value(window_text)
-        if text_value:
-            values.append(text_value)
+        value = _value_from_window(flat_text[match.end() : match.end() + window])
+        if value:
+            values.append(value)
 
     seen = set()
     unique = []
@@ -248,7 +478,23 @@ def _nearby_values(flat_text: str, label_pattern: str, window: int = 200) -> Lis
         if value not in seen:
             seen.add(value)
             unique.append(value)
-    return unique
+    return _collapse_partial_readings(unique)
+
+
+def _collapse_partial_readings(values: List[str]) -> List[str]:
+    """Drop a value that is only a shorter reading of another one.
+
+    The same benefit row is often matched twice - once where the label
+    sits beside its full value ("Covered Co-pay: Nil") and once where a
+    wrapped line put the qualifier out of reach ("Covered"). Reporting
+    both would flag the field as contradictory and send the underwriter
+    to the source PDF over a disagreement that isn't one.
+    """
+    return [
+        value
+        for value in values
+        if not any(other != value and other.startswith(value) for other in values)
+    ]
 
 
 def build_ocr_benefit_summary(pages_text: List[str]) -> Dict[str, str]:
@@ -260,7 +506,8 @@ def build_ocr_benefit_summary(pages_text: List[str]) -> Dict[str, str]:
     the caller should treat that as "needs manual verification", not as a
     confident multi-tier breakdown.
     """
-    flat = " ".join(" ".join(page.split()) for page in pages_text)
+    readable = [page for page in pages_text if not _is_contents_page(page)]
+    flat = " ".join(" ".join(page.split()) for page in readable or pages_text)
     summary: Dict[str, str] = {}
     for field, spec in _FIELD_LABEL_PATTERNS.items():
         pattern, window = spec if isinstance(spec, tuple) else (spec, 200)

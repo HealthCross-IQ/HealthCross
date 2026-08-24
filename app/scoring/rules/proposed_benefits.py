@@ -47,6 +47,10 @@ FIELD_VARIANTS: Dict[str, Dict[str, Optional[str]]] = {
 #: between a benefit with no proposal and one this module simply cannot
 #: speak about.
 FIELDS_WITHOUT_VARIANTS = (
+    # Network is priced, but as a dimension of the rate card rather than
+    # as a dropdown on a benefit line - it comes from the case's own
+    # Product/Network selection, so there is no variant to read here.
+    "network",
     "area_of_cover",
     "maternity_coinsurance",
     "health_screening_wellness",

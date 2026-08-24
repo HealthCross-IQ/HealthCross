@@ -55,16 +55,31 @@ def test_not_covered_takes_priority_over_bare_covered_match():
     assert values == ["Not Covered"]
 
 
-def test_build_summary_flags_ambiguity_for_multiple_values():
-    # Padded well past the 200-char search window so the two labels' value
-    # searches don't bleed into each other once all pages are joined.
+def test_a_second_amount_in_the_clarification_does_not_make_a_value_ambiguous():
+    # Only the value column is read. Everything after it is the
+    # clarification paragraph, and that paragraph is full of amounts
+    # belonging to other things - exclusion thresholds, adjacent
+    # benefits, the limit this one is measured against. Reporting those
+    # as rival readings of this benefit sent the underwriter to the
+    # source PDF over a disagreement that was never in the document.
+    pages = ["Normal Delivery Covered up to AED 29,440 then AED 11,000 elsewhere"]
+    summary = build_ocr_benefit_summary(pages)
+    assert summary["maternity_limit"] == "Covered up to AED 29,440"
+
+
+def test_build_summary_flags_ambiguity_when_the_label_itself_appears_twice():
+    # This is what genuine ambiguity looks like: the same label carrying
+    # two different values, because the document states it per plan tier
+    # and OCR cannot say which column is which. Padded past the 200-char
+    # window so neither label's search reaches the other's value.
     pages = [
-        "Indemnity Limit 5,520,000/- 5,520,000/-." + (" filler" * 40),
-        "Normal Delivery Covered up to AED 29,440 then AED 11,000 elsewhere",
+        "Indemnity Limit 5,520,000/-." + (" filler" * 40),
+        "Indemnity Limit 3,300,000/-." + (" filler" * 40),
     ]
     summary = build_ocr_benefit_summary(pages)
-    assert summary["annual_limit"] == "5,520,000/-"
-    assert "verify against the source PDF" in summary["maternity_limit"]
+    assert "5,520,000/-" in summary["annual_limit"]
+    assert "3,300,000/-" in summary["annual_limit"]
+    assert "verify against the source PDF" in summary["annual_limit"]
 
 
 def test_build_summary_skips_fields_with_no_match():
@@ -144,13 +159,19 @@ _TRUCARE_PAGE_5 = (
 
 
 def test_recognizes_trucare_style_annual_limit_wording():
+    # The currency is part of the limit: a portfolio holding both AED
+    # and USD plans cannot tell a USD 500,000 annual maximum from an AED
+    # one once the prefix has been dropped.
     summary = build_ocr_benefit_summary([_TRUCARE_PAGE_1])
-    assert summary["annual_limit"] == "500,000"
+    assert summary["annual_limit"] == "USD 500,000"
 
 
 def test_recognizes_trucare_style_dental_wording():
+    # Both halves of "USD 137/ AED 500" are the same limit stated twice,
+    # and the copay is part of the benefit rather than a footnote to it -
+    # a dental limit read without its 30% copay overstates the cover.
     summary = build_ocr_benefit_summary([_TRUCARE_PAGE_3])
-    assert summary["dental"] == "AED 500"
+    assert summary["dental"] == "Covered up to USD 137/ AED 500 30% copay"
 
 
 def test_recognizes_trucare_style_maternity_limit_wording_across_a_long_clarification():
@@ -160,7 +181,7 @@ def test_recognizes_trucare_style_maternity_limit_wording_across_a_long_clarific
     # entry in _FIELD_LABEL_PATTERNS uses a wider window specifically for
     # this template.
     summary = build_ocr_benefit_summary([_TRUCARE_PAGE_5])
-    assert summary["maternity_limit"] == "10,000"
+    assert summary["maternity_limit"] == "Covered up to USD 10,000"
 
 
 # --- "has text" is not the same question as "has readable text" ---------
@@ -300,3 +321,115 @@ def test_rendering_falls_back_to_pdfplumber_without_pdfium(monkeypatch):
     monkeypatch.setattr(benefits_ocr.pdfplumber, "open", lambda f: _Pdf())
     monkeypatch.setattr(benefits_ocr.pytesseract, "image_to_string", lambda img: f"ocr:{img}")
     assert benefits_ocr.ocr_pdf_pages(io.BytesIO(b"x")) == ["ocr:fallback-image"]
+
+
+# --- Cigna "Global Care" three-column booklets --------------------------
+#
+# Real (trimmed) OCR output from the Haworth Middle East table of
+# benefits. Every page of this document is a subsetted font with no
+# ToUnicode map, so it can only ever be read by OCR - and Tesseract reads
+# its three-column table (label | value | clarification) across the row,
+# which splits any label that wraps onto a second line around its own
+# value. Before these patterns the whole document summarised as twelve
+# "Not specified in source document" lines.
+
+_CIGNA_PAGE_6 = (
+    "GLOBAL CARE FLEXIBLE 1 CLARIFICATIONS "
+    "Network COMPREHENSIVE Your assigned list of medical providers which you can "
+    "visit to receive Treatment on a direct billing basis. "
+    "Member 0% This is the percentage payable by the member when "
+    "electing to receive Treatment: reimbursement "
+    "Claims co-insurance In Network on a member re-imbursement basis, "
+    "Pre-existing Covered Medical conditions or any related conditions for which "
+    "Conditions and one or more symptoms have been displayed at some "
+    "Chronic Conditions point during your lifetime. "
+    "Plan Annual US$7,500,000 Applies per insured person per Year of Insurance. "
+    "Maximum per year of insurance"
+)
+
+_CIGNA_CONTENTS = (
+    "CONTENTS\n"
+    "Some terms explained\n"
+    "eNQCWOFK Lecce ceceeeeeecseeeeeeseseneeeee................................ 3\n"
+    "*Member reimbursement Claims CO-iINSUPANCE.......................... 3\n"
+    "Area Of COVED oe. cescceeecseceeseseseseseececseaeseacecec.............. 3\n"
+    "Plan Annual MaxiMmUin......................................................... 3\n"
+)
+
+
+def test_a_label_that_wraps_around_its_own_value_is_still_read():
+    # "Plan Annual Maximum" never appears as contiguous text - the value
+    # column lands between its two lines.
+    summary = build_ocr_benefit_summary([_CIGNA_PAGE_6])
+    assert summary["annual_limit"] == "US$7,500,000 per Year of Insurance"
+
+
+def test_pre_existing_is_read_from_a_three_line_wrapped_label():
+    summary = build_ocr_benefit_summary([_CIGNA_PAGE_6])
+    assert summary["pre_existing_chronic_limit"] == "Covered"
+
+
+def test_network_is_captured_as_its_own_standard_field():
+    summary = build_ocr_benefit_summary([_CIGNA_PAGE_6])
+    assert summary["network"] == "COMPREHENSIVE"
+
+
+def test_the_word_network_in_running_prose_is_not_read_as_the_network():
+    # The booklet explains direct billing over two full pages and says
+    # "network" a dozen times in lower case while doing it.
+    pages = ["Treatment at an eligible provider network is billed directly to us."]
+    assert "network" not in build_ocr_benefit_summary(pages)
+
+
+def test_member_reimbursement_co_insurance_is_read_as_the_coinsurance():
+    summary = build_ocr_benefit_summary([_CIGNA_PAGE_6])
+    assert summary["coinsurance"] == "0%"
+
+
+def test_the_contents_page_is_not_mistaken_for_the_benefit_table():
+    # Every label in the document appears on the contents page, followed
+    # by a dot leader and a page number - so a contents page matches
+    # every pattern here and answers none of them. Left in, it supplied
+    # "3" and runs of OCR'd leader noise as rival readings of half the
+    # fields.
+    summary = build_ocr_benefit_summary([_CIGNA_CONTENTS, _CIGNA_PAGE_6])
+    assert summary["annual_limit"] == "US$7,500,000 per Year of Insurance"
+    assert summary["coinsurance"] == "0%"
+
+
+def test_a_document_that_is_only_a_contents_page_is_still_read():
+    # Dropping every page would turn a bad summary into no summary.
+    summary = build_ocr_benefit_summary([_CIGNA_CONTENTS])
+    assert isinstance(summary, dict)
+
+
+def test_a_tick_box_area_of_cover_reports_the_options_and_says_why():
+    text = (
+        "Area of Cover Areal sd Area I: Worldwide "
+        "aooome Area II: Worldwide excluding USA "
+        "Area IV: Gulf Cooperation Council (GCC) countries"
+    )
+    value = build_ocr_benefit_summary([text])["area_of_cover"]
+    assert "tick box" in value
+    assert "Worldwide excluding USA" in value
+    # The glyphs a checked box OCRs into are not part of the answer.
+    assert "aooome" not in value and " sd " not in value
+
+
+def test_a_shorter_reading_of_the_same_row_is_not_reported_as_a_rival():
+    # The outpatient row is matched twice - once where the co-pay is
+    # within reach and once where a page break put it out of reach.
+    pages = [
+        "18. Out-patient Covered Co-pay: Nil We pay for consultations." + (" filler" * 40),
+        "Out-patient Covered" + (" filler" * 40),
+    ]
+    summary = build_ocr_benefit_summary(pages)
+    assert summary["deductible"] == "Covered Co-pay: Nil"
+
+
+def test_a_lower_case_not_covered_in_prose_does_not_override_the_limit():
+    text = (
+        "Maternity In-patient Services and Complications "
+        "Elective Caesarean Delivery is not covered. Covered up to USD 10,000"
+    )
+    assert build_ocr_benefit_summary([text])["maternity_limit"] == "Covered up to USD 10,000"

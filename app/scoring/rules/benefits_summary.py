@@ -1,14 +1,21 @@
 """Standard table-of-benefits summary format.
 
-Fixed 12-field layout requested for every plan review, regardless of
-insurer or plan tier: Area of Cover, Annual Limit, Deductible, Pre-existing
+Fixed layout requested for every plan review, regardless of insurer or
+plan tier: Network, Area of Cover, Annual Limit, Deductible, Pre-existing
 & Chronic Limit, Maternity Limit, Maternity Co-insurance, Dental, Optical,
 Coinsurance, Alternative/Complementary Treatment, Pharmacy Limit &
 Coinsurance, Health Screening/Wellness Package.
+
+Network leads the list because it frames everything under it: the same
+annual limit on a restricted network and on a comprehensive one are two
+different offers, and comparing an incumbent's benefits against a
+proposal without it compares limits while ignoring where they can be
+spent.
 """
 from typing import Any, Dict
 
 STANDARD_FIELDS = [
+    "network",
     "area_of_cover",
     "annual_limit",
     "deductible",
@@ -24,6 +31,7 @@ STANDARD_FIELDS = [
 ]
 
 FIELD_LABELS = {
+    "network": "Network",
     "area_of_cover": "Area of Cover",
     "annual_limit": "Annual Limit",
     "deductible": "Deductible",
@@ -42,7 +50,7 @@ NOT_SPECIFIED = "Not specified in source document"
 
 
 def build_standard_benefit_summary(plan_details: Dict[str, Any], not_specified_text: str = NOT_SPECIFIED) -> Dict[str, str]:
-    """Return the fixed 10-field summary, defaulting any missing field.
+    """Return the fixed standard summary, defaulting any missing field.
 
     plan_details may come from any insurer's table of benefits, in whatever
     shape that insurer's parser produces - callers pass in whatever they've

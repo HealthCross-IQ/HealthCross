@@ -3507,10 +3507,11 @@ function _onBenefitNbProductChange(planId, product) {
 }
 
 function _benefitSummaryCardHtml(p, editing) {
-  // OCR (lower-confidence, best-effort) marks an unfound field "Not
-  // Covered" rather than every other parser's "Not specified in source
-  // document" - see app/api/routes_analysis.py's _benefit_summary.
-  const unresolvedText = p.source_format === 'pdf-ocr' ? 'Not Covered' : NOT_SPECIFIED_TEXT;
+  // A field OCR found no value for is not a field the document excluded
+  // - see app/api/routes_analysis.py's OCR_NOT_FOUND.
+  const unresolvedText = p.source_format === 'pdf-ocr'
+    ? 'Not found by OCR - check the raw OCR text below'
+    : NOT_SPECIFIED_TEXT;
   const rows = Object.entries(p.summary).map(([field, value]) => {
     if (!editing) {
       return `<tr><th style="width:220px;">${escapeHtml(field.replace(/_/g, ' '))}</th><td>${escapeHtml(value)}</td></tr>`;
