@@ -693,6 +693,7 @@
       <div class="hc-rail-group">
         <div class="hc-rail-label">New Business</div>
         <button class="hc-rail-item" id="hc-rail-new-quote" onclick="hcRailNewQuote()">New Quote<span class="hc-rail-tag nb">NB</span></button>
+        <button class="hc-rail-item" id="hc-rail-card-calibration" onclick="hcRailRateCardCalibration()">Rate Card Calibration<span class="hc-rail-tag nb">NB</span></button>
         <button class="hc-rail-item" id="hc-rail-rate-cards" onclick="hcRailRateCards()">Rate Cards<span class="hc-rail-tag nb">NB</span></button>
         <button class="hc-rail-item" id="hc-rail-intl-comparison" onclick="hcRailIntlComparison()">International Comparison<span class="hc-rail-tag nb">NB</span></button>
       </div>
@@ -1102,6 +1103,107 @@ function hcRailNationalityRisk() {
 function hcRailClaimsExplorer() {
   _hcRailSetActive('hc-rail-claims-explorer');
   showPortfolioAnalysis();
+}
+
+/* Is the rate card charging what the book actually costs?
+   Every cell of the card against the cube's expected cost for the same
+   cell, before anyone quotes rather than as a footnote after. A cell at
+   140% implied loss ratio is not an opinion - it has lost money on every
+   case it ever priced, and will keep doing so until the number changes. */
+let calibrationState = { target: 85, loading: null, minYears: 5, filter: 'all' };
+
+async function hcRailRateCardCalibration() {
+  _hcRailSetActive('hc-rail-card-calibration');
+  currentCase = null;
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><h3>Rate Card Calibration</h3><div class="hint">Comparing every card cell against the book&hellip;</div></div>';
+  try {
+    const p = new URLSearchParams({
+      target_loss_ratio: (calibrationState.target / 100).toString(),
+      min_exposure_member_years: calibrationState.minYears.toString(),
+    });
+    if (calibrationState.loading != null) p.set('loading_pct', (calibrationState.loading / 100).toString());
+    const r = await api(`/new-business/rate-card-calibration?${p}`);
+    const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const pct = v => v == null ? '-' : (v * 100).toFixed(0) + '%';
+
+    const shown = r.cells.filter(c => {
+      if (calibrationState.filter === 'underpriced') return c.verdict === 'underpriced' && !c.thin;
+      if (calibrationState.filter === 'overpriced') return c.verdict === 'overpriced' && !c.thin;
+      if (calibrationState.filter === 'measurable') return !c.thin;
+      return true;
+    });
+
+    const rows = shown.map(c => `
+      <tr${c.thin ? ' style="opacity:.55;"' : ''}>
+        <td>${escapeHtml(c.product || '-')}</td>
+        <td>${escapeHtml(c.network || '-')}</td>
+        <td>${escapeHtml(c.age_band)}</td>
+        <td>${escapeHtml(c.gender.replace(/_/g, ' '))}</td>
+        <td class="num">${money(c.card_price)}</td>
+        <td class="num">${money(c.expected_cost)}</td>
+        <td class="num"><span class="tier-pill ${c.implied_loss_ratio == null ? '' : c.implied_loss_ratio > 1 ? 'dir-review' : c.implied_loss_ratio < 0.5 ? 'dir-improved' : 'dir-same'}">${pct(c.implied_loss_ratio)}</span></td>
+        <td class="num">${money(c.suggested_price)}</td>
+        <td class="num" style="font-weight:600;">${c.price_change_pct == null ? '-' : (c.price_change_pct > 0 ? '+' : '') + c.price_change_pct.toFixed(0) + '%'}</td>
+        <td class="num">${c.exposure_member_years.toLocaleString(undefined, { maximumFractionDigits: 0 })}${c.thin ? ' <span class="tier-pill">thin</span>' : ''}${c.fell_back && !c.thin ? ' <span class="tier-pill dir-review">fallback</span>' : ''}</td>
+      </tr>`).join('');
+
+    const productRows = (r.by_product || []).map(p => `
+      <tr>
+        <td>${escapeHtml(p.product)}</td>
+        <td class="num">${p.measurable_cells}</td>
+        <td class="num">${pct(p.average_implied_loss_ratio)}</td>
+        <td class="num">${p.underpriced_cells}</td>
+        <td class="num">${pct(p.underpriced_share)}</td>
+      </tr>`).join('');
+
+    main.innerHTML = `
+      <div class="card">
+        <h3>Rate Card Calibration</h3>
+        <div class="hint">What the card charges for each cell, against what that cell actually costs on HealthCross's own book. <strong>Implied loss ratio</strong> is the cell's expected claims over the part of its price that is available to pay them - price &times; (1 &minus; loading), not the price itself, which would flatter every cell by the whole expense load.</div>
+        <div class="hint">The suggested price sits beside the current one rather than replacing it: a rate card is a commercial document too, and a cell may be knowingly held below cost to win a segment. Cells marked <strong>thin</strong> lack the exposure to be a finding; <strong>fallback</strong> means the book had no experience for that exact cell and the cost came from a broader one.</div>
+        <div class="row" style="align-items:flex-end; margin:14px 0; gap:10px; flex-wrap:wrap;">
+          <div><label>Target LR %</label><input type="number" step="1" value="${calibrationState.target}" style="width:90px;"
+            onchange="calibrationState.target = parseFloat(this.value) || 85; hcRailRateCardCalibration();"></div>
+          <div><label>Loading %</label><input type="number" step="0.5" value="${(r.loading_pct * 100).toFixed(1)}" style="width:90px;"
+            onchange="calibrationState.loading = parseFloat(this.value); hcRailRateCardCalibration();"></div>
+          <div><label>Min member-years</label><input type="number" value="${calibrationState.minYears}" style="width:110px;"
+            onchange="calibrationState.minYears = parseFloat(this.value) || 0; hcRailRateCardCalibration();"></div>
+          <div><label>Show</label><select style="width:170px;" onchange="calibrationState.filter = this.value; hcRailRateCardCalibration();">
+            <option value="all" ${calibrationState.filter === 'all' ? 'selected' : ''}>Every cell</option>
+            <option value="measurable" ${calibrationState.filter === 'measurable' ? 'selected' : ''}>Measurable only</option>
+            <option value="underpriced" ${calibrationState.filter === 'underpriced' ? 'selected' : ''}>Underpriced only</option>
+            <option value="overpriced" ${calibrationState.filter === 'overpriced' ? 'selected' : ''}>Overpriced only</option>
+          </select></div>
+        </div>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">Underpriced cells</span><div class="value">${r.underpriced_count}</div>
+            <span class="label" style="margin:4px 0 0;">of ${r.measurable_cell_count} measurable</span></div>
+          <div class="kpi"><span class="label">Worst implied LR</span><div class="value">${pct(r.worst_implied_loss_ratio)}</div>
+            <span class="label" style="margin:4px 0 0;">on a cell with real exposure</span></div>
+          <div class="kpi"><span class="label">Overpriced cells</span><div class="value">${r.overpriced_count}</div>
+            <span class="label" style="margin:4px 0 0;">business left on the table</span></div>
+          <div class="kpi"><span class="label">Too thin to judge</span><div class="value">${r.thin_cell_count}</div>
+            <span class="label" style="margin:4px 0 0;">of ${r.cell_count} cells on the card</span></div>
+        </div>
+        ${productRows ? `
+          <h4 style="margin-top:18px;">By product</h4>
+          <table><tr><th>Product</th><th class="num">Measurable cells</th><th class="num">Average implied LR</th><th class="num">Underpriced</th><th class="num">Share</th></tr>${productRows}</table>` : ''}
+        <h4 style="margin-top:18px;">Cell by cell</h4>
+        <div style="overflow-x:auto;">
+        <table>
+          <tr><th>Product</th><th>Network</th><th>Age band</th><th>Gender</th>
+            <th class="num">Card price</th><th class="num">Expected cost</th><th class="num">Implied LR</th>
+            <th class="num">Suggested</th><th class="num">Change</th><th class="num">Exposure</th></tr>
+          ${rows || `<tr><td colspan="10">No cells match this filter.</td></tr>`}
+        </table>
+        </div>
+      </div>
+    `;
+  } catch (err) {
+    main.innerHTML = `<div class="card"><h3>Rate Card Calibration</h3><div class="hint">${escapeHtml(err.message)}</div>
+      <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button></div>`;
+  }
 }
 
 /* Where this book's loss ratio is actually losing money.
@@ -4778,8 +4880,8 @@ async function loadRenewalPremiumBuildUp() {
     const inc = r.increase_pct;
     area.innerHTML = `
       <div class="rb-card">
-        <div class="rb-card-title">Renewal premium</div>
-        <div class="rb-card-sub">Built from the continuing members' own claims - leavers excluded, since their experience does not carry forward.</div>
+        <div class="rb-card-title">Renewal premium - continuing members only</div>
+        <div class="rb-card-sub">A third reading alongside Methods A and B above, and it will not agree with them - deliberately. Methods A and B price the whole expiring ledger; this one prices only the members who are actually renewing, with the leavers' claims taken out and the underwriter's own non-recurring judgement applied. Where it comes in lower, the difference IS the claims that walked out the door. Use A or B when no renewal census has been uploaded yet and there is no way to tell who stayed.</div>
         <div class="rb-kpi-strip" style="margin-top:14px;">
           ${_rbKpi('Required premium', money(r.gross_premium), `${r.member_count} members`)}
           ${_rbKpi('Per member', money(r.premium_per_member), 'annual')}

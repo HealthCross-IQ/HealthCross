@@ -6,6 +6,7 @@ Product/Network/variant options are actually priced, then compute and
 store a quote for a specific case.
 """
 from collections import defaultdict
+from datetime import date
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
@@ -16,7 +17,13 @@ from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
 from app.models import schemas
-from app.scoring.rules.new_business_rating import assess_opportunity, price_case, price_case_by_tier, price_tier_ladder
+from app.scoring.rules.new_business_rating import (
+    assess_opportunity,
+    category_loading_pct,
+    price_case,
+    price_case_by_tier,
+    price_tier_ladder,
+)
 from app.scoring.rules.portfolio_analysis import (
     price_case_against_burning_cost,
     summarize_burning_cost_by_product_network_age_gender,
@@ -415,6 +422,66 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     rate_cards = _rate_card_dicts(db)
     variant_rates = _variant_rate_dicts(db)
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
+
+
+@router.get("/new-business/rate-card-calibration")
+def get_rate_card_calibration(
+    target_loss_ratio: float = Query(0.85, description="The loss ratio each cell's suggested price is calibrated to"),
+    loading_pct: Optional[float] = Query(None, description="Expense loading as a fraction. Defaults to the standard per-product loading."),
+    min_exposure_member_years: float = Query(5.0, description="Below this exposure a cell is reported but not counted as a finding"),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Every rate card cell against what the book says that cell actually
+    costs - before anyone quotes, rather than as a footnote after.
+
+    A cell whose implied loss ratio is 140% is not a pricing opinion; it
+    is a cell that has lost money on every case it has priced and will
+    keep doing so until the number changes. The suggested price sits
+    beside the current one rather than replacing it, because a rate card
+    is a commercial document too and a cell may be knowingly held below
+    cost to win a segment.
+    """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+    from app.scoring.rules.rate_card_calibration import (
+        calibration_summary_by_product,
+        rate_card_calibration,
+    )
+
+    rate_cards = _rate_card_dicts(db)
+    if not rate_cards:
+        raise HTTPException(status_code=400, detail="No rate card uploaded to calibrate")
+
+    try:
+        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+    except HTTPException:
+        raise HTTPException(
+            status_code=400,
+            detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to calibrate against",
+        )
+
+    cube = burning_cost_cube(results, rate_cards)
+    if cube["book"]["burning_cost"] is None:
+        raise HTTPException(status_code=400, detail="The book has no claims experience to calibrate against")
+
+    # Loading varies per product on the card itself, so the default here
+    # is the standard product loading rather than one flat figure - using
+    # a single average would misstate the implied loss ratio on every
+    # product whose real loading differs from it.
+    effective_loading = (
+        loading_pct if loading_pct is not None
+        else category_loading_pct(rate_cards[0].get("product") or "")
+    )
+    calibration = rate_card_calibration(
+        rate_cards, cube,
+        loading_pct=effective_loading,
+        target_loss_ratio=target_loss_ratio,
+        min_exposure_member_years=min_exposure_member_years,
+    )
+    calibration["by_product"] = calibration_summary_by_product(calibration)
+    calibration["book_burning_cost"] = cube["book"]["burning_cost"]
+    return calibration
 
 
 @router.get("/cases/{case_id}/new-business-quote/burning-cost-comparison")
