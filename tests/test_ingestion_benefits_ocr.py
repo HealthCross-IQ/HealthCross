@@ -246,3 +246,57 @@ def test_a_pdf_with_no_text_at_all_still_reads_as_scanned(monkeypatch):
 
     monkeypatch.setattr(benefits_ocr.pdfplumber, "open", lambda f: _Pdf())
     assert benefits_ocr.is_scanned_pdf(io.BytesIO(b"x")) is True
+
+
+# --- OCR is only as good as the image it is handed ----------------------
+
+def test_pdfium_is_preferred_for_rendering_when_available(monkeypatch):
+    """Bad OCR is usually a bad picture, not a bad reader.
+
+    On a real table of benefits built from subsetted fonts, pdfplumber's
+    rasteriser produced a mangled image which Tesseract then faithfully
+    transcribed as nonsense - "ccecceecseeeeee" where the page plainly
+    read "Chronic Conditions". pdfium renders the same page as it appears
+    on screen and the same OCR reads it cleanly. The failure looked like
+    Tesseract's fault, which is why it went unnoticed.
+    """
+    import io
+    from app.ingestion import benefits_ocr
+
+    monkeypatch.setattr(benefits_ocr, "_render_pages_with_pdfium", lambda f, r: ["img1", "img2"])
+    monkeypatch.setattr(benefits_ocr.pytesseract, "image_to_string", lambda img: f"text from {img}")
+
+    def _fail(*args, **kwargs):
+        raise AssertionError("pdfplumber must not be used for rendering when pdfium is available")
+
+    monkeypatch.setattr(benefits_ocr.pdfplumber, "open", _fail)
+    assert benefits_ocr.ocr_pdf_pages(io.BytesIO(b"x")) == ["text from img1", "text from img2"]
+
+
+def test_rendering_falls_back_to_pdfplumber_without_pdfium(monkeypatch):
+    # An environment with no pdfium still works, just less well - it must
+    # not stop OCR entirely.
+    import io
+    from app.ingestion import benefits_ocr
+
+    monkeypatch.setattr(benefits_ocr, "_render_pages_with_pdfium", lambda f, r: None)
+
+    class _Im:
+        original = "fallback-image"
+
+    class _Page:
+        def to_image(self, resolution):
+            return _Im()
+
+    class _Pdf:
+        pages = [_Page()]
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(benefits_ocr.pdfplumber, "open", lambda f: _Pdf())
+    monkeypatch.setattr(benefits_ocr.pytesseract, "image_to_string", lambda img: f"ocr:{img}")
+    assert benefits_ocr.ocr_pdf_pages(io.BytesIO(b"x")) == ["ocr:fallback-image"]

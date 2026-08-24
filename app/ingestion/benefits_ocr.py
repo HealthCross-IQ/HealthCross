@@ -156,8 +156,45 @@ def is_scanned_pdf(file: BinaryIO) -> bool:
     return not has_readable_text
 
 
+def _render_pages_with_pdfium(file: BinaryIO, resolution: int) -> Optional[List]:
+    """Page images via pdfium, or None if it isn't available.
+
+    Preferred over pdfplumber's own rasteriser because the two disagree on
+    documents built from subsetted fonts: pdfium reproduces the page as it
+    appears on screen, while pdfplumber's renderer produces a mangled
+    image that OCR then faithfully transcribes as nonsense. The failure
+    looks like bad OCR - "ccecceecseeeeee" where the page plainly reads
+    "Chronic Conditions" - so it gets blamed on Tesseract rather than on
+    the picture Tesseract was handed.
+    """
+    try:
+        import pypdfium2 as pdfium
+    except ImportError:
+        return None
+
+    file.seek(0)
+    try:
+        document = pdfium.PdfDocument(file.read())
+        return [page.render(scale=resolution / 72).to_pil() for page in document]
+    except Exception:
+        return None
+    finally:
+        file.seek(0)
+
+
 def ocr_pdf_pages(file: BinaryIO, resolution: int = 300) -> List[str]:
-    """Returns OCR'd text for each page, in page order."""
+    """Returns OCR'd text for each page, in page order.
+
+    OCR is only ever as good as the image it is given, and rendering is
+    where this quietly goes wrong on real documents - see
+    _render_pages_with_pdfium. pdfplumber's rasteriser stays as the
+    fallback so an environment without pdfium still works, just less well.
+    """
+    images = _render_pages_with_pdfium(file, resolution)
+    if images is not None:
+        return [pytesseract.image_to_string(image) for image in images]
+
+    file.seek(0)
     pages_text = []
     with pdfplumber.open(file) as pdf:
         for page in pdf.pages:
