@@ -142,6 +142,7 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
         "report_period_end": None,
         "report_production_date": None,
         "total_paid": None,
+        "reported_not_paid": None,
         "incurred_not_reported": None,
         "opening_female": None,
         "opening_male": None,
@@ -194,6 +195,14 @@ def _parse_format1_text(raw_text: str) -> Dict[str, Any]:
             nums = re.findall(r"[\d,]+\.?\d*", rest)
             if nums:
                 result["total_paid"] = _parse_number(nums[0])
+        elif key == "5b":
+            # Reported but not yet paid - real cost already incurred, and
+            # previously dropped on the floor. On a 9-month report the
+            # pipeline is never empty, so ignoring it understates the
+            # period every single time.
+            nums = re.findall(r"[\d,]+\.?\d*", rest)
+            if nums:
+                result["reported_not_paid"] = _parse_number(nums[-1])
         elif key == "5c":
             nums = re.findall(r"[\d,]+\.?\d*", rest)
             if nums:
@@ -416,6 +425,7 @@ def _parse_format3_text(raw_text: str) -> Dict[str, Any]:
         "report_period_end": None,
         "report_production_date": None,
         "total_paid": None,
+        "reported_not_paid": None,
         "incurred_not_reported": None,
         "opening_members": None,
         "closing_members": None,
@@ -683,6 +693,7 @@ def _parse_format2_from_rows(rows: List[list]) -> Dict[str, Any]:
         "report_period_end": None,
         "report_production_date": None,
         "total_paid": None,
+        "reported_not_paid": None,
         "incurred_not_reported": None,
         "opening_members": None,
         "closing_members": None,
@@ -854,6 +865,7 @@ def _parse_format4_from_rows(rows: List[list]) -> Dict[str, Any]:
         "report_period_end": None,
         "report_production_date": None,
         "total_paid": None,
+        "reported_not_paid": None,
         "incurred_not_reported": None,
         "opening_members": None,
         "closing_members": None,
@@ -885,6 +897,12 @@ def _parse_format4_from_rows(rows: List[list]) -> Dict[str, Any]:
     row_5a = _find_row(rows, "5a")
     if row_5a and len(row_5a) > 2:
         result["total_paid"] = _cell_number(row_5a[2])
+    # Reported but not yet settled. Real cost that has already happened,
+    # and previously dropped - on a 9-month report the pipeline is never
+    # empty, so leaving it out understates the period every time.
+    row_5b = _find_row(rows, "5b")
+    if row_5b and len(row_5b) > 2:
+        result["reported_not_paid"] = _cell_number(row_5b[2])
     row_5c = _find_row(rows, "5c")
     if row_5c and len(row_5c) > 2:
         result["incurred_not_reported"] = _cell_number(row_5c[2])
@@ -1056,6 +1074,7 @@ def _parse_ppr_text(full_text: str) -> Dict[str, Any]:
         "report_period_end": None,
         "report_production_date": None,
         "total_paid": None,
+        "reported_not_paid": None,
         "incurred_not_reported": None,
         "opening_members": None,
         "closing_members": None,

@@ -2019,12 +2019,13 @@ async function printNewBusinessSummary(variant) {
 
   const get = async path => { try { return await api(path); } catch (err) { return null; } };
   const id = currentCase.id;
-  const [census, byCategory, comparison, prices, opportunity] = await Promise.all([
+  const [census, byCategory, comparison, prices, opportunity, experience] = await Promise.all([
     get(`/cases/${id}/census-summary`),
     get(`/cases/${id}/premium-by-category`),
     get(`/cases/${id}/existing-vs-proposed`),
     internal ? get(`/cases/${id}/price-comparison`) : Promise.resolve(null),
     internal ? get(`/cases/${id}/opportunity-assessment`) : Promise.resolve(null),
+    internal ? get(`/cases/${id}/experience-price`) : Promise.resolve(null),
   ]);
 
   if (!byCategory && !comparison) {
@@ -2083,6 +2084,57 @@ async function printNewBusinessSummary(variant) {
     ${census.average_age != null ? `<p class="muted">Average age ${census.average_age.toFixed(1)}.</p>` : ''}`;
 
   // --- internal only ----------------------------------------------------
+  // The report has to say what it thinks before it shows its working.
+  // A document that opens with a table of prices leaves the reader to
+  // work out the answer; one that opens with the answer and then proves
+  // it can be acted on in ten seconds.
+  const decision = !internal || !experience || !experience.expected_claims ? null : (() => {
+    const quoted = experience.quoted_price;
+    const breakEven = experience.break_even_premium;
+    const suggested = experience.suggested_premium;
+    const lr = experience.implied_loss_ratio_at_quote;
+    if (!quoted || !breakEven) return null;
+    const short = breakEven - quoted;
+    const loses = quoted < breakEven;
+    return `
+      <div class="headline ${loses ? 'bad' : 'ok'}">
+        <div class="headline-verdict">${loses ? 'DO NOT WRITE AT THIS PRICE' : 'PRICE CLEARS THE RISK'}</div>
+        <div class="headline-line">Quoted <strong>AED ${aed(quoted)}</strong>.
+          Break-even is <strong>AED ${aed(breakEven)}</strong>.
+          ${loses ? `We are <strong>AED ${aed(short)} short</strong> &mdash; that is the loss in year one.` : ''}</div>
+      </div>
+      <table class="headline-figures">
+        <tr>
+          <td><span class="fig-label">Expected claims</span><span class="fig">AED ${aed(experience.expected_claims)}</span></td>
+          <td><span class="fig-label">Quoted premium</span><span class="fig">AED ${aed(quoted)}</span></td>
+          <td><span class="fig-label">Loss ratio at this price</span><span class="fig ${lr > 1 ? 'bad' : ''}">${pct(lr)}</span></td>
+          <td><span class="fig-label">Price we should ask</span><span class="fig">AED ${aed(suggested)}</span></td>
+        </tr>
+      </table>`;
+  })();
+
+  const experienceTable = !internal || !experience || !experience.has_experience ? null : (() => {
+    const e = experience.experience;
+    const o = e.own_experience;
+    return `
+      <table>
+        <tr><th style="width:44%;">Their own claims, from the incumbent</th><th class="num">AED</th></tr>
+        <tr><td>Paid during the report period</td><td class="num">${aed(o.paid)}</td></tr>
+        <tr><td>Reported, not yet paid</td><td class="num">${aed(o.reported_not_paid)}</td></tr>
+        <tr><td>Incurred, not yet reported (IBNR)</td><td class="num">${aed(o.incurred_not_reported)}</td></tr>
+        <tr class="total"><th>Total incurred over ${o.report_days} days</th><td class="num"><strong>${aed(o.incurred_claims)}</strong></td></tr>
+      </table>
+      <table style="margin-top:14px;">
+        <tr><td>Members on risk</td><td class="num">${o.opening_members} &rarr; ${o.closing_members} (${o.member_years} member-years)</td></tr>
+        <tr><td><strong>Their cost per member per year</strong></td><td class="num"><strong>${aed(o.claims_per_member_year)}</strong></td></tr>
+        <tr><td>What our book predicts for these members</td><td class="num">${aed(e.blend.book_rate)}</td></tr>
+        <tr class="total"><th>Blended &mdash; ${esc(e.blend.basis)}</th><td class="num"><strong>${aed(e.blend.blended_rate)}</strong></td></tr>
+      </table>
+      <p class="note">Plus ${pct(e.trend_pct)} trend &rarr; <strong>AED ${aed(e.expected_claims_per_member)} per member</strong>,
+        <strong>AED ${aed(e.expected_claims)}</strong> for ${e.census_size} lives.</p>
+      <ul class="caveats">${e.caveats.map(c => `<li>${esc(c)}</li>`).join('')}</ul>`;
+  })();
+
   const priceTable = !internal || !prices ? null : `
     <table>
       <tr><th style="width:34%;">Price</th><th class="num">Total (AED)</th><th class="num">Per member</th><th class="num">Implied loss ratio</th></tr>
@@ -2132,6 +2184,18 @@ async function printNewBusinessSummary(variant) {
   tr.total th, tr.total td { border-top: 2px solid var(--border-strong); border-bottom: none; }
   .muted { color: var(--ink-muted); }
   .verdict { background: var(--surface-2); border-left: 3px solid var(--deep); padding: 10px 14px; }
+  .headline { padding: 16px 20px; margin-bottom: 14px; border-left: 5px solid var(--deep); background: var(--surface-2); }
+  .headline.bad { border-left-color: var(--critical); background: var(--critical-bg); }
+  .headline-verdict { font-size: 19px; font-weight: 700; letter-spacing: 0.01em; margin-bottom: 5px; }
+  .headline.bad .headline-verdict { color: var(--critical); }
+  .headline-line { font-size: 14px; }
+  table.headline-figures { margin-bottom: 26px; }
+  table.headline-figures td { border: none; border-top: 2px solid var(--border-strong); padding: 10px 12px 0 0; width: 25%; }
+  .fig-label { display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-2); margin-bottom: 3px; }
+  .fig { display: block; font-size: 20px; font-weight: 700; font-family: var(--font-mono); }
+  .fig.bad { color: var(--critical); }
+  ul.caveats { margin: 10px 0 0; padding-left: 18px; color: var(--ink-2); font-size: 12px; }
+  ul.caveats li { margin-bottom: 4px; }
   footer.doc { margin-top: 30px; padding-top: 10px; border-top: 1px solid var(--border);
                color: var(--ink-muted); font-size: 11.5px; }
   button { display: none !important; }
@@ -2141,9 +2205,11 @@ async function printNewBusinessSummary(variant) {
     <h1>${esc(title)}</h1>
     <div class="meta">${esc(currentCase.company_name)}${currentCase.broker_name ? ' &middot; via ' + esc(currentCase.broker_name) : ''} &middot; ${today}</div>
   </header>
+  ${internal && decision ? decision : ''}
   ${section('The offer', categoryTable)}
   ${section('Membership', censusTable)}
   ${section(internal ? 'Existing vs proposed benefits' : 'Table of benefits', benefitTables)}
+  ${internal ? section('Why this price', experienceTable) : ''}
   ${internal ? section('Pricing', priceTable) : ''}
   ${internal ? section('Risk assessment', verdictBlock) : ''}
   <footer class="doc">${internal

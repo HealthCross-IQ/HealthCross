@@ -1365,3 +1365,112 @@ def get_price_comparison(
         "issued_quote": issued,
         "trend_pct": trend_pct,
     }
+
+
+def _latest_claims_report_dict(case) -> Optional[dict]:
+    """This case's most recent claims report, as the plain dict
+    experience_pricing works from.
+
+    Most recent by report period end rather than upload order: a case can
+    carry an older report uploaded later, and pricing off the stale one
+    because it arrived second would be silent and wrong.
+    """
+    reports = [r for r in case.claims_reports if r.report_period_end]
+    if not reports:
+        return None
+    report = max(reports, key=lambda r: r.report_period_end)
+    return {
+        "report_period_start": report.report_period_start,
+        "report_period_end": report.report_period_end,
+        "total_paid": report.total_paid,
+        "reported_not_paid": report.reported_not_paid,
+        "incurred_not_reported": report.incurred_not_reported,
+        "opening_members": report.opening_members,
+        "closing_members": report.closing_members,
+    }
+
+
+@router.get("/cases/{case_id}/experience-price")
+def get_experience_price(
+    case_id: int,
+    trend_pct: float = Query(0.10),
+    target_loss_ratio: float = Query(0.85, description="The loss ratio the suggested premium is built to land on"),
+    benefit_uplift_pct: float = Query(0.0, description="How much richer the proposal is than the plan these claims were incurred on"),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """What this group's OWN claims say it should be priced at.
+
+    The burning-cost cube says what members like these cost across the
+    book. A claims report from the incumbent says what these actual
+    people cost, and where the group carries enough exposure the second
+    answer is worth more - see app/scoring/rules/experience_pricing.py.
+
+    Returns None-safe: a case with no claims report gets
+    has_experience=False and the book's own number, rather than an error.
+    That is the common case on a new enquiry and is not a failure.
+    """
+    from app.scoring.rules.experience_pricing import (
+        price_from_experience,
+        premium_for_target_loss_ratio,
+    )
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+
+    # The book's own estimate for exactly these members - the complement
+    # the group's experience is blended against.
+    book_expected = None
+    try:
+        book_expected = get_risk_based_price(case_id, trend_pct=0.0, as_of=as_of, db=db)["risk_premium"]
+    except HTTPException:
+        pass
+
+    report = _latest_claims_report_dict(case)
+    priced = (
+        price_from_experience(report, book_expected, len(census), trend_pct, benefit_uplift_pct)
+        if report else None
+    )
+
+    loading_pct = category_loading_pct("")
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    if quote and quote.categories:
+        loadings = [
+            category_loading_pct(c.get("product"), c.get("commission_pct"))
+            for c in _normalize_quote_categories(quote.categories)
+            if c.get("product")
+        ]
+        if loadings:
+            loading_pct = sum(loadings) / len(loadings)
+
+    expected_claims = priced["expected_claims"] if priced else (
+        book_expected * (1 + trend_pct) if book_expected else None
+    )
+    quoted_price = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+
+    return {
+        "has_experience": bool(priced),
+        "experience": priced,
+        "book_expected_claims": round(book_expected, 2) if book_expected else None,
+        "expected_claims": round(expected_claims, 2) if expected_claims else None,
+        "loading_pct": loading_pct,
+        "quoted_price": quoted_price,
+        "break_even_premium": premium_for_target_loss_ratio(expected_claims, loading_pct, 1.0) if expected_claims else None,
+        "suggested_premium": premium_for_target_loss_ratio(expected_claims, loading_pct, target_loss_ratio) if expected_claims else None,
+        "target_loss_ratio": target_loss_ratio,
+        "member_count": len(census),
+        "implied_loss_ratio_at_quote": (
+            round(expected_claims / (quoted_price * (1 - loading_pct)), 4)
+            if expected_claims and quoted_price and quoted_price > 0 else None
+        ),
+    }

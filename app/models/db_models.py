@@ -299,6 +299,12 @@ class ClaimsReport(Base):
     report_period_end = Column(Date, nullable=True)
     report_production_date = Column(Date, nullable=True)
     total_paid = Column(Float, nullable=True)
+    #: DHA line 5b - claims incurred and REPORTED but not yet settled at
+    #: the report date. Distinct from IBNR below, which is the claims
+    #: nobody has told the insurer about yet. Both are real cost that has
+    #: already happened, so pricing off total_paid alone understates the
+    #: period by whatever is still in the pipeline.
+    reported_not_paid = Column(Float, nullable=True)
     incurred_not_reported = Column(Float, nullable=True)
     opening_members = Column(Integer, nullable=True)
     closing_members = Column(Integer, nullable=True)
