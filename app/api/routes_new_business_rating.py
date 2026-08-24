@@ -548,6 +548,59 @@ def upload_hc_plan_details(case_id: int, file: UploadFile = File(...), db: Sessi
     }
 
 
+@router.get("/cases/{case_id}/existing-vs-proposed")
+def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
+    """The client's existing cover beside what HealthCross is proposing,
+    field for field, with the direction of each change.
+
+    Both sides are rendered in the same 12-field shape, and the proposal's
+    limit and copay variants are recombined into the single line a table
+    of benefits actually writes ("USD 300 Co-pay: 20%") - a comparison
+    only reads if both sides are phrased alike.
+    """
+    from app.scoring.rules.proposed_benefits import proposed_benefit_rows
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case_id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    quoted_categories = _normalize_quote_categories(quote.categories or []) if quote else []
+    selections_by_category = {c["category"]: (c.get("variant_selections") or {}) for c in quoted_categories}
+    design_by_category = {c["category"]: c for c in quoted_categories}
+
+    existing_by_category = {
+        _normalize_category(p.category): p
+        for p in case.benefit_plans
+        if p.role == "existing" and p.category
+    }
+    variant_rates = _variant_rate_dicts(db)
+
+    categories = sorted(set(selections_by_category) | set(existing_by_category))
+    out = []
+    for category in categories:
+        plan = existing_by_category.get(category)
+        design = design_by_category.get(category) or {}
+        out.append({
+            "category": category,
+            "existing_plan_name": plan.plan_name if plan else None,
+            "product": design.get("product"),
+            "network": design.get("network"),
+            "tpa": design.get("tpa"),
+            "rows": proposed_benefit_rows(
+                (plan.standard_summary if plan else None),
+                selections_by_category.get(category),
+                variant_rates,
+            ),
+        })
+    return {"categories": out, "has_quote": bool(quote)}
+
+
 @router.get("/cases/{case_id}/quote-readiness")
 def get_quote_readiness(case_id: int, db: Session = Depends(get_db)):
     """Why this case will not price, said out loud.

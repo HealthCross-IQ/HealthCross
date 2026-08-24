@@ -6060,12 +6060,79 @@ async function nbRenderArea() {
       <div id="nb-plan-details-result"></div>
     </div>
     <div id="nb-readiness-area"></div>
+    <div id="nb-existing-vs-proposed-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
   loadNbQuoteReadiness();
+  loadNbExistingVsProposed();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* The client's existing cover beside what HealthCross is proposing.
+   Both sides in the same 12 fields, with the proposal's limit and copay
+   variants recombined into the one line a table of benefits actually
+   writes - a comparison only reads if both sides are phrased alike. */
+async function loadNbExistingVsProposed() {
+  const area = document.getElementById('nb-existing-vs-proposed-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/existing-vs-proposed`);
+    if (!r.categories.length) { area.innerHTML = ''; return; }
+
+    const dirPill = d => {
+      if (d === 'improved') return '<span class="tier-pill dir-improved">richer</span>';
+      if (d === 'reduced') return '<span class="tier-pill dir-review">leaner</span>';
+      if (d === 'same') return '<span class="tier-pill dir-same">same</span>';
+      return '<span class="tier-pill">review</span>';
+    };
+
+    const blocks = r.categories.map(c => {
+      const rows = c.rows.map(row => {
+        const both = row.existing && row.proposed;
+        const added = !row.existing && row.proposed;
+        const dropped = row.existing && !row.proposed;
+        return `
+        <tr>
+          <td><strong>${escapeHtml(row.label)}</strong></td>
+          <td>${row.existing ? escapeHtml(row.existing) : '<span class="hint">not in the document</span>'}</td>
+          <td>${row.proposed ? escapeHtml(row.proposed) : `<span class="hint">${row.priced_as_variant ? 'not selected' : 'not priced as a variant'}</span>`}</td>
+          <td>${both ? dirPill(row.direction)
+                : added ? '<span class="tier-pill dir-review">added</span>'
+                : dropped ? '<span class="tier-pill dir-review">no proposal</span>'
+                : '<span class="hint">-</span>'}</td>
+        </tr>`;
+      }).join('');
+
+      return `
+        <div class="card">
+          <h3>Category ${escapeHtml(c.category)}
+            <span style="color:var(--ink-muted); font-weight:400; font-size:14px;">
+              ${c.product ? escapeHtml(c.product) : ''}${c.network ? ' / ' + escapeHtml(c.network) : ''}${c.tpa ? ' (' + escapeHtml(c.tpa) + ')' : ''}
+            </span>
+          </h3>
+          ${c.existing_plan_name ? `<div class="hint">Existing cover read from: ${escapeHtml(c.existing_plan_name)}</div>` : '<div class="hint">No existing table of benefits on this category - only the proposal is shown.</div>'}
+          <div style="overflow-x:auto;">
+          <table style="margin-top:12px;">
+            <tr><th style="width:22%;">Benefit</th><th style="width:32%;">Client's existing</th><th style="width:32%;">HealthCross proposed</th><th style="width:14%;">Comparison</th></tr>
+            ${rows}
+          </table>
+          </div>
+        </div>`;
+    }).join('');
+
+    area.innerHTML = `
+      <div class="card">
+        <h3>Existing vs proposed benefits</h3>
+        <div class="hint">The client's current cover beside what HealthCross is offering, field for field. Dental, Optical and Pharmacy price as two variants each (limit and copay) and are recombined here into the single line a table of benefits writes.</div>
+        <div class="hint"><strong>"Added"</strong> means the incumbent's document says nothing about that benefit while HealthCross is offering it - the case where a proposal is most likely to be adding cover nobody has priced for. <strong>"Review"</strong> means the two values are not comparable as numbers and need reading.</div>
+      </div>
+      ${blocks}
+    `;
+  } catch (err) {
+    area.innerHTML = '';
+  }
 }
 
 /* Import the offer straight from the pricing tool's own export.
