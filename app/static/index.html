@@ -2017,6 +2017,21 @@ async function printNewBusinessSummary(variant) {
   if (!currentCase) return;
   const internal = variant === 'internal';
 
+  // window.open() must happen synchronously, in direct response to the
+  // click - see printPortfolioManagementReport, which hit exactly this.
+  // Opening it only after the awaited fetches below finish is no longer
+  // "tied" to the click as far as the browser's pop-up blocker is
+  // concerned, so it is silently killed: no error, no tab, a button that
+  // appears to do nothing. Opening a blank tab up front and writing into
+  // it once the data arrives keeps it inside that one trusted gesture.
+  const win = window.open('', '_blank');
+  if (!win) {
+    toast('Your browser blocked the document pop-up - allow pop-ups for this site and try again', true);
+    return;
+  }
+  win.document.write('<!doctype html><title>Preparing...</title><body style="font:14px system-ui;padding:40px;color:#46586e">Preparing the document...</body>');
+
+
   const get = async path => { try { return await api(path); } catch (err) { return null; } };
   const id = currentCase.id;
   const [census, byCategory, comparison, prices, opportunity, experience] = await Promise.all([
@@ -2029,6 +2044,7 @@ async function printNewBusinessSummary(variant) {
   ]);
 
   if (!byCategory && !comparison) {
+    win.close();
     toast('Nothing to print yet - compute the quote first', true);
     return;
   }
@@ -2238,11 +2254,7 @@ async function printNewBusinessSummary(variant) {
   <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
-  // Nothing here should ever fail silently again: a throw while building
-  // the document used to leave the button doing nothing at all, with the
-  // reason only in a console the reader never opens.
-  if (!html) { toast('Could not build the document', true); return; }
-  const win = window.open('', '_blank');
+  win.document.open();
   win.document.write(html);
   win.document.close();
 }
@@ -2258,14 +2270,28 @@ async function printNewBusinessSummary(variant) {
 // market-rate comparison exists to show instead).
 async function printRenewalClientSummary(variant) {
   if (!currentCase) return;
+
+  // Same pop-up blocker rule as printNewBusinessSummary and
+  // printPortfolioManagementReport: the tab has to be opened inside the
+  // click itself, before anything is awaited, or the browser kills it
+  // silently and the button looks broken.
+  const win = window.open('', '_blank');
+  if (!win) {
+    toast('Your browser blocked the document pop-up - allow pop-ups for this site and try again', true);
+    return;
+  }
+  win.document.write('<!doctype html><title>Preparing...</title><body style="font:14px system-ui;padding:40px;color:#46586e">Preparing the document...</body>');
+
   let data;
   try {
     data = await api(`/cases/${currentCase.id}/renewal-client-summary`);
   } catch (err) {
+    win.close();
     toast(err.message, true);
     return;
   }
   if (!data.renewal) {
+    win.close();
     toast('No renewal rating available yet - upload a claims ledger and set the current annual premium first', true);
     return;
   }
@@ -2570,7 +2596,7 @@ async function printRenewalClientSummary(variant) {
 <script>window.onload = () => window.print();<\/script>
 </body></html>`;
 
-  const win = window.open('', '_blank');
+  win.document.open();
   win.document.write(html);
   win.document.close();
 }
