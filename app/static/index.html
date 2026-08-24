@@ -6048,6 +6048,17 @@ async function nbRenderArea() {
       <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
+    <div class="card">
+      <h3>Import the offer from the pricing tool</h3>
+      <div class="hint">Drop the pricing tool's own <strong>Plan Details</strong> export here and every category is configured and priced from it - product, network, TPA and every benefit selection, exactly as decided in the tool. Nothing to re-key, and nothing to disagree with the tool that produced it.</div>
+      <div class="dropzone" id="dropzone-hc-plan-details">
+        <span class="kind-label">Plan Details</span>
+        <input type="file" id="file-hc-plan-details" accept=".xlsx,.xls,.csv">
+        <button onclick="nbUploadPlanDetails()">Import and quote</button>
+        <span id="status-hc-plan-details" class="status-pending"></span>
+      </div>
+      <div id="nb-plan-details-result"></div>
+    </div>
     <div id="nb-readiness-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
@@ -6055,6 +6066,48 @@ async function nbRenderArea() {
   loadNbQuoteReadiness();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
+}
+
+/* Import the offer straight from the pricing tool's own export.
+   The plan was already decided there - product, network, TPA and every
+   benefit selection. Re-keying it is not data entry, it is a chance to
+   disagree with the tool that produced it. */
+async function nbUploadPlanDetails() {
+  const input = document.getElementById('file-hc-plan-details');
+  const statusEl = document.getElementById('status-hc-plan-details');
+  const resultEl = document.getElementById('nb-plan-details-result');
+  if (!input || !input.files.length) { statusEl.textContent = 'Choose a file first'; return; }
+
+  statusEl.textContent = 'Reading and pricing...';
+  resultEl.innerHTML = '';
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  try {
+    const r = await api(`/cases/${currentCase.id}/hc-plan-details`, { method: 'POST', body: form });
+    statusEl.textContent = '';
+
+    const warned = r.unmatched_selections || [];
+    const notOnCensus = r.categories_not_on_census || [];
+    resultEl.innerHTML = `
+      <div class="hint" style="margin-top:12px;">
+        <span class="tier-pill dir-improved">Priced</span>
+        Categories ${r.categories_applied.map(escapeHtml).join(', ')} configured and quoted from ${escapeHtml(r.source_filename)}.
+      </div>
+      ${notOnCensus.length ? `<div class="hint">${notOnCensus.map(escapeHtml).join(', ')} ${notOnCensus.length === 1 ? 'is' : 'are'} priced in the export but nobody on the census is in ${notOnCensus.length === 1 ? 'it' : 'them'} - usually the export and the census are from different points in the negotiation.</div>` : ''}
+      ${warned.length ? `
+        <div class="hint" style="margin-top:8px;"><strong>${warned.length} selection(s) the rate card cannot price.</strong>
+        These do not fail - pricing falls back to the base option - so the quote below looks reasonable while being for a different plan than the export. Worth resolving before the quote goes out.</div>
+        <table style="margin-top:8px;">
+          <tr><th>Category</th><th>Benefit</th><th>Exported value</th><th>Why</th></tr>
+          ${warned.map(w => `<tr><td>${escapeHtml(w.category)}</td><td>${escapeHtml(w.variant_name)}</td><td>${escapeHtml(w.option_value)}</td><td class="hint">${escapeHtml(w.reason)}</td></tr>`).join('')}
+        </table>` : ''}
+    `;
+    nbLastQuote = r.quote;
+    await loadNewBusinessRating();
+  } catch (err) {
+    statusEl.textContent = '';
+    resultEl.innerHTML = `<div class="hint" style="margin-top:12px; color:var(--critical);">${escapeHtml(err.message)}</div>`;
+  }
 }
 
 /* Why this case will not price, said out loud.

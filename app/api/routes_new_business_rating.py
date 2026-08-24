@@ -24,6 +24,7 @@ from app.scoring.rules.new_business_rating import (
     price_case_by_tier,
     price_tier_ladder,
 )
+from app.reference.emirate_regions import region_for_emirate
 from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
 
 router = APIRouter(tags=["new-business-rating"])
@@ -450,6 +451,101 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
     rate_cards = _rate_card_dicts(db)
     variant_rates = _variant_rate_dicts(db)
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
+
+
+@router.post("/cases/{case_id}/hc-plan-details")
+def upload_hc_plan_details(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
+    """Apply a pricing tool "Plan Details" export to this case, and quote.
+
+    The offer has already been decided in the pricing tool - product,
+    network, TPA and every benefit selection, per category. Re-keying that
+    into the portal is not data entry, it is an opportunity to disagree
+    with the tool that produced it. This reads the export and prices
+    directly from it.
+
+    Selections the rate card cannot price are REPORTED rather than
+    dropped, because an unrecognised selection does not fail: pricing
+    falls back to the variant's base option and the quote comes out
+    looking perfectly reasonable while being for a different plan than the
+    one exported. That failure is invisible in the number and visible
+    only in the warnings.
+    """
+    from app.ingestion.hc_plan_details import parse_hc_plan_details, unmatched_selections
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    try:
+        parsed = parse_hc_plan_details(file.file, file.filename)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read the Plan Details export: {exc}")
+    if not parsed["categories"]:
+        raise HTTPException(status_code=400, detail="No categories found in the Plan Details export")
+
+    census_categories = {
+        _normalize_category(r.category) for r in case.census_records if _normalize_category(r.category)
+    }
+
+    categories = []
+    not_on_census = []
+    for entry in parsed["categories"]:
+        category = _normalize_category(entry["category"])
+        if census_categories and category not in census_categories:
+            # Priced in the tool but nobody on the census is in it. Worth
+            # saying: it usually means the export and the census are from
+            # different points in the negotiation.
+            not_on_census.append(entry["category"])
+            continue
+        if not (entry["product"] and entry["network"] and entry["tpa"]):
+            continue
+        categories.append({
+            "category": category,
+            "product": entry["product"],
+            "network": entry["network"],
+            "tpa": entry["tpa"],
+            "variant_selections": entry["variant_selections"],
+        })
+
+    if not categories:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "None of the export's categories match this case's census. "
+                f"Export has {', '.join(e['category'] for e in parsed['categories'])}; "
+                f"census has {', '.join(sorted(census_categories)) or 'no categories at all'}."
+            ),
+        )
+
+    rate_cards = _rate_card_dicts(db)
+    if not rate_cards:
+        raise HTTPException(status_code=400, detail="No rate card uploaded - nothing can be priced")
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+
+    variant_rates = _variant_rate_dicts(db)
+    # Check the selections against what is actually priced for each
+    # category's own region/tpa/network before quoting, so the warnings
+    # describe this quote rather than a generic possibility.
+    warnings = []
+    for entry in categories:
+        region = region_for_emirate(next((m.get("emirates") for m in census if m.get("category") == entry["category"]), None))
+        options: Dict[str, List[str]] = defaultdict(list)
+        for r in variant_rates:
+            if r.get("region") == region and r.get("tpa") == entry["tpa"] and r.get("network") == entry["network"]:
+                options[r["variant_name"]].append(r["option_value"])
+        if options:
+            warnings.extend(unmatched_selections([entry], dict(options)))
+
+    quote = _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
+    return {
+        "quote": quote,
+        "categories_applied": [c["category"] for c in categories],
+        "categories_not_on_census": not_on_census,
+        "unmatched_selections": warnings,
+        "source_filename": parsed["source_filename"],
+    }
 
 
 @router.get("/cases/{case_id}/quote-readiness")
