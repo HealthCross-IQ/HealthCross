@@ -214,3 +214,71 @@ def test_burning_cost_comparison_404s_without_a_prior_quote(client, members_xlsx
 def test_burning_cost_comparison_404s_for_missing_case(client):
     resp = client.get("/cases/999999/new-business-quote/burning-cost-comparison")
     assert resp.status_code == 404
+
+
+def test_a_member_the_book_has_no_exact_cell_for_is_still_priced(
+    client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx
+):
+    """The bug this endpoint used to have.
+
+    It priced off raw per-bucket burning cost, which EXCLUDED any member
+    whose exact (Product, Network, age band, gender) bucket was missing
+    or too thin. The comparison then silently priced fewer members than
+    the quote did and came in low by however many it dropped - and the
+    thinner the book, the worse the understatement, which is exactly when
+    an underwriter is most likely to lean on it.
+
+    The book here has only 35-year-old males. A 60-year-old female has no
+    cell of her own, so under the old behaviour she vanished from the
+    comparison entirely.
+    """
+    _upload_portfolio_book(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx)
+
+    resp = client.post("/cases", json={"broker_name": "B", "company_name": "Edge", "industry": "trading"})
+    case_id = resp.json()["id"]
+    db = client.db_session_local()
+    from app.models import db_models as models
+    db.add(models.CensusRecord(case_id=case_id, category="A", age=35, gender="M",
+                               marital_status="single", relation="employee", emirates="Dubai"))
+    db.add(models.CensusRecord(case_id=case_id, category="A", age=60, gender="F",
+                               marital_status="married", relation="employee", emirates="Dubai"))
+    db.commit()
+    db.close()
+
+    client.post(
+        f"/cases/{case_id}/new-business-quote",
+        json={"categories": [{"category": "A", "product": "Gold", "network": "MSH Platinum",
+                              "tpa": "MSH MENA", "variant_selections": {}}]},
+    )
+
+    body = client.get(f"/cases/{case_id}/new-business-quote/burning-cost-comparison").json()
+    cat = body["categories"][0]
+
+    # Both members priced, not just the one with an exact cell.
+    assert cat["member_count"] == 2
+    assert cat["priced_member_count"] == 2
+    assert cat["gross_annual_premium"] > 0
+    # And the fallback is declared rather than hidden.
+    assert cat["fallback_member_count"] >= 1
+    assert cat["warnings"], "a member priced from a broader cell should be reported"
+
+
+def test_the_comparison_reports_the_books_own_cost_not_a_forward_projection(
+    client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx
+):
+    # Trend defaults to zero so the figure means "what the book cost",
+    # which is what it has always meant here. Applying it is an explicit
+    # choice, for comparing against a card that prices forward.
+    _upload_portfolio_book(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx)
+    case_id = _make_case_with_census(client)
+    client.post(
+        f"/cases/{case_id}/new-business-quote",
+        json={"categories": [{"category": "A", "product": "Gold", "network": "MSH Platinum",
+                              "tpa": "MSH MENA", "variant_selections": {}}]},
+    )
+    flat = client.get(f"/cases/{case_id}/new-business-quote/burning-cost-comparison").json()
+    trended = client.get(
+        f"/cases/{case_id}/new-business-quote/burning-cost-comparison?trend_pct=0.10"
+    ).json()
+    assert flat["categories"][0]["net_annual_premium"] == 90.0
+    assert trended["categories"][0]["net_annual_premium"] == pytest.approx(99.0)

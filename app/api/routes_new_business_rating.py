@@ -24,10 +24,7 @@ from app.scoring.rules.new_business_rating import (
     price_case_by_tier,
     price_tier_ladder,
 )
-from app.scoring.rules.portfolio_analysis import (
-    price_case_against_burning_cost,
-    summarize_burning_cost_by_product_network_age_gender,
-)
+from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
 
 router = APIRouter(tags=["new-business-rating"])
 
@@ -541,18 +538,34 @@ def get_rate_card_calibration(
 
 
 @router.get("/cases/{case_id}/new-business-quote/burning-cost-comparison")
-def get_new_business_quote_burning_cost_comparison(case_id: int, db: Session = Depends(get_db)):
+def get_new_business_quote_burning_cost_comparison(
+    case_id: int,
+    trend_pct: float = Query(0.0, description="Medical trend to apply to the book's historic experience. Defaults to 0 so the figure is the book's own cost, not a forward projection - set it to compare against a card that prices forward."),
+    db: Session = Depends(get_db),
+):
     """Compares the latest quote's rate-card price against what
-    HealthCross's own already-booked book would charge for this same
-    census, re-priced at real burning cost by (Product, Network, age band,
-    gender) - see price_case_against_burning_cost. A reference for whether
-    the rate card is running rich or thin against actual experience, not
-    something that overrides the quote. Returns null (not an error) when
-    Portfolio Analysis hasn't been uploaded yet, since that's optional
-    supporting data this comparison doesn't require to exist; still 404s
-    if there's no prior New Business quote to compare against at all (same
-    as /by-tier).
+    HealthCross's own already-booked book says this same census costs.
+
+    Priced off the burning cost cube (see burning_cost_cube), not the raw
+    per-bucket burning cost this used to use. The difference matters: the
+    raw version EXCLUDED any member whose exact (Product, Network, age
+    band, gender) bucket was missing or too thin, so the comparison
+    silently priced fewer members than the quote did and came in low by
+    however many it dropped - on a case with an unusual age or an
+    uncommon network, most of them. The cube never drops a member; a cell
+    with no experience of its own falls back to the nearest broader cell
+    that has some, and says how far it had to fall back.
+
+    A reference for whether the rate card is running rich or thin against
+    real experience, not something that overrides the quote. Returns null
+    (not an error) when Portfolio Analysis hasn't been uploaded, since
+    that's optional supporting data; still 404s when there's no quote to
+    compare against.
     """
+    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
+    from app.scoring.rules.burning_cost_cube import burning_cost_cube
+    from app.scoring.rules.expected_cost_pricing import price_by_category
+
     case = db.get(models.Case, case_id)
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -567,15 +580,66 @@ def get_new_business_quote_burning_cost_comparison(case_id: int, db: Session = D
         raise HTTPException(status_code=404, detail="No new business quote found for this case")
 
     try:
-        portfolio_results = _run_analysis(db, as_of=_get_stored_as_of(db))
+        portfolio_results = _run_analysis(db, as_of=_stored_as_of(db), require_rate_card=False)
     except HTTPException:
         return None
 
     census = _case_census_dicts(case)
     rate_cards = _rate_card_dicts(db)
-    burning_cost_rows = summarize_burning_cost_by_product_network_age_gender(portfolio_results, rate_cards)
+    cube = burning_cost_cube(portfolio_results, rate_cards)
+    if cube["book"]["burning_cost"] is None:
+        return None
+
     normalized_categories = _normalize_quote_categories(quote.categories)
-    comparison = price_case_against_burning_cost(census, normalized_categories, rate_cards, burning_cost_rows)
+
+    # Each category is priced at ITS OWN product's loading, the same way
+    # the quote itself is - using one blended rate would misstate every
+    # category whose real loading differs from the average.
+    loading_by_category = {
+        c["category"]: category_loading_pct(c["product"], c.get("commission_pct"))
+        for c in normalized_categories
+    }
+    # The cube prices on (product, network, ...), which the census rows do
+    # not carry - each member's product/network comes from their own
+    # category's plan design, exactly as rate-card pricing resolves it.
+    category_design = {c["category"]: c for c in normalized_categories}
+    priced_census = []
+    for member in census:
+        design = category_design.get(member.get("category"))
+        priced_census.append({
+            **member,
+            "product": design["product"] if design else None,
+            "network": _burning_cost_lookup_network(design["network"]) if design else None,
+        })
+
+    comparison = price_by_category(
+        priced_census, cube,
+        loading_pct_by_category=loading_by_category,
+        default_loading_pct=category_loading_pct(""),
+        trend_pct=trend_pct,
+    )
+    # Same shape the frontend already reads, plus what the cube adds.
+    comparison["case_gross_annual_premium"] = comparison["case_gross_premium"]
+    comparison["uncategorized_member_count"] = sum(
+        1 for m in census if m.get("category") not in category_design
+    )
+    for cat in comparison["categories"]:
+        design = category_design.get(cat["category"])
+        cat["product"] = design["product"] if design else None
+        cat["network"] = design["network"] if design else None
+        cat["gross_annual_premium"] = cat["gross_premium"]
+        cat["net_annual_premium"] = cat["risk_premium"]
+        # Kept for callers that read it, but it now always equals
+        # member_count: the raw-bucket version dropped members it could
+        # not match exactly, and this one never does. A gap between the
+        # two was the bug, not a feature.
+        cat["priced_member_count"] = cat["member_count"]
+        # How much of this category's figure rests on its own segments
+        # versus a broader fallback - the honest confidence statement.
+        cat["warnings"] = (
+            [f"{cat['fallback_member_count']} of {cat['member_count']} members priced from a broader cell than their own"]
+            if cat["fallback_member_count"] else []
+        )
 
     # Line up each category against the rate-card quote's own gross premium
     # so the frontend doesn't have to re-match by category name itself.

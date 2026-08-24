@@ -1043,7 +1043,25 @@ def price_case_against_burning_cost(
     rate_cards: List[dict],
     burning_cost_rows: List[dict],
 ) -> dict:
-    """Re-prices a New Business case's own census against the booked book's
+    """SUPERSEDED - do not use for new work. See
+    app/scoring/rules/expected_cost_pricing.py's price_by_category, which
+    the burning-cost comparison endpoint now uses.
+
+    The reason is the behaviour described below as a safeguard: excluding
+    a member whose exact bucket is missing or thin does not produce a
+    cautious figure, it produces a LOW one. The excluded members do not
+    stop existing - they are simply priced at nothing, so the total comes
+    in short by however many were dropped, and the sparser the book the
+    worse the understatement. That is exactly the situation where an
+    underwriter is most likely to lean on this number. The cube's
+    hierarchical fallback prices every member from the nearest cell that
+    does have exposure and reports how far it had to fall back, which is
+    the honest version of the same caution.
+
+    Kept only because it still has tests describing the old behaviour;
+    nothing in the application calls it.
+
+    Re-prices a New Business case's own census against the booked book's
     own real burning cost (see
     summarize_burning_cost_by_product_network_age_gender) instead of the
     rate card, applying the SAME category_loading_pct/gross_up loading New
