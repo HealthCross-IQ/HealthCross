@@ -1223,7 +1223,9 @@ def get_opportunity_assessment(
     # never disagree about what is being compared.
     risk_price = None
     try:
-        risk_price = get_risk_based_price(case_id, trend_pct=trend_pct, as_of=as_of, db=db)["suggested_premium"]
+        risk_price = get_risk_based_price(
+            case_id, trend_pct=trend_pct, apply_nationality=True, as_of=as_of, db=db
+        )["suggested_premium"]
     except HTTPException:
         pass
 
@@ -1332,7 +1334,9 @@ def get_price_comparison(
     risk_price = None
     expected_claims = None
     try:
-        risk = get_risk_based_price(case_id, trend_pct=trend_pct, as_of=as_of, db=db)
+        risk = get_risk_based_price(
+            case_id, trend_pct=trend_pct, apply_nationality=True, as_of=as_of, db=db
+        )
         risk_price = risk["suggested_premium"]
         expected_claims = risk["risk_premium"]
     except HTTPException:
@@ -1427,7 +1431,14 @@ def get_experience_price(
     # the group's experience is blended against.
     book_expected = None
     try:
-        book_expected = get_risk_based_price(case_id, trend_pct=0.0, as_of=as_of, db=db)["risk_premium"]
+        # Every argument passed explicitly: calling an endpoint function
+        # in-process leaves anything omitted as the Query() default
+        # object rather than its value, which then fails deep inside the
+        # arithmetic with a type error that names neither the endpoint
+        # nor the argument.
+        book_expected = get_risk_based_price(
+            case_id, trend_pct=0.0, apply_nationality=True, as_of=as_of, db=db
+        )["risk_premium"]
     except HTTPException:
         pass
 
@@ -1473,4 +1484,244 @@ def get_experience_price(
             round(expected_claims / (quoted_price * (1 - loading_pct)), 4)
             if expected_claims and quoted_price and quoted_price > 0 else None
         ),
+    }
+
+
+#: Diagnosis keywords that mark a claim as chronic or metabolic. Coarse
+#: on purpose: this reads the DHA report's own top-10 diagnosis text, not
+#: a coded classification, so it looks for the disease families that
+#: actually recur rather than trying to be a clinical taxonomy.
+_CHRONIC_KEYWORDS = (
+    "diabet", "hypertens", "hyperlipid", "cholesterol", "athscl", "atheroscler",
+    "coronary", "cardiac", "ischaem", "ischem", "asthma", "renal failure",
+    "thyroid", "obesity",
+)
+
+
+def _chronic_share_of_claims(report: Optional[dict]) -> Optional[float]:
+    """How much of the paid claims sit in chronic or metabolic disease.
+
+    Chronic conditions are the ones that transfer with the member and
+    claim from month one, so their share is a different statement from
+    the total - a group at the same cost made of accidents is a very
+    different renewal.
+    """
+    if not report:
+        return None
+    breakdown = report.get("diagnosis_breakdown") or []
+    total = report.get("total_paid")
+    if not breakdown or not total:
+        return None
+    # The parser's own row shape is {"label", "value", "count", ...} -
+    # see app/ingestion/claims_report.py. Reading "diagnosis"/"total"
+    # instead silently summed nothing and reported a chronic-heavy book
+    # as 0% chronic, which is the most flattering possible answer.
+    chronic = sum(
+        row.get("value") or 0.0
+        for row in breakdown
+        if any(word in str(row.get("label") or "").lower() for word in _CHRONIC_KEYWORDS)
+    )
+    return round(chronic / total, 4) if total else None
+
+
+@router.get("/cases/{case_id}/underwriting-report")
+def get_underwriting_report(
+    case_id: int,
+    trend_pct: float = Query(0.10),
+    target_loss_ratio: float = Query(0.85),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Everything the four-page underwriting document needs, in one call.
+
+    Assembled server-side rather than stitched together in the browser so
+    the printed document and the screen can never disagree about what
+    this case is - and so the same figures are available to anything else
+    that wants them later.
+    """
+    from app.scoring.rules.risk_scorecard import (
+        age_profile_score,
+        benefit_design_score,
+        build_scorecard,
+        chronic_score,
+        claims_experience_score,
+        gender_maternity_score,
+        group_size_score,
+        rate_adequacy_score,
+        sensitivity,
+        stress_absorbed,
+    )
+    from app.scoring.rules.experience_pricing import premium_for_target_loss_ratio
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+
+    experience = get_experience_price(
+        case_id,
+        trend_pct=trend_pct,
+        target_loss_ratio=target_loss_ratio,
+        benefit_uplift_pct=0.0,
+        as_of=as_of,
+        db=db,
+    )
+    expected_claims = experience["expected_claims"]
+    loading_pct = experience["loading_pct"]
+    quoted = experience["quoted_price"]
+    break_even = experience["break_even_premium"]
+    technical = experience["suggested_premium"]
+
+    # The rate card's own number, for the pricing bridge - what the card
+    # would have charged before the group's own claims were read.
+    card_price = None
+    try:
+        card_price = get_risk_based_price(
+            case_id, trend_pct=trend_pct, apply_nationality=True, as_of=as_of, db=db
+        )["suggested_premium"]
+    except HTTPException:
+        pass
+
+    report = _latest_claims_report_dict(case)
+    full_report = next(
+        (r for r in sorted(case.claims_reports, key=lambda r: r.report_period_end or date.min, reverse=True)
+         if r.report_period_end), None
+    )
+    chronic_share = _chronic_share_of_claims(
+        {"diagnosis_breakdown": full_report.diagnosis_breakdown, "total_paid": full_report.total_paid}
+        if full_report else None
+    )
+
+    proposed, comparison_rows = _proposed_and_comparison(case, db)
+    maternity_value = (proposed or {}).get("maternity_limit") or ""
+    pharmacy_value = (proposed or {}).get("pharmacy_limit_and_coinsurance") or ""
+    deductible_value = (proposed or {}).get("deductible") or ""
+
+    employees = [m for m in census if str(m.get("relation") or "").strip().lower() == "employee"]
+    employee_ages = [m["age"] for m in employees if m.get("age") is not None]
+    maternity_females = [
+        m for m in census
+        if str(m.get("gender") or "").strip().upper().startswith("F")
+        and m.get("age") is not None and 20 <= m["age"] <= 45
+    ]
+
+    own_vs_book = None
+    if experience.get("experience"):
+        blend = experience["experience"]["blend"]
+        if blend.get("own_rate") and blend.get("book_rate"):
+            own_vs_book = round(blend["own_rate"] / blend["book_rate"], 4)
+
+    scorecard = build_scorecard({
+        "claims_experience": claims_experience_score(own_vs_book),
+        "group_size": group_size_score(len(census)),
+        "age_profile": age_profile_score(
+            sum(employee_ages) / len(employee_ages) if employee_ages else None
+        ),
+        "gender_maternity": gender_maternity_score(
+            len(maternity_females) / len(census) if census else None,
+            maternity_capped=bool(_amount_in(maternity_value)),
+        ),
+        "benefit_design": benefit_design_score(
+            has_deductible=bool(deductible_value) and "nil" not in deductible_value.lower(),
+            pharmacy_capped=bool(_amount_in(pharmacy_value)),
+            richer_than_incumbent_count=sum(
+                1 for r in (comparison_rows or []) if r.get("direction") == "improved"
+            ),
+            # An unconfigured case has no plan to score. Without this it
+            # reads as a design with every control missing.
+            plan_designed=bool(proposed),
+        ),
+        "chronic_pre_existing": chronic_score(
+            chronic_share,
+            covered_day_one="not covered" not in str((proposed or {}).get("pre_existing_chronic_limit") or "").lower(),
+        ),
+        "rate_adequacy": rate_adequacy_score(quoted, break_even),
+    })
+
+    return {
+        "case": {
+            "id": case.id,
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "industry": case.industry,
+            "member_count": len(census),
+        },
+        "experience": experience,
+        "scorecard": scorecard,
+        "pricing_bridge": {
+            "card_price": card_price,
+            "technical_price": technical,
+            "commercial_price": quoted,
+            "break_even": break_even,
+            "card_to_technical_pct": (
+                round(technical / card_price - 1, 4) if (card_price and technical) else None
+            ),
+            "technical_to_commercial_pct": (
+                round(quoted / technical - 1, 4) if (technical and quoted) else None
+            ),
+        },
+        "sensitivity": sensitivity(
+            expected_claims,
+            {"quoted": quoted, "technical": technical, "break_even": break_even},
+            loading_pct,
+        ),
+        "stress_absorbed": {
+            "quoted": stress_absorbed(expected_claims, quoted, loading_pct),
+            "technical": stress_absorbed(expected_claims, technical, loading_pct),
+        },
+        "chronic_share_of_claims": chronic_share,
+        "claims_report": _claims_report_summary(full_report),
+        "target_premiums": {
+            f"{int(t * 100)}%": premium_for_target_loss_ratio(expected_claims, loading_pct, t)
+            for t in (1.0, 0.95, 0.90, 0.85, 0.80)
+        } if expected_claims else {},
+    }
+
+
+def _amount_in(text: str) -> bool:
+    """True when a benefit value states an actual figure rather than
+    running to the plan's own limit. "USD 2,500" is a cap; "Annual
+    Limit" is the absence of one.
+    """
+    from app.scoring.rules.benefits_comparison import extract_amount_aed
+
+    return extract_amount_aed(text) is not None
+
+
+def _proposed_and_comparison(case, db: Session):
+    from app.scoring.rules.proposed_benefits import proposed_benefit_rows, proposed_benefit_summary
+
+    quote = (
+        db.query(models.NewBusinessQuote)
+        .filter_by(case_id=case.id)
+        .order_by(models.NewBusinessQuote.created_at.desc())
+        .first()
+    )
+    categories = _normalize_quote_categories(quote.categories or []) if quote else []
+    selections = categories[0].get("variant_selections") if categories else {}
+    variant_rates = _variant_rate_dicts(db)
+    proposed = proposed_benefit_summary(selections or {}, variant_rates)
+    existing = next((p for p in case.benefit_plans if p.role == "existing"), None)
+    rows = proposed_benefit_rows(
+        existing.standard_summary if existing else None, selections or {}, variant_rates
+    )
+    return proposed, rows
+
+
+def _claims_report_summary(report) -> Optional[dict]:
+    if not report:
+        return None
+    return {
+        "report_period_start": report.report_period_start.isoformat() if report.report_period_start else None,
+        "report_period_end": report.report_period_end.isoformat() if report.report_period_end else None,
+        "total_paid": report.total_paid,
+        "reported_not_paid": report.reported_not_paid,
+        "incurred_not_reported": report.incurred_not_reported,
+        "opening_members": report.opening_members,
+        "closing_members": report.closing_members,
+        "monthly_paid": report.monthly_paid or [],
+        "claims_by_member_type_value": report.claims_by_member_type_value or [],
+        "diagnosis_breakdown": (report.diagnosis_breakdown or [])[:10],
     }
