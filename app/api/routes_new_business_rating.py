@@ -159,16 +159,41 @@ def variant_options(
     return by_variant
 
 
+#: Prefixes a table of benefits uses for a category that a census never
+#: does. A TOB is written for humans and titles its sections "Category A"
+#: or "Cat A"; a census column just says "A". Both mean the same category,
+#: and matching them literally means a case where every field is correctly
+#: filled in still prices nothing - the plan is complete, the offer is
+#: set, and it is invisible because of a word.
+_CATEGORY_PREFIXES = ("CATEGORY", "CAT", "CLASS", "PLAN", "TIER")
+
+
 def _normalize_category(value: Optional[str]) -> Optional[str]:
     """Collapses whitespace/casing differences (e.g. "A" vs "A " vs "a")
     so the same category isn't split into several - fixes both older
     census uploads stored before app/ingestion/census.py started
     normalizing on parse, and any inconsistently-cased category letter
     typed into a Benefits tab category card by hand.
+
+    Also strips the leading noun a table of benefits puts in front of the
+    letter ("Category A", "Cat A", "Class A", "Plan A", "Tier A"), which a
+    census never carries. Without this the two sources agree on everything
+    that matters and still never meet.
+
+    The prefix is only removed when something is left after it, so a
+    category genuinely called "Class" or "Plan" survives intact rather
+    than normalizing to nothing.
     """
     if not value:
         return None
-    return value.strip().upper() or None
+    text = " ".join(str(value).split()).upper()
+    for prefix in _CATEGORY_PREFIXES:
+        if text.startswith(prefix):
+            remainder = text[len(prefix):].lstrip(" -_:.")
+            if remainder:
+                text = remainder
+                break
+    return text or None
 
 
 def _normalize_quote_categories(categories: List[dict]) -> List[dict]:

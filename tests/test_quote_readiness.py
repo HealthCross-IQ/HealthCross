@@ -120,3 +120,45 @@ def test_blockers_tell_you_where_to_fix_each_one():
     result = quote_readiness({"A": 10, "B": 5}, [_plan("Z")])
     assert all(b["fix_at"] for b in result["blockers"])
     assert all(b["detail"] for b in result["blockers"])
+
+
+# --- the word that stopped a correctly-configured case pricing ----------
+
+def test_a_tobs_category_wording_matches_a_census_letter():
+    """A table of benefits is written for humans and titles its sections
+    "Category A" or "Cat A"; a census column just says "A". Both mean the
+    same category. Matching them literally meant a case where every field
+    was correctly filled in - plan complete, offer set - still priced
+    nothing, invisible because of a word.
+    """
+    from app.api.routes_new_business_rating import _normalize_category as n
+    for wording in ("A", "a", " A ", "Cat A", "CAT A", "Category A",
+                    "category-A", "Class A", "Plan A", "Tier A", "CAT-A"):
+        assert n(wording) == "A", wording
+
+
+def test_a_non_letter_category_keeps_its_own_name():
+    from app.api.routes_new_business_rating import _normalize_category as n
+    assert n("Category VIP") == "VIP"
+    assert n("Plan Executive") == "EXECUTIVE"
+
+
+def test_a_category_genuinely_called_class_or_plan_survives():
+    # The prefix is only stripped when something is left after it -
+    # otherwise these would normalize to nothing at all.
+    from app.api.routes_new_business_rating import _normalize_category as n
+    assert n("Class") == "CLASS"
+    assert n("Plan") == "PLAN"
+    assert n("Cat") == "CAT"
+
+
+def test_a_tob_plan_and_a_census_letter_now_resolve_together():
+    # End to end: the TOB parsed its section title as "Cat A", the census
+    # says "A", and the case must price.
+    from app.api.routes_new_business_rating import _normalize_category as n
+    result = quote_readiness(
+        {n("A"): 10},
+        [{**_plan("A"), "category": n("Cat A")}],
+    )
+    assert result["can_price"] is True
+    assert result["orphan_benefit_plans"] == []
