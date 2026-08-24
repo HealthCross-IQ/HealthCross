@@ -709,6 +709,7 @@
         <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-nationality" onclick="hcRailNationalityRisk()">Nationality Risk<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-burning-cost" onclick="hcRailBurningCostCube()">Burning Cost Cube<span class="hc-rail-tag cl">CL</span></button>
+        <button class="hc-rail-item" id="hc-rail-lr-tips" onclick="hcRailLossRatioTips()">Tips to Improve LR<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
         <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
       </div>
@@ -1103,6 +1104,81 @@ function hcRailClaimsExplorer() {
   showPortfolioAnalysis();
 }
 
+/* Where this book's loss ratio is actually losing money.
+   Every tip is computed from the claims themselves and ranked by the
+   opportunity it represents - and every opportunity shows the assumption
+   that produced it, because "16% of the book is pharmacy" is a fact
+   while "a 12% reduction saves AED 385k" is that fact times a judgement,
+   and the reader has to be able to tell which is which. The assumptions
+   are editable here for exactly that reason. */
+let tipsAssumptions = { case_management_reduction: 10, chronic_programme_reduction: 15, pharmacy_generic_reduction: 12, provider_steering_reduction: 8 };
+
+async function hcRailLossRatioTips() {
+  _hcRailSetActive('hc-rail-lr-tips');
+  currentCase = null;
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><h3>Tips to Improve LR</h3><div class="hint">Reading the book&hellip;</div></div>';
+  try {
+    const p = new URLSearchParams();
+    Object.entries(tipsAssumptions).forEach(([k, v]) => p.set(k, (v / 100).toString()));
+    const r = await api(`/portfolio-analysis/loss-ratio-tips?${p}`);
+    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+
+    const cards = r.tips.map((t, i) => `
+      <div class="card" style="margin-bottom:14px;">
+        <div class="row" style="align-items:flex-start; justify-content:space-between; gap:14px;">
+          <div style="flex:1; min-width:0;">
+            <div style="display:flex; align-items:center; gap:9px; flex-wrap:wrap;">
+              <span class="tier-pill ${t.opportunity_aed ? 'dir-review' : 'dir-same'}">${escapeHtml(t.category)}</span>
+              <h3 style="margin:0; font-size:16px;">${escapeHtml(t.title)}</h3>
+            </div>
+            <p style="margin:10px 0 0;">${escapeHtml(t.finding)}</p>
+            <p style="margin:10px 0 0;"><strong>What to do:</strong> ${escapeHtml(t.action)}</p>
+          </div>
+          <div style="text-align:right; white-space:nowrap;">
+            <div class="hint" style="margin:0;">Opportunity</div>
+            <div style="font-size:22px; font-weight:700; font-variant-numeric:tabular-nums;">${t.opportunity_aed ? money(t.opportunity_aed) : '&mdash;'}</div>
+            ${t.opportunity_aed ? `<div class="hint" style="margin:2px 0 0;">${(t.opportunity_aed / r.total_claims * 100).toFixed(1)}% of claims</div>` : ''}
+          </div>
+        </div>
+        <div class="hint" style="margin-top:10px; border-left:3px solid var(--border); padding-left:10px;"><strong>Basis:</strong> ${escapeHtml(t.basis)}</div>
+        ${t.evidence && t.evidence.length ? `
+          <details style="margin-top:10px;">
+            <summary style="cursor:pointer; font-size:13px; font-weight:600;">Evidence</summary>
+            <table style="margin-top:8px;">
+              <tr>${Object.keys(t.evidence[0]).map(k => `<th>${escapeHtml(k.replace(/_/g, ' '))}</th>`).join('')}</tr>
+              ${t.evidence.map(e => `<tr>${Object.values(e).map(v => `<td>${typeof v === 'object' && v !== null ? escapeHtml(JSON.stringify(v)) : escapeHtml(String(v))}</td>`).join('')}</tr>`).join('')}
+            </table>
+          </details>` : ''}
+      </div>`).join('');
+
+    const assumptionInputs = Object.entries(tipsAssumptions).map(([k, v]) => `
+      <div><label>${escapeHtml(k.replace(/_/g, ' ').replace(' reduction', ''))} %</label>
+        <input type="number" step="1" value="${v}" style="width:80px;"
+          onchange="tipsAssumptions['${k}'] = parseFloat(this.value) || 0; hcRailLossRatioTips();"></div>`).join('');
+
+    main.innerHTML = `
+      <div class="card">
+        <h3>Tips to Improve LR</h3>
+        <div class="hint">Findings computed from this book's own claims, ranked by what each is worth. Nothing here is generic advice - if a category is 3% of your book, it does not appear, however important it sounds in the abstract.</div>
+        <div class="kpi-grid" style="margin-top:14px;">
+          <div class="kpi"><span class="label">Claims analysed</span><div class="value">${money(r.total_claims)}</div></div>
+          <div class="kpi"><span class="label">Quantified opportunity</span><div class="value">${money(r.quantified_opportunity)}</div>
+            <span class="label" style="margin:4px 0 0;">${r.quantified_share_of_claims == null ? '' : (r.quantified_share_of_claims * 100).toFixed(1) + '% of claims'}</span></div>
+          <div class="kpi"><span class="label">Findings</span><div class="value">${r.tips.length}</div>
+            <span class="label" style="margin:4px 0 0;">${r.tips.filter(t => t.opportunity_aed).length} quantified</span></div>
+        </div>
+        <div class="row" style="align-items:flex-end; margin-top:14px; gap:10px; flex-wrap:wrap;">${assumptionInputs}</div>
+        <div class="hint">These are the recovery rates assumed for each intervention. They are judgements, not measurements - change them and the ranking changes with them.</div>
+      </div>
+      ${cards || '<div class="card"><div class="hint">No findings above the materiality floor - nothing in this book is concentrated enough to act on.</div></div>'}
+    `;
+  } catch (err) {
+    main.innerHTML = `<div class="card"><h3>Tips to Improve LR</h3><div class="hint">${escapeHtml(err.message)}</div>
+      <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button></div>`;
+  }
+}
+
 /* The cube, as an inspectable table. `own_rate` is what a cell literally
    cost; `expected_cost` is that rate after blending toward its parent.
    Showing both side by side is the point - where they diverge is exactly
@@ -1368,22 +1444,50 @@ async function selectCaseAndOpenRenewalBench(id) {
 async function hcRailRenewalBench() {
   _hcRailSetActive('hc-rail-renewal-bench');
   await loadCases();
-  const cases = _hcRenewalCasesSorted();
   currentCase = null;
-  const rows = cases.map(c => `
+
+  // Loss ratio and the increase each case needs come from the server so
+  // the LIST itself says which renewals need attention - the point being
+  // that an underwriter should not have to open six cases to find the
+  // one that is losing money.
+  let summary = null;
+  try {
+    summary = await api('/cases/renewal-summary');
+  } catch (err) {
+    summary = null;
+  }
+  const byId = {};
+  (summary ? summary.cases : []).forEach(s => { byId[s.id] = s; });
+
+  const cases = _hcRenewalCasesSorted();
+  const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
+  const rows = cases.map(c => {
+    const s = byId[c.id] || {};
+    const lr = s.net_loss_ratio;
+    const inc = s.suggested_increase_pct;
+    return `
     <tr style="cursor:pointer;" onclick="selectCaseAndOpenRenewalBench(${c.id})">
       <td>${escapeHtml(c.company_name)}</td>
       <td>${escapeHtml(c.broker_name)}</td>
       <td>${c.renewal_date || '-'}</td>
       <td>${c.status}</td>
-      <td style="text-align:right;">${c.current_annual_premium != null ? `AED ${c.current_annual_premium.toLocaleString()}` : '-'}</td>
-    </tr>
-  `).join('');
+      <td style="text-align:right;">${money(c.current_annual_premium)}</td>
+      <td style="text-align:right;">${s.incurred_claims ? money(s.incurred_claims) : '-'}</td>
+      <td style="text-align:right;"><span class="tier-pill ${lr == null ? '' : lr > 1 ? 'dir-review' : lr >= 0.7 ? 'dir-same' : 'dir-improved'}">${lr == null ? '-' : (lr * 100).toFixed(0) + '%'}</span></td>
+      <td style="text-align:right; font-weight:600;">${inc == null ? '-' : (inc > 0 ? '+' : '') + inc.toFixed(0) + '%'}</td>
+    </tr>`;
+  }).join('');
+
   document.getElementById('main').innerHTML = `
     <div class="card">
       <h3>Renewal Bench</h3>
       <div class="hint">Pick a renewal case below to open its Renewal Bench tab directly - the Method A/B scorecard, renewal-vs-new-business comparison, large claims insights, and census movement.</div>
-      ${cases.length ? `<table><tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th><th style="text-align:right;">Current premium</th></tr>${rows}</table>` : '<div class="hint">No renewal cases yet.</div>'}
+      <div class="hint"><strong>Net LR</strong> is each case's own claims against its own premium after that case's loading. <strong>Suggested increase</strong> is what would bring it back to break-even after ${summary ? (summary.trend_pct * 100).toFixed(0) : 10}% trend - the opening position for the renewal conversation, not the final answer. A case with no claims ledger yet shows "-" rather than a misleading zero.</div>
+      ${cases.length ? `<table>
+        <tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th>
+          <th style="text-align:right;">Current premium</th><th style="text-align:right;">Incurred claims</th>
+          <th style="text-align:right;">Net LR</th><th style="text-align:right;">Suggested increase</th></tr>
+        ${rows}</table>` : '<div class="hint">No renewal cases yet.</div>'}
     </div>
   `;
 }

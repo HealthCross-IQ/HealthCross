@@ -652,6 +652,83 @@ def _portfolio_cases_by_client(db: Session) -> Dict[str, models.Case]:
     return by_client
 
 
+@router.get("/loss-ratio-tips")
+def get_loss_ratio_tips(
+    as_of: Optional[date] = Query(None),
+    policy_year: Optional[str] = Query(None),
+    large_claim_threshold: float = Query(100_000.0, description="Individual spend above which a member counts as a large claim for the reinsurance tip"),
+    case_management_reduction: Optional[float] = Query(None, description="Assumed recovery from case-managing the heaviest claimants, as a fraction"),
+    chronic_programme_reduction: Optional[float] = Query(None, description="Assumed recovery from a chronic disease management programme"),
+    pharmacy_generic_reduction: Optional[float] = Query(None, description="Assumed recovery from generic substitution and formulary control"),
+    provider_steering_reduction: Optional[float] = Query(None, description="Assumed recovery from steering volume to efficient providers"),
+    db: Session = Depends(get_db),
+):
+    """Ranked, quantified findings from this book's own claims - where the
+    loss ratio is actually losing money and what to do about each.
+
+    Every opportunity is a stated assumption applied to a measured base,
+    and the assumption is returned with the number and is overridable
+    here: an underwriter who thinks generic substitution recovers 20%
+    rather than 12% should be able to say so and see the ranking change,
+    rather than having to trust a figure baked into the code.
+    """
+    from app.scoring.rules.loss_ratio_tips import loss_ratio_tips
+
+    claims = [
+        {
+            "patient_id": c.patient_id,
+            "claim_status": c.claim_status,
+            "final_amount": c.final_amount,
+            "medical_category": c.medical_category,
+            "ip_op_maternity": c.ip_op_maternity,
+            "provider_name": c.provider_name,
+            "diagnosis_code": c.diagnosis_code,
+            "date_of_treatment": c.date_of_treatment,
+        }
+        for c in db.query(models.PortfolioClaimEntry).all()
+    ]
+    if not claims:
+        raise HTTPException(status_code=400, detail="No portfolio claims uploaded yet")
+
+    if policy_year:
+        claims = [c for c in claims if c["date_of_treatment"] and str(c["date_of_treatment"].year) == policy_year]
+
+    # Account rows drive the re-pricing tip only, and need premium - so a
+    # book with claims but no membership still gets every other tip
+    # rather than failing outright.
+    account_rows: List[dict] = []
+    try:
+        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+        opex_by_client: Dict[str, List[dict]] = defaultdict(list)
+        for cm in db.query(models.ClientMasterInfo).all():
+            if cm.opex_pct is not None:
+                opex_by_client[cm.master_client_name].append(
+                    {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
+                )
+        account_rows = account_loss_ratio_rows(
+            results,
+            as_of=as_of or _get_stored_as_of(db) or date.today(),
+            opex_records_by_client=opex_by_client,
+        )
+    except HTTPException:
+        pass
+
+    overrides = {
+        k: v for k, v in {
+            "case_management_reduction": case_management_reduction,
+            "chronic_programme_reduction": chronic_programme_reduction,
+            "pharmacy_generic_reduction": pharmacy_generic_reduction,
+            "provider_steering_reduction": provider_steering_reduction,
+        }.items() if v is not None
+    }
+    return loss_ratio_tips(
+        claims,
+        account_rows=account_rows,
+        assumptions=overrides,
+        large_claim_threshold=large_claim_threshold,
+    )
+
+
 @router.get("/burning-cost-cube")
 def get_burning_cost_cube(
     as_of: Optional[date] = Query(None),

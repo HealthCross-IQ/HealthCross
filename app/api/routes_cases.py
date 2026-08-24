@@ -77,6 +77,79 @@ def list_cases(db: Session = Depends(get_db)):
     return db.query(models.Case).order_by(models.Case.submitted_at.desc()).all()
 
 
+# Registered BEFORE /{case_id}: FastAPI matches routes in definition
+# order, so a literal path that could also parse as a case id has to
+# come first or /{case_id} swallows it and 422s on the int conversion.
+@router.get("/renewal-summary")
+def get_renewal_summary(
+    trend_pct: float = Query(0.10),
+    target_net_loss_ratio: float = Query(1.0, description="The net loss ratio each case should be re-priced to - 1.0 is break-even"),
+    db: Session = Depends(get_db),
+):
+    """Every renewal case with its own loss ratio and the increase that
+    would bring it back to target - so the renewal list itself says which
+    cases need attention, rather than each having to be opened to find
+    out.
+
+    Loss ratio here is the case's own claims ledger against its own
+    current premium: the same account may show a slightly different
+    figure on the portfolio Loss Ratio board, which measures earned
+    premium over an exact policy period rather than the annual premium
+    recorded on the case. Both are right for their own purpose; this one
+    answers "what should I ask for at renewal".
+    """
+    from app.api.routes_scoring import _case_loading_pct
+
+    cases = (
+        db.query(models.Case)
+        .filter(models.Case.business_type == "existing")
+        .order_by(models.Case.renewal_date.is_(None), models.Case.renewal_date.asc())
+        .all()
+    )
+
+    out = []
+    for case in cases:
+        incurred = sum((e.final_amount or 0.0) for e in case.claims_ledger_entries)
+        premium = case.current_annual_premium
+        loading = _case_loading_pct(case)
+        net_premium = premium * (1 - loading) if premium else None
+        gross_lr = (incurred / premium) if premium else None
+        net_lr = (incurred / net_premium) if net_premium else None
+
+        # What the premium would need to be for this account to fund its
+        # own claims at the target, after trend and its own expenses.
+        required_gross = None
+        increase_pct = None
+        if incurred and target_net_loss_ratio > 0 and loading < 1:
+            required_net = incurred * (1 + trend_pct) / target_net_loss_ratio
+            required_gross = required_net / (1 - loading)
+            if premium:
+                increase_pct = round((required_gross / premium - 1) * 100, 1)
+
+        out.append({
+            "id": case.id,
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "renewal_date": case.renewal_date.isoformat() if case.renewal_date else None,
+            "status": case.status.value if hasattr(case.status, "value") else case.status,
+            "member_count": len(case.census_records),
+            "current_annual_premium": premium,
+            "incurred_claims": round(incurred, 2),
+            "claim_count": len(case.claims_ledger_entries),
+            "loading_pct": round(loading, 4),
+            "gross_loss_ratio": round(gross_lr, 4) if gross_lr is not None else None,
+            "net_loss_ratio": round(net_lr, 4) if net_lr is not None else None,
+            "required_premium": round(required_gross, 2) if required_gross else None,
+            "suggested_increase_pct": increase_pct,
+            "portfolio_master_client": case.portfolio_master_client,
+        })
+    return {
+        "trend_pct": trend_pct,
+        "target_net_loss_ratio": target_net_loss_ratio,
+        "cases": out,
+    }
+
+
 @router.get("/{case_id}", response_model=schemas.CaseOut)
 def get_case(case_id: int, db: Session = Depends(get_db)):
     return _get_case_or_404(db, case_id)
