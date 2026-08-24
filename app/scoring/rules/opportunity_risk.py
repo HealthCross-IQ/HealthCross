@@ -59,11 +59,19 @@ ASSUMPTIONS = {
     "small_group_margin_pct": 0.05,
     # Pre-existing and chronic conditions covered from day one is the
     # largest first-year driver on a new scheme, and no burning cost
-    # earned on renewing business contains it.
+    # earned on renewing business contains it. Netted against the card's
+    # own variant uplift for the same choice - see the note above.
     "pre_existing_day_one_load_pct": 0.10,
     # Each core benefit the proposal pitches materially above the
     # incumbent's. The book's cost was earned at the book's benefit
     # levels; a richer plan is used harder.
+    #
+    # This is a claims-cost estimate, NOT the adjustment. The rate card
+    # already charges its own uplift for a richer variant - pick a higher
+    # pre-existing limit and the quoted price moves on its own - so what
+    # is suggested here is only the part the card has not already taken.
+    # Suggesting the whole figure would charge the same buy-up twice:
+    # once through the higher quote, once through the loading on top.
     "benefit_buy_up_load_pct_each": 0.05,
     "benefit_buy_up_max_load_pct": 0.20,
     # A census that would not price in full is not a census with no risk
@@ -565,20 +573,47 @@ OPEN_QUESTIONS = (
 
 # --- putting it together ------------------------------------------------
 
-def _margin_contributions(factors: List[dict]) -> List[dict]:
+def _margin_contributions(factors: List[dict], card_variant_uplift_pct: float = 0.0) -> List[dict]:
     """Which factors move the required margin, and by how much.
 
     Only "load" and "widen_margin" factors appear. Everything the cube
     already prices contributes zero by construction - that is the whole
     point of the treatment field, and it is enforced here rather than
     left to whoever reads the table.
+
+    card_variant_uplift_pct is what the rate card has ALREADY charged for
+    the benefit selections on this quote. A richer pre-existing limit is
+    not a free choice on the card - picking it moves the quoted price on
+    its own - so the benefit-driven suggestions are netted against it.
+    Without that, the same buy-up is charged twice: once in the quote the
+    card produced, and again as a loading laid on top of it.
     """
     by_key = {f["key"]: f for f in factors}
     out = []
+    # Shared across the benefit-driven factors, spent in the order they
+    # are applied below, so the card's uplift is credited once rather
+    # than once per factor.
+    remaining_card_credit = max(card_variant_uplift_pct, 0.0)
 
-    def add(key: str, pct: float, why: str):
-        if pct:
-            out.append({"key": key, "pct": round(pct, 4), "why": why})
+    def add(key: str, pct: float, why: str, net_against_card: bool = False):
+        nonlocal remaining_card_credit
+        gross = pct
+        credited = 0.0
+        if net_against_card and pct > 0:
+            credited = min(remaining_card_credit, pct)
+            remaining_card_credit -= credited
+            pct = pct - credited
+        if pct or credited:
+            out.append({
+                "key": key,
+                "pct": round(pct, 4),
+                "suggested_before_card_pct": round(gross, 4),
+                "already_charged_by_card_pct": round(credited, 4),
+                "why": why + (
+                    f" - the card already charges {credited:.1%} of it through the variant uplift"
+                    if credited else ""
+                ),
+            })
 
     factor = by_key.get("credibility")
     if factor and factor["treatment"] == TREATMENT_WIDEN_MARGIN:
@@ -591,7 +626,8 @@ def _margin_contributions(factors: List[dict]) -> List[dict]:
 
     factor = by_key.get("pre_existing")
     if factor and factor["treatment"] == TREATMENT_LOAD:
-        add("pre_existing", ASSUMPTIONS["pre_existing_day_one_load_pct"], "covered from day one")
+        add("pre_existing", ASSUMPTIONS["pre_existing_day_one_load_pct"], "covered from day one",
+            net_against_card=True)
 
     factor = by_key.get("benefit_buy_up")
     if factor and factor["treatment"] == TREATMENT_LOAD:
@@ -599,7 +635,8 @@ def _margin_contributions(factors: List[dict]) -> List[dict]:
             len(factor["richer_fields"]) * ASSUMPTIONS["benefit_buy_up_load_pct_each"],
             ASSUMPTIONS["benefit_buy_up_max_load_pct"],
         )
-        add("benefit_buy_up", pct, f"{len(factor['richer_fields'])} benefit line(s) richer than the incumbent's")
+        add("benefit_buy_up", pct, f"{len(factor['richer_fields'])} benefit line(s) richer than the incumbent's",
+            net_against_card=True)
 
     factor = by_key.get("data_quality")
     if factor and factor["treatment"] == TREATMENT_LOAD:
@@ -645,6 +682,7 @@ def assess_opportunity(
     proposed_summary: Optional[Dict[str, str]] = None,
     maternity_covered: bool = True,
     maternity_richer_than_incumbent: bool = False,
+    card_variant_uplift_pct: float = 0.0,
 ) -> dict:
     """Every factor, then one conclusion.
 
@@ -673,7 +711,7 @@ def assess_opportunity(
         if newborns:
             factors.append(newborns)
 
-    contributions = _margin_contributions(factors)
+    contributions = _margin_contributions(factors, card_variant_uplift_pct)
     adjustments = _aed_adjustments(factors)
 
     required_margin = ASSUMPTIONS["base_required_margin_pct"] + sum(c["pct"] for c in contributions)
@@ -687,6 +725,7 @@ def assess_opportunity(
     return {
         "factors": factors,
         "open_questions": list(OPEN_QUESTIONS),
+        "card_variant_uplift_pct": round(card_variant_uplift_pct, 4),
         "risk_price_aed": round(risk_price_aed, 2) if risk_price_aed else None,
         "aed_adjustments": adjustments,
         "adjusted_risk_price_aed": round(adjusted_risk_price, 2) if adjusted_risk_price else None,

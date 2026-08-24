@@ -1078,6 +1078,34 @@ def get_case_annual_limit_exposure(case_id: int, db: Session = Depends(get_db)):
     return exposure_for_quoted_limits(claims, quoted_limits)
 
 
+def _card_variant_uplift_pct(quote_result: Optional[dict]) -> float:
+    """What the rate card has already charged for this quote's benefit
+    selections, as a share of the base rates.
+
+    A richer variant is not a free choice on the card - picking a higher
+    pre-existing limit moves the quoted price on its own, through
+    price_member's variant_impacts. The opportunity assessment has to
+    know that figure or it will suggest a loading for a buy-up the quote
+    has already paid for.
+
+    Downgrades net off upgrades deliberately: a plan that buys pre-
+    existing up and dental down has been charged the difference, not the
+    upgrade alone.
+    """
+    if not quote_result:
+        return 0.0
+    base_total = 0.0
+    impact_total = 0.0
+    for category in quote_result.get("categories") or []:
+        for member in category.get("member_breakdown") or []:
+            base = member.get("base_price")
+            if not base:
+                continue
+            base_total += base
+            impact_total += sum((member.get("variant_impacts") or {}).values())
+    return (impact_total / base_total) if base_total else 0.0
+
+
 def _maternity_claims_by_member(db: Session) -> dict:
     """Maternity claims summed per member, straight off the claims book.
 
@@ -1200,4 +1228,5 @@ def get_opportunity_assessment(
         proposed_summary=proposed_summary,
         maternity_covered=maternity_covered,
         maternity_richer_than_incumbent=maternity_richer,
+        card_variant_uplift_pct=_card_variant_uplift_pct(quote.result if quote else None),
     )
