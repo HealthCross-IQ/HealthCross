@@ -905,6 +905,29 @@ def renewal_claims_split(
     return {"master_client": master_client, **split}
 
 
+@router.get("/population-movement/{master_client}")
+def population_movement_for_account(master_client: str, db: Session = Depends(get_db)):
+    """How the account's population actually moved over the expiring
+    term: opening, joiners, leavers, closing, by relation.
+
+    Derived from the roster's own dates rather than by comparing two
+    census uploads. A snapshot comparison answers a different question -
+    what changed between two UPLOADS - and reports zero movement on an
+    account whose census has not been re-uploaded, however many people
+    joined and left. Serviceplan lost thirteen members over its term and
+    the panel read 178 to 178, change 0.
+    """
+    from app.scoring.rules.renewal_intake import population_movement
+
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+    return {"master_client": master_client, **population_movement(account)}
+
+
 @router.get("/renewal-repricing/{master_client}")
 def renewal_repricing(
     master_client: str,

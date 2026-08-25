@@ -430,3 +430,99 @@ def claims_by_member_status(
             if (continuing_totals["member_count"] + leaving_totals["member_count"]) else None
         ),
     }
+
+
+def population_movement(
+    members: List[dict],
+    term_start: Optional[date_cls] = None,
+    term_end: Optional[date_cls] = None,
+) -> dict:
+    """The term's population as it actually moved: opening, joiners,
+    leavers, closing - read off each member's own dates.
+
+    The Renewal Bench used to derive this by comparing two census
+    snapshots, which answers a different question. A snapshot comparison
+    shows what changed between two UPLOADS; on an account whose census
+    has not been re-uploaded it shows nothing at all, and reports zero
+    movement on a year in which people plainly joined and left. Serviceplan
+    lost thirteen members over its term and read 178 -> 178, change 0.
+
+    The roster cannot hide that, because every joiner and leaver carries
+    their own dates. Opening is who was on risk on day one; closing is
+    who is on risk at the end; the difference is accounted for member by
+    member rather than inferred from two totals.
+
+    Exposure is reported alongside the headcounts, because they answer
+    different questions. Twelve members who each stayed one month are
+    twelve leavers and one member-year, and a renewal priced on headcount
+    alone treats them as twelve.
+    """
+    term_members = current_term_members(members)
+    if term_start is None or term_end is None:
+        start, end = current_term(term_members)
+        term_start = term_start or start
+        term_end = term_end or end
+    if term_start is None or term_end is None:
+        return {"term_start": term_start, "term_end": term_end, "rows": [], "totals": None}
+
+    term_days = (term_end - term_start).days or 1
+
+    def joined_late(m):
+        start = m.get("member_start_date")
+        return bool(start and start > term_start)
+
+    def left_early(m):
+        end = m.get("member_end_date")
+        return bool(end and end < term_end)
+
+    buckets: Dict[str, dict] = {}
+    for m in term_members:
+        relation = (m.get("relation") or "Unspecified").title()
+        row = buckets.setdefault(relation, {
+            "relation": relation, "opening": 0, "joiners": 0, "leavers": 0,
+            "closing": 0, "member_years": 0.0,
+            "joiner_premium": 0.0, "leaver_premium": 0.0,
+        })
+        rate = member_annual_rate(m) or 0.0
+        joined, left = joined_late(m), left_early(m)
+        if not joined:
+            row["opening"] += 1
+        else:
+            row["joiners"] += 1
+            row["joiner_premium"] += rate
+        if left:
+            row["leavers"] += 1
+            row["leaver_premium"] += rate
+        else:
+            row["closing"] += 1
+        # What the member was actually on risk for, not what they were
+        # counted as.
+        on = max(m.get("member_start_date") or term_start, term_start)
+        off = min(m.get("member_end_date") or term_end, term_end)
+        row["member_years"] += max(0, (off - on).days) / term_days
+
+    rows = sorted(buckets.values(), key=lambda r: -r["closing"])
+    for row in rows:
+        row["net_change"] = row["closing"] - row["opening"]
+        row["member_years"] = round(row["member_years"], 2)
+        row["joiner_premium"] = round(row["joiner_premium"], 2)
+        row["leaver_premium"] = round(row["leaver_premium"], 2)
+
+    totals = {
+        key: sum(r[key] for r in rows)
+        for key in ("opening", "joiners", "leavers", "closing")
+    }
+    totals["net_change"] = totals["closing"] - totals["opening"]
+    totals["member_years"] = round(sum(r["member_years"] for r in rows), 2)
+    totals["joiner_premium"] = round(sum(r["joiner_premium"] for r in rows), 2)
+    totals["leaver_premium"] = round(sum(r["leaver_premium"] for r in rows), 2)
+    totals["net_premium_impact"] = round(totals["joiner_premium"] - totals["leaver_premium"], 2)
+    # Headcount at the close against exposure actually carried. They
+    # diverge exactly where the churn was, which is the point.
+    totals["average_lives"] = round(totals["member_years"], 2)
+    totals["turnover_pct"] = (
+        round((totals["joiners"] + totals["leavers"]) / totals["opening"], 4)
+        if totals["opening"] else None
+    )
+
+    return {"term_start": term_start, "term_end": term_end, "rows": rows, "totals": totals}

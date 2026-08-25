@@ -2929,6 +2929,7 @@ function renderCaseWorkspace() {
         </div>
         <div id="renewal-bench-census-area"></div>
         <div id="renewal-bench-member-movement-area"></div>
+        <div id="renewal-bench-population-movement-area"></div>
         <div id="renewal-bench-claims-split-area"></div>
         <div id="renewal-bench-repricing-area"></div>
         <div id="renewal-premium-buildup-area"></div>
@@ -5120,6 +5121,7 @@ async function loadRenewalBenchCensusMovement() {
     area.innerHTML = '';
   }
   await loadRenewalBenchMemberMovement();
+  await loadRenewalBenchPopulationMovement();
   await loadRenewalBenchClaimsSplit();
   await loadRenewalBenchRepricing();
 }
@@ -5211,6 +5213,62 @@ async function loadRenewalBenchRepricing() {
             <th class="num">Share</th><th class="num">Months claiming</th><th></th><th>Main diagnosis</th></tr>
         ${rows}
       </table></div>
+    </div>`;
+}
+
+// How the population actually moved over the term, read off the
+// roster's own dates. The older Census Movement panel compares two
+// census UPLOADS, which answers a different question and reports zero
+// on an account whose census was never re-uploaded - Serviceplan lost
+// thirteen members and read 178 to 178, change 0.
+async function loadRenewalBenchPopulationMovement() {
+  const area = document.getElementById('renewal-bench-population-movement-area');
+  if (!area || !currentCase || !currentCase.company_name) return;
+  let r;
+  try {
+    r = await api(`/portfolio-analysis/population-movement/${encodeURIComponent(currentCase.company_name)}`);
+  } catch (err) { area.innerHTML = ''; return; }
+  if (!r.rows || !r.rows.length) { area.innerHTML = ''; return; }
+
+  const t = r.totals;
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const sgn = v => v == null ? '&mdash;' : (v > 0 ? '+' : '') + v;
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const row = d => `<tr>
+      <td>${escapeHtml(d.relation)}</td>
+      <td class="num">${d.opening}</td>
+      <td class="num">${d.joiners ? '+' + d.joiners : 0}</td>
+      <td class="num">${d.leavers ? '&minus;' + d.leavers : 0}</td>
+      <td class="num"><strong>${d.closing}</strong></td>
+      <td class="num">${sgn(d.net_change)}</td>
+      <td class="num">${d.member_years.toFixed(1)}</td></tr>`;
+
+  area.innerHTML = `
+    <div class="card">
+      <h3>Population movement &mdash; ${escapeHtml(String(r.term_start))} to ${escapeHtml(String(r.term_end))}</h3>
+      <div class="hint">Opening, joiners, leavers and closing, taken from each member's own cover
+        dates rather than by comparing two census uploads. Member-years is what the population was
+        actually on risk for: twelve members who each stayed a month are twelve lives and one
+        member-year, and a renewal priced on headcount treats them as twelve.</div>
+      <div class="scroll"><table style="margin-top:12px;">
+        <tr><th>Relation</th><th class="num">Opening</th><th class="num">Joined</th>
+            <th class="num">Left</th><th class="num">Closing</th><th class="num">Net</th>
+            <th class="num">Member-years</th></tr>
+        ${r.rows.map(row).join('')}
+        <tr class="total"><th>Total</th><td class="num"><strong>${t.opening}</strong></td>
+          <td class="num">+${t.joiners}</td><td class="num">&minus;${t.leavers}</td>
+          <td class="num"><strong>${t.closing}</strong></td><td class="num">${sgn(t.net_change)}</td>
+          <td class="num"><strong>${t.member_years.toFixed(1)}</strong></td></tr>
+      </table></div>
+      <div class="hint" style="margin-top:8px;">
+        Turnover ${pct(t.turnover_pct)} of the opening population
+        (${t.joiners} joined, ${t.leavers} left).
+        Joiners brought AED ${aed(t.joiner_premium)}, leavers took AED ${aed(t.leaver_premium)} &mdash;
+        net <strong>${t.net_premium_impact >= 0 ? '+' : '&minus;'}AED ${aed(Math.abs(t.net_premium_impact))}</strong>.
+      </div>
+      ${t.closing !== Math.round(t.member_years) ? `<div class="hint" style="margin-top:6px;">
+        Closing headcount ${t.closing} against ${t.member_years.toFixed(1)} member-years &mdash;
+        the gap is the churn, and it is what a per-member figure divides by.</div>` : ''}
     </div>`;
 }
 
