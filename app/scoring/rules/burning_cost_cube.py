@@ -236,17 +236,29 @@ def expected_cost_for_member(
     `matched_level` and `credibility` come back with the figure so a
     quote can always show how much of the price is this member's own
     segment versus a broader fallback.
+
+    A member may carry a `cost_factor`, applied to whatever cell they
+    match. It exists for the case where the cell being read is a
+    STAND-IN rather than the member's own segment: a NAS network is
+    priced off its MSH equivalent because the book has no NAS
+    experience, and the two do not cost the same at the same richness
+    (see nas_tpa_factor in portfolio_analysis). Keeping it as a plain
+    multiplier on the member rather than a rule in here leaves the cube
+    a statement about what the book cost, which is all it should be.
     """
     index = index if index is not None else build_cube_index(cube)
     dimensions = tuple(cube["dimensions"])
     bands = [tuple(b) for b in cube["age_bands"]]
     full_key = member_cube_key(member, dimensions, bands)
+    factor = member.get("cost_factor")
+    factor = 1.0 if factor is None else factor
 
     for level in range(len(dimensions), 0, -1):
         cell = index.get((level, full_key[:level]))
         if cell and cell["expected_cost"] is not None:
             return {
-                "expected_cost": cell["expected_cost"],
+                "expected_cost": cell["expected_cost"] * factor,
+                "cost_factor": factor,
                 "matched_level": level,
                 "matched_key": cell["key"],
                 "credibility": cell["credibility"],
@@ -260,7 +272,8 @@ def expected_cost_for_member(
     # zero just because a member sits in an entirely unpopulated corner.
     book_rate = cube["book"]["burning_cost"]
     return {
-        "expected_cost": book_rate,
+        "expected_cost": book_rate * factor if book_rate is not None else None,
+        "cost_factor": factor,
         "matched_level": 0,
         "matched_key": {},
         "credibility": 0.0,

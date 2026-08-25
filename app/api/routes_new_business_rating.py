@@ -26,7 +26,7 @@ from app.scoring.rules.new_business_rating import (
     price_tier_ladder,
 )
 from app.reference.emirate_regions import region_for_emirate
-from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network
+from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network, nas_tpa_factor
 
 router = APIRouter(tags=["new-business-rating"])
 
@@ -780,6 +780,12 @@ def get_risk_based_price(
             "network": _burning_cost_lookup_network(
                 (design_by_category.get(member.get("category")) or {}).get("network")
             ),
+            # Read off the network the case actually quoted, not the MSH
+            # name standing in for it - once substituted it looks like
+            # an MSH network and would carry no adjustment.
+            "cost_factor": nas_tpa_factor(
+                (design_by_category.get(member.get("category")) or {}).get("network")
+            ),
         }
         for member in census
     ]
@@ -1026,6 +1032,7 @@ def get_new_business_quote_burning_cost_comparison(
             **member,
             "product": design["product"] if design else None,
             "network": _burning_cost_lookup_network(design["network"]) if design else None,
+            "cost_factor": nas_tpa_factor(design["network"]) if design else 1.0,
         })
 
     comparison = price_by_category(
@@ -1207,6 +1214,12 @@ def get_opportunity_assessment(
             **member,
             "product": (design_by_category.get(member.get("category")) or {}).get("product"),
             "network": _burning_cost_lookup_network(
+                (design_by_category.get(member.get("category")) or {}).get("network")
+            ),
+            # Read off the network the case actually quoted, not the MSH
+            # name standing in for it - once substituted it looks like
+            # an MSH network and would carry no adjustment.
+            "cost_factor": nas_tpa_factor(
                 (design_by_category.get(member.get("category")) or {}).get("network")
             ),
         }

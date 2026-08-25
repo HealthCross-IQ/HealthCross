@@ -50,12 +50,76 @@ NAS_TO_MSH_NETWORK = {
     # specifically - so GN maps to the network that actually has data.
     "gn": "MSH Comprehensive",
     "gn excluding mediclinic and american": "MSH Comprehensive",
-    "gn excluding american & mediclinic group": "MSH Comprehensive",
-    "restricted +++": "MSH Premium",
+    "gn excluding american mediclinic group": "MSH Comprehensive",
+    # The trailing pluses are a richness tier, not punctuation:
+    # "Restricted +++" sits ABOVE plain "Restricted", so they must not
+    # normalise to the same key.
     "restricted+++": "MSH Premium",
     "restricted": "MSH Enhanced",
-    "super restricted+ zulaikha": "MSH Regular",
+    "super restricted zulekha": "MSH Regular",
+    "super restricted zulekha group": "MSH Regular",
+    "super restricted": "MSH Regular",
 }
+
+#: What a NAS network costs relative to the MSH network standing in for
+#: it. The book has no NAS experience of its own, so a NAS category is
+#: priced off its MSH equivalent - but the two do not cost the same at
+#: the same network richness. NAS is one of the largest TPAs in the UAE
+#: by volume, and underwriting puts its burning cost 10-15% below MSH's
+#: on that buying power. Without this, every NAS category is quoted at
+#: an MSH price.
+#:
+#: The midpoint of the stated range, not a measured figure. It is a
+#: single named constant precisely so it can be replaced by one once
+#: there is real NAS book data to measure - see NAS_TO_MSH_NETWORK,
+#: which the same caveat applies to.
+NAS_VS_MSH_BURNING_COST_RANGE = (0.85, 0.90)
+NAS_VS_MSH_BURNING_COST = 0.875
+
+#: Spellings of the same network that arrive from different uploads.
+#: Applied before the lookup, so one canonical key covers all of them.
+_NETWORK_SPELLINGS = {
+    "zulaikha": "zulekha",
+    "zulaykha": "zulekha",
+    "excl": "excluding",
+    "and": "",
+    "&": "",
+    "plus": "",
+}
+
+
+def _normalize_network_key(network: str) -> str:
+    """One key per network, whatever the upload called it.
+
+    The map used to be keyed on literal lowercased strings, which meant
+    "Super Restricted + Zulekha Group" missed "super restricted+
+    zulaikha" over a vowel and a suffix - and a miss here is silent and
+    expensive. The network then matches nothing in the book, every
+    member falls back past the network dimension, and a restricted
+    network gets priced off the whole product across every network the
+    book carries, rich ones included. That is how a Super Restricted
+    category came to be quoted at over AED 8,700 a head.
+
+    So punctuation and spacing are collapsed rather than enumerated, and
+    the handful of genuine spelling variants are folded to one form.
+
+    With one exception: a run of pluses at the END of the name is a
+    richness tier, not punctuation. "Restricted +++" sits above plain
+    "Restricted" and maps to a different MSH network, so stripping the
+    pluses would quietly price the richer tier off the cheaper one - the
+    same class of silent substitution this function exists to prevent. A
+    plus BETWEEN words ("Super Restricted + Zulekha") is just a joiner
+    and is dropped as before.
+    """
+    import re
+
+    raw = (network or "").lower().strip()
+    tier = re.search(r"\++$", raw)
+    suffix = tier.group(0) if tier else ""
+    body = raw[: tier.start()] if tier else raw
+    key = re.sub(r"[^a-z0-9]+", " ", body).strip()
+    words = [_NETWORK_SPELLINGS.get(w, w) for w in key.split()]
+    return " ".join(w for w in words if w) + suffix
 
 
 def _burning_cost_lookup_network(network: Optional[str]) -> Optional[str]:
@@ -68,7 +132,36 @@ def _burning_cost_lookup_network(network: Optional[str]) -> Optional[str]:
     """
     if not network:
         return network
-    return NAS_TO_MSH_NETWORK.get(network.strip().lower(), network)
+    key = _normalize_network_key(network)
+    if key in NAS_TO_MSH_NETWORK:
+        return NAS_TO_MSH_NETWORK[key]
+    # Longest matching prefix, so an upload that appends a qualifier we
+    # have not seen before ("... Group", "... excluding X") still lands
+    # on the right network instead of silently missing.
+    for candidate in sorted(NAS_TO_MSH_NETWORK, key=len, reverse=True):
+        if key.startswith(candidate + " "):
+            return NAS_TO_MSH_NETWORK[candidate]
+    return network
+
+
+def is_nas_stand_in(network: Optional[str]) -> bool:
+    """True when this network has no book experience of its own and is
+    being priced off an MSH equivalent.
+    """
+    if not network:
+        return False
+    return _burning_cost_lookup_network(network) != network
+
+
+def nas_tpa_factor(network: Optional[str]) -> float:
+    """What to multiply an MSH stand-in's burning cost by to price this
+    network.
+
+    1.0 for an MSH network priced off its own experience. Below 1.0 for
+    a NAS network, which is being priced off MSH's book rather than its
+    own and does not cost the same - see NAS_VS_MSH_BURNING_COST.
+    """
+    return NAS_VS_MSH_BURNING_COST if is_nas_stand_in(network) else 1.0
 
 
 def resolve_group_product(member: dict, group_product_by_name: Dict[str, str]) -> Optional[str]:
