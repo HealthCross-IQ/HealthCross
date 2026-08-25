@@ -440,7 +440,16 @@ _VERDICT_WORD = {
 
 
 def _verdict(decision: dict) -> tuple:
+    """The word, its tone, and the sentence under it.
+
+    A good account gets its own word. "PROCEED" reads the same on an
+    account scraping over the technical price as on one with real
+    headroom, and the difference between those two is the whole of
+    whether to compete hard for it.
+    """
     word, tone = _VERDICT_WORD.get(decision.get("verdict") or "", ("REVIEW", ""))
+    if decision.get("account_quality") == "good":
+        word = "GOOD ACCOUNT"
     return word, tone, decision.get("headline") or ""
 
 
@@ -498,8 +507,7 @@ def _page_dashboard(payload: dict, today: date) -> str:
           <span class="f">blended &amp; trended</span></div>
         <div class="hero-fig"><span class="l">Loss ratio</span><span class="v {lr_class}">{pct(loss_ratio)}</span>
           <span class="f">at the quoted price</span></div>
-        <div class="hero-fig"><span class="l">Technical price</span><span class="v good">{aed(technical)}</span>
-          <span class="f">to land at {pct(experience.get("target_loss_ratio"), 0)}</span></div>
+        {_hero_fourth_figure(decision, technical, experience)}
       </div>
     </div>"""
 
@@ -514,6 +522,27 @@ def _page_dashboard(payload: dict, today: date) -> str:
     </div>
     """ + _footer("Health Cross &middot; Underwriting Intelligence",
                   "Internal &mdash; contains risk pricing. Not for release to broker or client."))
+
+
+
+def _hero_fourth_figure(decision: dict, technical, experience: dict) -> str:
+    """The technical price, or - where there is room above it - the room
+    itself.
+
+    On an account priced above its technical minimum the technical price
+    is no longer the number anyone acts on; the gap between it and the
+    quote is. The technical price still appears on the pricing page and
+    in the recommendation, so nothing is lost by leading with the room.
+    """
+    room = decision.get("negotiation_room_aed")
+    if room and room > 0:
+        return (f'<div class="hero-fig"><span class="l">Room to negotiate</span>'
+                f'<span class="v good">{aed(room)}</span>'
+                f'<span class="f">before it drops below the technical price '
+                f'of {aed(technical)}</span></div>')
+    return (f'<div class="hero-fig"><span class="l">Technical price</span>'
+            f'<span class="v good">{aed(technical)}</span>'
+            f'<span class="f">to land at {pct(experience.get("target_loss_ratio"), 0)}</span></div>')
 
 
 def _section_gap(quoted, expected, break_even, technical, decision) -> str:
@@ -1236,8 +1265,19 @@ def _section_recommendation(payload: dict, today: date) -> str:
                      f"is a referral")
 
     conditions = _conditions(payload)
+    room = decision.get("negotiation_room_aed")
+    if room is not None and room > 0:
+        room_row = (f"<strong>AED {aed(room)}</strong> ({signed_pct(decision.get('room_vs_minimum_pct'))}) "
+                    f"can be conceded before the quote drops below the technical price")
+    elif room is not None and room < 0:
+        room_row = (f"<strong>None</strong> &mdash; the quote is already AED {aed(abs(room))} "
+                    f"below the technical price")
+    else:
+        room_row = "Not calculable without a price and a claims estimate"
+
     rows = [
         ("Decision", f"<strong>{word}</strong> &mdash; {esc(why)}"),
+        ("Room to negotiate", room_row),
         ("Risk rating", (f'<strong>{esc((scorecard.get("overall_band") or "not scored").title())}</strong> '
                          f'&middot; {aed(scorecard.get("overall_score"))}/100')),
         ("Pricing stance", stance),

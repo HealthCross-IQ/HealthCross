@@ -110,6 +110,9 @@ def _payload(**overrides) -> dict:
             "verdict": "decline", "headline": "Below break-even - do not issue at this price",
             "recommended_minimum": 1_830_987.0, "break_even": 1_556_339.0, "quoted": 900_000.0,
             "room_vs_minimum_pct": -0.5085, "discount_authority_floor": 1_739_437.65,
+            # 900,000 quoted against a 1,830,987 technical price: the
+            # concession has already been made, and then some.
+            "negotiation_room_aed": -930_987.0, "account_quality": "poor",
             "referral_required": True, "risk_band": "medium", "risk_score": 44.0,
             "expected_claims": 1_143_909.0, "loading_pct": 0.265,
         },
@@ -380,3 +383,53 @@ def test_no_platform_specific_strftime_directive_survives_anywhere():
             if re.search(r'strftime\([^)]*%[-#][dmHIMjSyY]', line):
                 offenders.append(f"{path.name}:{number}")
     assert not offenders, f"platform-specific strftime directives: {offenders}"
+
+
+# --- a good account has to read as one -----------------------------------
+
+def _good_account(**decision_patch) -> dict:
+    base = _payload()
+    return {
+        **base,
+        "experience": {**base["experience"], "quoted_price": 2_100_000.0,
+                       "implied_loss_ratio_at_quote": 0.74},
+        "decision": {**base["decision"], "verdict": "proceed", "quoted": 2_100_000.0,
+                     "headline": "AED 269,013 of room above the technical price - "
+                                 "scope to compete hard and still clear it",
+                     "room_vs_minimum_pct": 0.1469, "negotiation_room_aed": 269_013.0,
+                     "account_quality": "good", "referral_required": False,
+                     **decision_patch},
+    }
+
+
+def test_a_good_account_is_called_a_good_account():
+    # "PROCEED" reads identically on an account scraping over the
+    # technical price and on one with real headroom, and the difference
+    # is the whole of whether to compete hard for it.
+    html = render_underwriting_report(_good_account(), today=date(2026, 8, 24))
+    assert "GOOD ACCOUNT" in html
+    assert "DECLINE" not in html
+
+
+def test_the_room_to_negotiate_is_stated_in_money():
+    # The one question from the brief that was never answered: how much
+    # room do we have. A ratio is not an answer somebody can concede.
+    html = render_underwriting_report(_good_account(), today=date(2026, 8, 24))
+    assert "Room to negotiate" in html
+    assert "269,013" in html
+
+
+def test_the_room_leads_the_dashboard_when_there_is_any():
+    html = render_underwriting_report(_good_account(), today=date(2026, 8, 24))
+    assert "Room to negotiate" in html.split("</div>")[0] or "Room to negotiate" in html
+
+
+def test_an_account_with_no_room_says_so_rather_than_showing_a_negative():
+    html = _render()  # the Freshly Frozen case - quoted below technical
+    assert "GOOD ACCOUNT" not in html
+    assert "already AED" in html
+
+
+def test_the_technical_price_still_leads_when_there_is_no_room():
+    html = _render()
+    assert "Technical price" in html

@@ -168,3 +168,41 @@ def test_the_error_page_escapes_what_it_reports(client):
     assert "<script>alert" not in page
     assert "&lt;script&gt;" in page
     assert "&lt;b&gt;trace&lt;/b&gt;" in page
+
+
+def test_a_quote_above_the_technical_price_is_reported_as_a_good_account(client, rate_card_files):  # noqa: F811
+    # The endpoint's own judgement, not the renderer's - both read the
+    # same field so the screen and the print cannot disagree.
+    from app.api.routes_new_business_rating import _decision
+
+    scorecard = {"overall_band": "low", "overall_score": 78.0}
+    good = _decision(quoted=2_100_000, technical=1_830_987, break_even=1_556_339,
+                     scorecard=scorecard, expected_claims=1_143_909, loading_pct=0.265)
+    assert good["account_quality"] == "good"
+    assert good["negotiation_room_aed"] == 269_013.0
+    assert "room above the technical price" in good["headline"]
+    assert good["referral_required"] is False
+
+
+def test_a_quote_below_break_even_is_not_dressed_up_as_a_good_account():
+    from app.api.routes_new_business_rating import _decision
+
+    bad = _decision(quoted=900_000, technical=1_830_987, break_even=1_556_339,
+                    scorecard={"overall_band": "high", "overall_score": 39.0},
+                    expected_claims=1_143_909, loading_pct=0.265)
+    assert bad["account_quality"] == "poor"
+    assert bad["verdict"] == "decline"
+    assert bad["negotiation_room_aed"] < 0
+
+
+def test_a_high_risk_account_clearing_its_price_is_workable_not_good():
+    # Clearing the technical price is necessary but not sufficient. A
+    # high-risk account that happens to be priced adequately is not one
+    # to go chasing on price.
+    from app.api.routes_new_business_rating import _decision
+
+    d = _decision(quoted=2_100_000, technical=1_830_987, break_even=1_556_339,
+                  scorecard={"overall_band": "high", "overall_score": 31.0},
+                  expected_claims=1_143_909, loading_pct=0.265)
+    assert d["verdict"] == "proceed"
+    assert d["account_quality"] == "workable"

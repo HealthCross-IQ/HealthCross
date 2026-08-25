@@ -1804,8 +1804,12 @@ def _decision(
     """
     recommended_minimum = technical
     room = None
+    room_aed = None
     if quoted and recommended_minimum:
         room = round(quoted / recommended_minimum - 1, 4)
+        room_aed = round(quoted - recommended_minimum, 2)
+
+    band = scorecard.get("overall_band")
 
     if not quoted or not break_even:
         verdict, headline = "incomplete", "Not enough on file to price this"
@@ -1813,6 +1817,15 @@ def _decision(
         verdict, headline = "decline", "Below break-even - do not issue at this price"
     elif recommended_minimum and quoted < recommended_minimum:
         verdict, headline = "refer", "Priced below the technical minimum - refer before issuing"
+    elif band != "high" and room_aed and room_aed > 0:
+        # A good account, and worth saying so. "Priced at or above the
+        # technical minimum" is true of a marginal account scraping over
+        # the line and of one with real headroom, and an account handler
+        # reads the same sentence either way. The room is what tells
+        # them how hard they can compete for it.
+        verdict = "proceed"
+        headline = (f"AED {room_aed:,.0f} of room above the technical price - "
+                    f"scope to compete hard and still clear it")
     else:
         verdict, headline = "proceed", "Priced at or above the technical minimum"
 
@@ -1824,6 +1837,17 @@ def _decision(
         "break_even": break_even,
         "quoted": quoted,
         "room_vs_minimum_pct": room,
+        # What can be conceded before the quote drops below the price
+        # that lands on target - the "how aggressive can we be" figure,
+        # in money rather than as a ratio somebody has to convert in a
+        # meeting. Negative means the concession has already been made.
+        "negotiation_room_aed": room_aed,
+        "account_quality": (
+            "good" if verdict == "proceed" and band != "high" and (room_aed or 0) > 0
+            else "workable" if verdict == "proceed"
+            else "poor" if verdict == "decline"
+            else "refer" if verdict == "refer" else None
+        ),
         # Discount is taken off the claims-funding part of the price, not
         # off the whole of it, so a 5% cut in price is more than a 5%
         # move in loss ratio. Stating the floor in money avoids that
