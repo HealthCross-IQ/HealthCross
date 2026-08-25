@@ -175,3 +175,48 @@ def test_a_target_loss_ratio_below_one_asks_for_more_premium():
 def test_an_impossible_loading_prices_nothing_rather_than_dividing_by_zero():
     assert premium_for_target_loss_ratio(100_000, 1.0) is None
     assert premium_for_target_loss_ratio(0, 0.265) is None
+
+
+# --- the house target ----------------------------------------------------
+
+def test_the_house_target_loss_ratio_is_one_number_everywhere():
+    # It was a literal 0.85 in five places. A parameter that decides
+    # every technical price cannot be revised safely while it is spelled
+    # out in five files - one of them gets missed, and the miss is a
+    # rate card calibrated to a target the quotes no longer use.
+    from app.api.routes_feedback import PROFITABLE_LOSS_RATIO_THRESHOLD
+    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+    from app.scoring.rules.rate_card_calibration import DEFAULT_TARGET_LOSS_RATIO
+
+    assert DEFAULT_TARGET_LOSS_RATIO == HOUSE_TARGET_LOSS_RATIO
+    assert PROFITABLE_LOSS_RATIO_THRESHOLD == HOUSE_TARGET_LOSS_RATIO
+
+
+def test_no_endpoint_still_carries_its_own_copy_of_the_target():
+    import pathlib
+    import re
+
+    routes = pathlib.Path(__file__).resolve().parent.parent / "app" / "api"
+    offenders = []
+    for path in routes.rglob("*.py"):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r"target_loss_ratio.*Query\(\s*0\.\d", line):
+                offenders.append(f"{path.name}:{number}")
+    assert not offenders, f"hardcoded target loss ratio: {offenders}"
+
+
+def test_the_house_target_is_what_underwriting_set():
+    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+
+    assert HOUSE_TARGET_LOSS_RATIO == 0.95
+
+
+def test_a_higher_target_asks_for_less_premium():
+    # 95% means more of each premium is allowed to go out as claims, so
+    # the price that lands on it is lower than the price that lands on
+    # 85%. Getting this backwards would raise prices while appearing to
+    # relax the target.
+    from app.scoring.rules.experience_pricing import premium_for_target_loss_ratio
+
+    assert premium_for_target_loss_ratio(1_219_538, 0.265, 0.95) < \
+           premium_for_target_loss_ratio(1_219_538, 0.265, 0.85)

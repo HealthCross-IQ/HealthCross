@@ -262,6 +262,20 @@ def _caveats(own: dict) -> List[str]:
     return notes
 
 
+#: The loss ratio HealthCross prices new business to land on.
+#:
+#: A house number, set by underwriting, and the single most consequential
+#: parameter in the engine: it is the divisor between what a case is
+#: expected to cost and what it is quoted at, so moving it moves every
+#: technical price. It lived as a literal 0.85 in five separate places,
+#: which is four too many for a figure that gets revised.
+#:
+#: Every endpoint that prices to a target still takes it as a query
+#: parameter, so a single case can be worked at a different target
+#: without changing the house position.
+HOUSE_TARGET_LOSS_RATIO = 0.95
+
+
 def premium_for_target_loss_ratio(
     expected_claims: float,
     loading_pct: float,

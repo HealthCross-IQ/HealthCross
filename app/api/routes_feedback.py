@@ -7,8 +7,14 @@ from app.models import schemas
 
 router = APIRouter(prefix="/cases", tags=["feedback"])
 
-# Actual loss ratio at/below this threshold is considered profitable for the book.
-PROFITABLE_LOSS_RATIO_THRESHOLD = 0.85
+# An account that came in at or below the loss ratio it was priced to
+# land on is one the pricing got right. Reading the same constant as
+# the pricing engine keeps that judgement honest: a separate literal
+# here would let the book start calling accounts profitable at a ratio
+# it no longer prices to.
+from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+
+PROFITABLE_LOSS_RATIO_THRESHOLD = HOUSE_TARGET_LOSS_RATIO
 
 
 @router.post("/{case_id}/outcome", response_model=schemas.OutcomeOut)

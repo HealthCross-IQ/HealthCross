@@ -26,6 +26,7 @@ from app.scoring.rules.new_business_rating import (
     price_tier_ladder,
 )
 from app.reference.emirate_regions import region_for_emirate
+from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network, nas_tpa_factor
 
 router = APIRouter(tags=["new-business-rating"])
@@ -903,7 +904,7 @@ def get_case_nationality_mix_pricing(
 
 @router.get("/new-business/rate-card-calibration")
 def get_rate_card_calibration(
-    target_loss_ratio: float = Query(0.85, description="The loss ratio each cell's suggested price is calibrated to"),
+    target_loss_ratio: float = Query(HOUSE_TARGET_LOSS_RATIO, description="The loss ratio each cell's suggested price is calibrated to"),
     loading_pct: Optional[float] = Query(None, description="Expense loading as a fraction. Defaults to the standard per-product loading."),
     min_exposure_member_years: float = Query(5.0, description="Below this exposure a cell is reported but not counted as a finding"),
     as_of: Optional[date] = Query(None),
@@ -1408,7 +1409,7 @@ def _latest_claims_report_dict(case) -> Optional[dict]:
 def get_experience_price(
     case_id: int,
     trend_pct: float = Query(0.10),
-    target_loss_ratio: float = Query(0.85, description="The loss ratio the suggested premium is built to land on"),
+    target_loss_ratio: float = Query(HOUSE_TARGET_LOSS_RATIO, description="The loss ratio the suggested premium is built to land on"),
     benefit_uplift_pct: float = Query(0.0, description="How much richer the proposal is than the plan these claims were incurred on"),
     as_of: Optional[date] = Query(None),
     db: Session = Depends(get_db),
@@ -1538,7 +1539,7 @@ def _chronic_share_of_claims(report: Optional[dict]) -> Optional[float]:
 def get_underwriting_report(
     case_id: int,
     trend_pct: float = Query(0.10),
-    target_loss_ratio: float = Query(0.85),
+    target_loss_ratio: float = Query(HOUSE_TARGET_LOSS_RATIO),
     as_of: Optional[date] = Query(None),
     db: Session = Depends(get_db),
 ):
@@ -1708,7 +1709,7 @@ def get_underwriting_report(
 def get_underwriting_report_html(
     case_id: int,
     trend_pct: float = Query(0.10),
-    target_loss_ratio: float = Query(0.85),
+    target_loss_ratio: float = Query(HOUSE_TARGET_LOSS_RATIO),
     as_of: Optional[date] = Query(None),
     db: Session = Depends(get_db),
 ):

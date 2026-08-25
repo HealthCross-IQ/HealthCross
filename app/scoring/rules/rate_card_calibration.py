@@ -37,7 +37,12 @@ from app.scoring.rules.burning_cost_cube import UNMAPPED, build_cube_index
 #: makes the cell land here after its own expense loading. 0.85 leaves a
 #: margin over break-even rather than pricing every cell to exactly fund
 #: its own claims and nothing else.
-DEFAULT_TARGET_LOSS_RATIO = 0.85
+#: The house target - see experience_pricing.HOUSE_TARGET_LOSS_RATIO.
+#: Imported rather than repeated so the rate card and a new business
+#: quote cannot be calibrated to two different targets.
+from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+
+DEFAULT_TARGET_LOSS_RATIO = HOUSE_TARGET_LOSS_RATIO
 
 #: Cells whose implied loss ratio is beyond these bounds are called out.
 #: The high side is the money-losing one; the low side matters too, since
