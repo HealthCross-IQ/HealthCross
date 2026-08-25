@@ -49,9 +49,26 @@ def test_trend_lifts_the_price_off_historic_cost(cube):
     assert priced["risk_premium"] == pytest.approx(2200.0)
 
 
-def test_industry_multiplies_the_claims_not_the_premium(cube):
-    # Construction is 1.35x. It must apply before the gross-up, so the
-    # expense loading is charged on the loaded risk, not the bare one.
+def test_industry_does_not_move_the_price_while_the_factor_is_switched_off(cube):
+    # The multipliers were opening guesses, and the two they were most
+    # confidently wrong about - education and professional services,
+    # priced at a discount - are the two the underwriting view calls
+    # risky. A factor that moves the price the wrong way is worse than
+    # no factor, so it rates neutral until there are real numbers.
+    priced = price_census_at_expected_cost(
+        [_r(0)], cube, industry="construction", trend_pct=0.0, loading_pct=0.5
+    )
+    assert priced["industry_factor"] == 1.0
+    assert priced["risk_premium"] == pytest.approx(2000.0)
+    assert priced["gross_premium"] == pytest.approx(4000.0)
+
+
+def test_the_industry_arithmetic_still_works_when_it_is_switched_back_on(cube, monkeypatch):
+    # Switching the factor off must not quietly rot the code that
+    # applies it - the table is meant to come back once there are house
+    # numbers for it. It applies before the gross-up, so the expense
+    # loading is charged on the loaded risk rather than the bare one.
+    monkeypatch.setattr("app.scoring.rules.industry.INDUSTRY_RATING_ENABLED", True)
     priced = price_census_at_expected_cost(
         [_r(0)], cube, industry="construction", trend_pct=0.0, loading_pct=0.5
     )
@@ -75,7 +92,8 @@ def test_non_recurring_larger_than_the_base_floors_at_zero_not_negative(cube):
     assert priced["risk_premium"] == 0.0
 
 
-def test_the_build_up_names_every_step_that_moved_the_price(cube):
+def test_the_build_up_names_every_step_that_moved_the_price(cube, monkeypatch):
+    monkeypatch.setattr("app.scoring.rules.industry.INDUSTRY_RATING_ENABLED", True)
     priced = price_census_at_expected_cost(
         [_r(0)], cube, industry="construction", trend_pct=0.10, loading_pct=0.33
     )
@@ -89,7 +107,11 @@ def test_the_build_up_names_every_step_that_moved_the_price(cube):
 
 
 def test_a_step_that_changes_nothing_is_left_out_of_the_build_up(cube):
-    priced = price_census_at_expected_cost([_r(0)], cube, trend_pct=0.10, loading_pct=0.0)
+    # Which is also why a switched-off industry leaves no trace on the
+    # build-up: the price sheet should not carry a line that did nothing.
+    priced = price_census_at_expected_cost(
+        [_r(0)], cube, industry="construction", trend_pct=0.10, loading_pct=0.0
+    )
     labels = [s["label"] for s in priced["build_up"]]
     assert not any("Industry" in l for l in labels)
     assert not any("non-recurring" in l.lower() for l in labels)

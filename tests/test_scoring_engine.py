@@ -1,3 +1,5 @@
+import pytest
+
 from app.scoring.engine import ScoringWeights, compute_scorecard
 
 
@@ -63,15 +65,51 @@ def test_high_loss_ratio_pushes_score_up():
     assert high_result["details"]["claims_experience"]["loss_ratio"] > 1.0
 
 
-def test_industry_risk_influences_score():
+def test_industry_does_not_move_the_score_while_the_factor_is_switched_off():
+    # Two cases identical but for their industry must score identically,
+    # because the multipliers behind that difference were guesses - and
+    # the ones they were most confident about pointed the wrong way.
     weights = ScoringWeights()
     census = _census()
     plan = _plan()
 
-    low_risk_industry = compute_scorecard(census, [plan], [], "financial_services", weights)
-    high_risk_industry = compute_scorecard(census, [plan], [], "mining", weights)
+    low = compute_scorecard(census, [plan], [], "financial_services", weights)
+    high = compute_scorecard(census, [plan], [], "mining", weights)
 
-    assert high_risk_industry["composite_score"] > low_risk_industry["composite_score"]
+    assert high["composite_score"] == low["composite_score"]
+
+
+def test_a_switched_off_industry_gives_its_weight_to_the_factors_being_measured():
+    # Holding 15% of the weighting for a factor that always scores a flat
+    # 1.0 pulls every case toward neutral and mutes the factors that do
+    # have something to say - the same reason the claims slot is dropped
+    # when a case has no claims.
+    weights = ScoringWeights()
+    used = compute_scorecard(_census(), [_plan()], [], "mining", weights)["details"]["weights_used"]
+
+    assert used["industry"] == 0.0
+    assert used["demographic"] > weights.w_demographic
+    # weights_used also carries the zone multiplier dicts, so sum the
+    # four weight slots rather than everything in there.
+    slots = ("demographic", "claims_experience", "benefit_richness", "industry")
+    assert sum(used[k] for k in slots) == pytest.approx(
+        weights.w_demographic + weights.w_claims_experience
+        + weights.w_benefit_richness + weights.w_industry, abs=1e-3
+    )
+
+
+def test_industry_still_moves_the_score_when_it_is_switched_back_on(monkeypatch):
+    # The table is parked, not deleted. This is what turning it on does.
+    monkeypatch.setattr("app.scoring.rules.industry.INDUSTRY_RATING_ENABLED", True)
+    monkeypatch.setattr("app.scoring.engine.INDUSTRY_RATING_ENABLED", True)
+    weights = ScoringWeights()
+    census = _census()
+    plan = _plan()
+
+    low = compute_scorecard(census, [plan], [], "financial_services", weights)
+    high = compute_scorecard(census, [plan], [], "mining", weights)
+
+    assert high["composite_score"] > low["composite_score"]
 
 
 def test_zone_network_multiplier_scales_with_case_network_tier():
@@ -130,8 +168,13 @@ def test_real_claims_history_keeps_the_configured_weights_unchanged():
 
     result = compute_scorecard(census, [plan], claims, "technology", weights, estimated_annual_premium=300_000)
     used = result["details"]["weights_used"]
-    assert used["claims_experience"] == weights.w_claims_experience
-    assert used["demographic"] == weights.w_demographic
+    # Claims keeps its share of what is left; only the switched-off
+    # industry slot is redistributed (see test_a_switched_off_industry_...).
+    assert used["claims_experience"] > weights.w_claims_experience
+    # Stored to 4dp, so compare at that precision rather than exactly.
+    assert used["claims_experience"] / used["demographic"] == pytest.approx(
+        weights.w_claims_experience / weights.w_demographic, abs=1e-3
+    )
 
 
 def test_dropping_claims_weight_amplifies_the_remaining_signal():

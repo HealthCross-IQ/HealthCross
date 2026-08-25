@@ -6,7 +6,7 @@ from app.scoring.rules.benefit_richness import benefit_richness_risk
 from app.scoring.rules.claims_experience import claims_experience_risk
 from app.scoring.rules.demographic import DEFAULT_OVERAGE_AGE_THRESHOLD, DEFAULT_OVERAGE_LOADING_CAP, demographic_risk
 from app.scoring.rules.expected_cost_pricing import DEFAULT_TREND_PCT, price_census_at_expected_cost
-from app.scoring.rules.industry import industry_risk
+from app.scoring.rules.industry import INDUSTRY_RATING_ENABLED, industry_risk
 
 
 @dataclass
@@ -20,6 +20,32 @@ class ScoringWeights:
     zone_network_multipliers: Optional[dict] = None
     overage_age_threshold: int = DEFAULT_OVERAGE_AGE_THRESHOLD
     overage_loading_cap: float = DEFAULT_OVERAGE_LOADING_CAP
+
+
+def _redistribute(weights: ScoringWeights, dropped: tuple) -> dict:
+    """The four weights with `dropped` set to zero and the rest scaled up
+    to carry the full total between them.
+
+    A dropped factor is one that would only ever contribute a
+    forced-neutral 1.0 - because there is nothing to measure, or because
+    the factor is switched off. Leaving its weight in place would pull
+    every case toward neutral by that fraction and dilute the factors
+    that do have something to say.
+    """
+    slots = ("demographic", "claims_experience", "benefit_richness", "industry")
+    configured = {
+        "demographic": weights.w_demographic,
+        "claims_experience": weights.w_claims_experience,
+        "benefit_richness": weights.w_benefit_richness,
+        "industry": weights.w_industry,
+    }
+    remaining = sum(configured[s] for s in slots if s not in dropped)
+    if remaining <= 0:
+        # Degenerate configuration - every weight sits on a factor we are
+        # dropping, so there is nothing sensible to redistribute to.
+        return configured
+    scale = sum(configured.values()) / remaining
+    return {s: (0.0 if s in dropped else configured[s] * scale) for s in slots}
 
 
 def _effective_weights(has_claims: bool, weights: ScoringWeights) -> dict:
@@ -38,33 +64,17 @@ def _effective_weights(has_claims: bool, weights: ScoringWeights) -> dict:
     risk's own credibility blending already fades a thin claims sample
     toward neutral without needing to touch the weights themselves.
     """
-    if has_claims:
-        return {
-            "demographic": weights.w_demographic,
-            "claims_experience": weights.w_claims_experience,
-            "benefit_richness": weights.w_benefit_richness,
-            "industry": weights.w_industry,
-        }
-
-    remaining = weights.w_demographic + weights.w_benefit_richness + weights.w_industry
-    if remaining <= 0:
-        # Degenerate configuration (all weight on claims alone) - nothing
-        # sensible to redistribute to, so fall back to using it as-is.
-        return {
-            "demographic": weights.w_demographic,
-            "claims_experience": weights.w_claims_experience,
-            "benefit_richness": weights.w_benefit_richness,
-            "industry": weights.w_industry,
-        }
-
-    total = weights.w_demographic + weights.w_claims_experience + weights.w_benefit_richness + weights.w_industry
-    scale = total / remaining
-    return {
-        "demographic": weights.w_demographic * scale,
-        "claims_experience": 0.0,
-        "benefit_richness": weights.w_benefit_richness * scale,
-        "industry": weights.w_industry * scale,
-    }
+    dropped = []
+    if not has_claims:
+        dropped.append("claims_experience")
+    # Industry is switched off (see app/scoring/rules/industry.py), so
+    # every case would score a flat 1.0 on it. That is the same
+    # forced-neutral placeholder the claims slot becomes without claims,
+    # and it gets the same treatment rather than quietly holding 15% of
+    # the weighting for a factor nobody is measuring.
+    if not INDUSTRY_RATING_ENABLED:
+        dropped.append("industry")
+    return _redistribute(weights, tuple(dropped))
 
 
 def _case_network_tier_score(benefit_plans: List[dict]) -> float:
