@@ -5406,6 +5406,27 @@ async function loadRenewalBenchMemberMovement() {
         <td class="num">${money(m.claims.incurred)}</td>
       </tr>`).join('');
 
+    // A pairing done entirely on demographics is guesswork, and the
+    // claims split it produces is an artefact rather than evidence -
+    // Safran reported 93 leavers taking half the year's claims when the
+    // renewal census simply carried no dates of birth to match on.
+    // Saying so is the whole panel in that case; the numbers below it
+    // would only invite being used.
+    if (!r.reliable) {
+      area.innerHTML = `
+        <div class="rb-card">
+          <div class="rb-card-title">Who left, who joined</div>
+          <div class="rb-insight sev-critical" style="margin-top:12px;">
+            <div class="rb-insight-icon">⚠</div>
+            <div>
+              <span class="rb-insight-tag">Cannot be relied on</span>
+              <div class="rb-insight-text">${escapeHtml(r.caveat)}</div>
+            </div>
+          </div>
+        </div>`;
+      return;
+    }
+
     area.innerHTML = `
       <div class="rb-card">
         <div class="rb-card-title">Who left, who joined - and what they claimed</div>

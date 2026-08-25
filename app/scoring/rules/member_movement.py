@@ -138,6 +138,7 @@ def match_members(
     leavers = [r for r in unmatched_expiring if id(r) not in matched_expiring_ids]
     joiners = still_unmatched_renewal
 
+    exact = sum(1 for c in continuing if c["match"] == MATCH_EXACT_DOB)
     return {
         "continuing": continuing,
         "leavers": leavers,
@@ -147,8 +148,66 @@ def match_members(
         "continuing_count": len(continuing),
         "leaver_count": len(leavers),
         "joiner_count": len(joiners),
-        "exact_match_count": sum(1 for c in continuing if c["match"] == MATCH_EXACT_DOB),
-        "demographic_match_count": sum(1 for c in continuing if c["match"] == MATCH_DEMOGRAPHIC),
+        "exact_match_count": exact,
+        "demographic_match_count": len(continuing) - exact,
+        **_reliability(expiring, renewal, continuing, leavers, joiners, exact),
+    }
+
+
+#: Below this share of continuing members matched on date of birth, the
+#: pairing is guesswork and the split it produces is not evidence.
+RELIABLE_EXACT_MATCH_SHARE = 0.5
+
+
+def _reliability(expiring, renewal, continuing, leavers, joiners, exact) -> dict:
+    """Whether this comparison is worth acting on.
+
+    The matching pairs on date of birth first and falls back to
+    (relation, gender, age). The fallback is a guess, and when it is
+    doing ALL the work the result stops being a movement report and
+    becomes an artefact of two rosters that do not share identifiers.
+
+    Safran showed it: 182 expiring against a 178-member renewal census,
+    89 continuing - every one of them matched on demographics, none on
+    date of birth - and therefore 93 leavers and 89 joiners. Almost
+    certainly the same people twice, with the census carrying no dates of
+    birth to match on. The panel then reported that leavers took half the
+    year's claims with them and that the renewing members bring only
+    1,027,160 of experience rather than 2,043,338 - halving the account's
+    own history on a matching failure.
+
+    So the report says when it cannot be trusted, and says why.
+    """
+    reasons = []
+    share = (exact / len(continuing)) if continuing else 0.0
+    churn = ((len(leavers) + len(joiners)) / len(expiring)) if expiring else 0.0
+
+    if continuing and share < RELIABLE_EXACT_MATCH_SHARE:
+        reasons.append(
+            f"{len(continuing) - exact} of {len(continuing)} continuing members were paired on "
+            f"demographics rather than date of birth"
+        )
+    if churn > 1.0:
+        reasons.append(
+            f"{len(leavers)} left and {len(joiners)} joined against {len(expiring)} expiring - "
+            f"more movement than the account has members"
+        )
+    if not exact and (leavers or joiners):
+        reasons.append(
+            "no member matched on date of birth, so the two rosters may not share identifiers at all"
+        )
+
+    return {
+        "exact_match_share": round(share, 4),
+        "reliable": not reasons,
+        "unreliable_because": reasons,
+        "caveat": (
+            "This comparison is not reliable enough to price from: " + "; ".join(reasons) +
+            ". The likeliest explanation is that the renewal census carries no dates of birth, "
+            "so continuing members could not be recognised and appear as leavers and joiners at "
+            "once. Population movement, read off the book's own cover dates, does not depend on "
+            "matching two rosters."
+        ) if reasons else None,
     }
 
 

@@ -114,3 +114,46 @@ def test_the_endpoint_reports_movement_for_an_account(client):
     assert body["totals"]["joiners"] == 1
     assert body["totals"]["leavers"] == 1
     assert body["totals"]["closing"] == 2
+
+
+# --- a comparison that cannot be trusted must say so ---------------------
+
+def _movement(expiring, renewal):
+    from app.scoring.rules.member_movement import match_members
+    return match_members(expiring, renewal)
+
+
+def _person(ref, dob=None, relation="employee", gender="M", age=35):
+    return {"employee_ref": ref, "date_of_birth": dob, "relation": relation,
+            "gender": gender, "age": age}
+
+
+def test_a_pairing_done_entirely_on_demographics_is_reported_as_unreliable():
+    # Safran: 182 expiring against a 178-member renewal census, every
+    # continuing member paired on demographics and none on date of birth,
+    # producing 93 leavers who took half the year's claims. Almost
+    # certainly the same people twice, with no dates of birth to match on.
+    expiring = [_person(f"E{i}", dob=date(1990, 1, 1)) for i in range(10)]
+    renewal = [_person(f"R{i}", dob=None) for i in range(10)]
+    r = _movement(expiring, renewal)
+    assert r["exact_match_count"] == 0
+    assert r["reliable"] is False
+    assert r["caveat"] and "not reliable enough to price from" in r["caveat"]
+
+
+def test_a_clean_match_on_dates_of_birth_is_reported_as_reliable():
+    dobs = [date(1990, 1, i + 1) for i in range(10)]
+    expiring = [_person(f"E{i}", dob=d) for i, d in enumerate(dobs)]
+    renewal = [_person(f"R{i}", dob=d) for i, d in enumerate(dobs)]
+    r = _movement(expiring, renewal)
+    assert r["exact_match_count"] == 10
+    assert r["reliable"] is True
+    assert r["caveat"] is None
+
+
+def test_more_movement_than_the_account_has_members_is_flagged():
+    expiring = [_person(f"E{i}", dob=date(1990, 1, i + 1)) for i in range(3)]
+    renewal = [_person(f"R{i}", dob=date(1975, 6, i + 1), age=50) for i in range(5)]
+    r = _movement(expiring, renewal)
+    assert r["reliable"] is False
+    assert any("more movement" in reason for reason in r["unreliable_because"])
