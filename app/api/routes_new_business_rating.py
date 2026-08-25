@@ -1720,13 +1720,65 @@ def get_underwriting_report_html(
     blocked it - a button that appeared to do nothing. Pointing it at a
     URL instead makes the open synchronous and the blocker has nothing to
     object to.
+
+    An unexpected failure renders the reason ON THE PAGE rather than the
+    browser's bare "Internal Server Error". The report reads a dozen
+    parts of a case, any of which a real upload can leave in a shape
+    nothing anticipated, and "Internal Server Error" sends whoever hit
+    the button hunting through a server console for the one line that
+    says which. This is an internal tool - the traceback belongs where
+    the person who needs it is already looking.
     """
     from app.reports.underwriting_report import render_underwriting_report
 
-    payload = get_underwriting_report(
-        case_id, trend_pct=trend_pct, target_loss_ratio=target_loss_ratio, as_of=as_of, db=db
-    )
-    return HTMLResponse(render_underwriting_report(payload))
+    try:
+        payload = get_underwriting_report(
+            case_id, trend_pct=trend_pct, target_loss_ratio=target_loss_ratio, as_of=as_of, db=db
+        )
+        return HTMLResponse(render_underwriting_report(payload))
+    except HTTPException as exc:
+        # A deliberate refusal - "upload a census first" and the like.
+        # It is an answer, not a fault, so it is shown as one.
+        return HTMLResponse(_report_problem_page(case_id, str(exc.detail), None),
+                            status_code=exc.status_code)
+    except Exception as exc:  # noqa: BLE001 - the whole point is to catch it
+        import traceback
+
+        return HTMLResponse(
+            _report_problem_page(case_id, f"{type(exc).__name__}: {exc}", traceback.format_exc()),
+            status_code=500,
+        )
+
+
+def _report_problem_page(case_id: int, message: str, detail: Optional[str]) -> str:
+    """Why the document could not be built, on the page where it should
+    have been.
+    """
+    import html as _html
+
+    trace = (f'<pre>{_html.escape(detail)}</pre>' if detail else "")
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>Underwriting report - case {case_id}</title>
+<style>
+ body{{font:14px/1.6 system-ui,-apple-system,sans-serif;background:#f2f8fc;color:#1c2a48;
+   margin:0;padding:44px}}
+ .box{{max-width:900px;margin:0 auto;background:#fff;border:1px solid #dfe8f0;padding:32px 36px}}
+ h1{{font-size:19px;margin:0 0 6px;color:#1c2947}}
+ .case{{font:12px ui-monospace,Menlo,monospace;color:#6b7789;letter-spacing:.06em;
+   text-transform:uppercase;margin-bottom:18px}}
+ .msg{{background:#fbecea;border-left:4px solid #c8443f;padding:13px 16px;margin:0 0 20px;
+   font-weight:600;color:#8f2f2b}}
+ pre{{background:#f7fafd;border:1px solid #dfe8f0;padding:14px;overflow-x:auto;
+   font:11.5px/1.5 ui-monospace,Menlo,monospace;color:#3e4963;white-space:pre-wrap}}
+ p{{color:#46586e;max-width:70ch}}
+</style></head><body><div class="box">
+ <div class="case">Case {case_id} &middot; Underwriting report</div>
+ <h1>This document could not be built</h1>
+ <p class="msg">{_html.escape(message)}</p>
+ <p>Nothing on the case has been changed. Send the block below to whoever
+    maintains the portal - it names the exact line that stopped.</p>
+ {trace}
+</div></body></html>"""
 
 
 #: Below this share of the technical price, a discount stops being a

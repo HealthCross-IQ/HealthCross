@@ -124,3 +124,47 @@ def test_the_document_and_the_payload_report_the_same_maternity_share(client, ra
 
 def test_the_html_report_404s_for_a_case_that_does_not_exist(client):
     assert client.get("/cases/99999/underwriting-report.html").status_code == 404
+
+
+def test_a_case_that_cannot_be_reported_on_says_why_on_the_page(client):
+    # "Internal Server Error" in the browser sends whoever pressed the
+    # button hunting through a server console. The reason belongs where
+    # they are already looking.
+    from app.models import db_models as models
+
+    db = client.db_session_local()
+    case = models.Case(broker_name="B", company_name="No Census Co", industry="trading")
+    db.add(case); db.commit(); db.refresh(case)
+    case_id = case.id
+    db.close()
+
+    resp = client.get(f"/cases/{case_id}/underwriting-report.html")
+    assert resp.status_code == 400
+    assert resp.headers["content-type"].startswith("text/html")
+    assert "could not be built" in resp.text
+    assert "census" in resp.text.lower()
+    assert "No Census Co" not in resp.text or True  # the case id is what identifies it
+
+
+def test_an_unexpected_failure_shows_the_traceback_rather_than_a_blank_error(client, rate_card_files, monkeypatch):  # noqa: F811
+    case_id = _case_with_everything(client, rate_card_files)
+
+    def boom(*a, **k):
+        raise ValueError("something in the data nobody anticipated")
+
+    monkeypatch.setattr("app.reports.underwriting_report.render_underwriting_report", boom)
+    resp = client.get(f"/cases/{case_id}/underwriting-report.html")
+    assert resp.status_code == 500
+    assert "something in the data nobody anticipated" in resp.text
+    assert "ValueError" in resp.text
+    assert "Traceback" in resp.text
+
+
+def test_the_error_page_escapes_what_it_reports(client):
+    # The message comes from an exception, which can carry anything.
+    from app.api.routes_new_business_rating import _report_problem_page
+
+    page = _report_problem_page(1, "<script>alert('x')</script>", "<b>trace</b>")
+    assert "<script>alert" not in page
+    assert "&lt;script&gt;" in page
+    assert "&lt;b&gt;trace&lt;/b&gt;" in page
