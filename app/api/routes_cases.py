@@ -31,6 +31,9 @@ from app.api.routes_new_business_rating import maybe_auto_requote
 from app.reference.benefit_category_mapping import build_standard_summary_from_rows, to_case_benefit_plan_fields
 from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
+from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+from app.scoring.rules.portfolio_analysis import FULL_POLICY_TERM_DAYS
+
 router = APIRouter(prefix="/cases", tags=["cases"])
 
 
@@ -83,7 +86,11 @@ def list_cases(db: Session = Depends(get_db)):
 @router.get("/renewal-summary")
 def get_renewal_summary(
     trend_pct: float = Query(0.10),
-    target_net_loss_ratio: float = Query(1.0, description="The net loss ratio each case should be re-priced to - 1.0 is break-even"),
+    target_net_loss_ratio: float = Query(
+        HOUSE_TARGET_LOSS_RATIO,
+        description="The net loss ratio each case should be re-priced to - the house target",
+    ),
+    as_of: Optional[date] = Query(None, description="Date the policy year is measured as elapsed to"),
     db: Session = Depends(get_db),
 ):
     """Every renewal case with its own loss ratio and the increase that
@@ -91,12 +98,24 @@ def get_renewal_summary(
     cases need attention, rather than each having to be opened to find
     out.
 
-    Loss ratio here is the case's own claims ledger against its own
-    current premium: the same account may show a slightly different
-    figure on the portfolio Loss Ratio board, which measures earned
-    premium over an exact policy period rather than the annual premium
-    recorded on the case. Both are right for their own purpose; this one
-    answers "what should I ask for at renewal".
+    Claims are annualised for the part of the policy year that has
+    actually run before being compared with the premium. They used to be
+    summed straight off the ledger and divided by a FULL year's premium,
+    which is not a loss ratio - it is a part-year numerator over a
+    whole-year denominator, and it understates every account in
+    proportion to how much of the year is left.
+
+    Safran showed how badly. Ten and a half months in, the raw sum read
+    86% and suggested a 6% REDUCTION, while the same account's Renewal
+    Bench - annualising the same claims and adding IBNR - asked for +26%.
+    An underwriter reading the list would have gone into that renewal
+    intending to give money back.
+
+    The same account may still show a slightly different figure on the
+    portfolio Loss Ratio board, which measures earned premium over an
+    exact policy period rather than the annual premium recorded on the
+    case. That difference is a matter of basis; the one above was an
+    error.
     """
     from app.api.routes_scoring import _case_loading_pct
 
@@ -107,9 +126,24 @@ def get_renewal_summary(
         .all()
     )
 
+    reference = as_of or date.today()
     out = []
     for case in cases:
-        incurred = sum((e.final_amount or 0.0) for e in case.claims_ledger_entries)
+        to_date = sum((e.final_amount or 0.0) for e in case.claims_ledger_entries)
+        # How much of the policy year the ledger actually covers. Capped
+        # at a full term: once the year is over the figure is complete
+        # and annualising it again would inflate it.
+        elapsed = None
+        if case.policy_start_date:
+            end = min(reference, case.renewal_date or reference)
+            elapsed = (end - case.policy_start_date).days + 1
+            elapsed = min(elapsed, FULL_POLICY_TERM_DAYS) if elapsed > 0 else None
+        annualised = (
+            round(to_date * FULL_POLICY_TERM_DAYS / elapsed, 2)
+            if (to_date and elapsed) else (to_date or None)
+        )
+        incurred = annualised if annualised else to_date
+
         premium = case.current_annual_premium
         loading = _case_loading_pct(case)
         net_premium = premium * (1 - loading) if premium else None
@@ -135,6 +169,11 @@ def get_renewal_summary(
             "member_count": len(case.census_records),
             "current_annual_premium": premium,
             "incurred_claims": round(incurred, 2),
+            # Both, so a reader can see what was measured and what was
+            # projected from it rather than having to trust one number.
+            "incurred_claims_to_date": round(to_date, 2),
+            "elapsed_days": elapsed,
+            "annualised": bool(annualised and elapsed and elapsed < FULL_POLICY_TERM_DAYS),
             "claim_count": len(case.claims_ledger_entries),
             "loading_pct": round(loading, 4),
             "gross_loss_ratio": round(gross_lr, 4) if gross_lr is not None else None,
@@ -146,6 +185,7 @@ def get_renewal_summary(
     return {
         "trend_pct": trend_pct,
         "target_net_loss_ratio": target_net_loss_ratio,
+        "as_of": reference,
         "cases": out,
     }
 
