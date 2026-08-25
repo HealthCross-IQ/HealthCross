@@ -171,3 +171,94 @@ def test_the_endpoint_404s_for_an_account_that_is_not_on_the_book(client):
 
 def test_the_endpoint_400s_before_any_membership_is_uploaded(client):
     assert client.get("/portfolio-analysis/renewal-claims-split/Acme").status_code == 400
+
+
+# --- the cut date --------------------------------------------------------
+
+def _roster(policy_end, member_end, n=5):
+    """One account, in whichever end-date convention an export uses."""
+    return [
+        {"beneficiary_id": f"M{i}", "policy_start_date": date(2025, 10, 1),
+         "policy_end_date": policy_end, "member_start_date": date(2025, 10, 1),
+         "member_end_date": member_end, "gross_premium": 12_000.0}
+        for i in range(n)
+    ] + [
+        {"beneficiary_id": "L1", "policy_start_date": date(2025, 10, 1),
+         "policy_end_date": policy_end, "member_start_date": date(2025, 10, 1),
+         "member_end_date": date(2026, 4, 24), "gross_premium": 12_000.0}
+    ]
+
+
+@pytest.mark.parametrize("policy_end,member_end", [
+    (date(2026, 10, 1), date(2026, 10, 1)),   # the claims export
+    (date(2026, 9, 30), date(2026, 9, 30)),   # the membership export
+])
+def test_either_export_convention_gives_the_same_split(policy_end, member_end):
+    # The two exports put this scheme's policy end a day apart. A rule
+    # written against policy_end_date returns a confident, silent zero on
+    # the other one - every member reads as deleted and nothing says so.
+    from app.scoring.rules.renewal_intake import roster_term_end
+
+    roster = _roster(policy_end, member_end)
+    assert roster_term_end(roster)[0] == member_end
+    split = claims_by_member_status(roster, {})
+    assert split["continuing"]["member_count"] == 5
+    assert split["leaving"]["member_count"] == 1
+
+
+def test_exports_disagreeing_about_the_same_day_is_flagged_not_swallowed():
+    from app.scoring.rules.renewal_intake import roster_term_end
+
+    roster = _roster(date(2026, 10, 1), date(2026, 9, 30))
+    term_end, warning = roster_term_end(roster)
+    assert term_end == date(2026, 9, 30), "the roster wins, not the policy field"
+    assert warning and "disagree" in warning
+    assert claims_by_member_status(roster, {})["warning"] == warning
+
+
+def test_a_roster_with_no_common_end_date_refuses_to_guess():
+    # Six members, six different end dates. Whichever one happens to sort
+    # highest is not the term end, and treating it as one would silently
+    # classify five of six as deleted.
+    from app.scoring.rules.renewal_intake import roster_term_end
+
+    roster = [
+        {"beneficiary_id": f"M{i}", "policy_start_date": date(2025, 10, 1),
+         "policy_end_date": date(2026, 10, 1), "member_start_date": date(2025, 10, 1),
+         "member_end_date": date(2026, m, 1), "gross_premium": 12_000.0}
+        for i, m in enumerate(range(1, 7))
+    ]
+    term_end, warning = roster_term_end(roster)
+    assert term_end is None
+    assert "Set the cut date explicitly" in warning
+
+
+def test_a_supplied_cut_date_beats_the_roster():
+    # The whole point of making it an input: an underwriter pricing to a
+    # different date says so, and is told the figure is theirs.
+    roster = _roster(date(2026, 10, 1), date(2026, 10, 1))
+    split = claims_by_member_status(roster, {}, as_at=date(2026, 4, 1))
+    assert split["as_at"] == date(2026, 4, 1)
+    assert split["cut_date_source"] == "supplied"
+    # At 1 April the member who left on 24 April is still on risk.
+    assert split["continuing"]["member_count"] == 6
+    assert split["leaving"]["member_count"] == 0
+
+
+def test_a_derived_cut_date_says_it_was_derived():
+    split = claims_by_member_status(_roster(date(2026, 10, 1), date(2026, 10, 1)), {})
+    assert split["cut_date_source"] == "roster"
+
+
+def test_the_endpoint_accepts_a_cut_date(client):
+    db = client.db_session_local()
+    _seed("Acme", [_m("A"), _m("B", end=date(2026, 4, 23))], [])(db)
+    db.close()
+
+    late = client.get("/portfolio-analysis/renewal-claims-split/Acme",
+                      params={"as_at": "2026-09-30"}).json()
+    early = client.get("/portfolio-analysis/renewal-claims-split/Acme",
+                       params={"as_at": "2026-04-01"}).json()
+    assert late["leaving"]["member_count"] == 1
+    assert early["leaving"]["member_count"] == 0
+    assert early["cut_date_source"] == "supplied"

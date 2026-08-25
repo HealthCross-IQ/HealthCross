@@ -253,24 +253,74 @@ def census_rows_from_members(members: List[dict]) -> List[dict]:
     return rows
 
 
+#: Below this share of the roster holding one end date, that date is not
+#: the term end - it is a coincidence. Refusing to guess is the point.
+ROSTER_TERM_END_MAJORITY = 0.5
+
+
+def roster_term_end(members: List[dict]) -> Tuple[Optional[date_cls], Optional[str]]:
+    """The term's own end date, read off the roster rather than the
+    policy_end_date field, plus a warning where the two disagree.
+
+    The exports do not agree with each other about the same day: the
+    claims export puts this scheme's policy end at 2026-10-01 and the
+    membership export at 2026-09-30. A rule written against either field
+    returns a confident, silent zero on the other - every member reads as
+    deleted, and nothing says so.
+
+    The roster cannot drift like that. Whatever convention an export
+    uses, the members who run the full term all share one end date, and
+    that date IS the term end. Where no date is held by a clear majority
+    the account is not a normal renewal and this refuses to guess.
+    """
+    ends = [m.get("member_end_date") for m in current_term_members(members) if m.get("member_end_date")]
+    if not ends:
+        _, policy_end = current_term(members)
+        return policy_end, None
+
+    counts: Dict[date_cls, int] = {}
+    for end in ends:
+        counts[end] = counts.get(end, 0) + 1
+    term_end, held_by = max(counts.items(), key=lambda kv: (kv[1], kv[0]))
+    if held_by / len(ends) < ROSTER_TERM_END_MAJORITY:
+        return None, (
+            f"No single cover end date is shared by most of the roster "
+            f"(the commonest, {term_end}, covers {held_by} of {len(ends)}). "
+            f"Set the cut date explicitly."
+        )
+
+    warning = None
+    policy_ends = {m.get("policy_end_date") for m in current_term_members(members)
+                   if m.get("policy_end_date")}
+    if policy_ends and term_end not in policy_ends:
+        warning = (
+            f"The roster's cover ends {term_end} but policy_end_date says "
+            f"{sorted(policy_ends)[-1]}. The exports disagree about the same day - "
+            f"the roster was used."
+        )
+    return term_end, warning
+
+
 def continuing_and_leaving(
     members: List[dict],
     as_at: Optional[date_cls] = None,
 ) -> Tuple[List[dict], List[dict]]:
     """The renewing term's members split by whether they are still on
-    risk at the term's end.
+    risk at the cut date.
 
-    `as_at` defaults to the term end, which is the date that matters for
-    a renewal: the question is not who is covered today, it is who walks
-    into the new policy year. A member whose cover ended in April is part
-    of the expiring year's cost and none of the incoming year's exposure.
+    `as_at` is the cut date, and is meant to be set per renewal - the
+    date an underwriter is actually pricing to. Left unset it is read
+    off the roster (see roster_term_end) rather than from a policy field,
+    because the exports disagree about that field by a day.
 
-    A member whose cover ends ON the date is continuing - the term runs
-    to the end of that day.
+    A member whose cover ends ON the cut date is continuing - the term
+    runs to the end of that day. A member whose cover ended in April is
+    part of the expiring year's cost and none of the incoming year's
+    exposure.
     """
     term_members = current_term_members(members)
     if as_at is None:
-        _, as_at = current_term(term_members)
+        as_at, _ = roster_term_end(members)
     if as_at is None:
         return term_members, []
 
@@ -308,8 +358,10 @@ def claims_by_member_status(
     # Resolved here rather than left to continuing_and_leaving, which
     # works it out internally and keeps it. The date decides the whole
     # split, so a caller must be able to see which one was used.
-    if as_at is None:
-        _, as_at = current_term(current_term_members(members))
+    supplied = as_at is not None
+    warning = None
+    if not supplied:
+        as_at, warning = roster_term_end(members)
     continuing, leaving = continuing_and_leaving(members, as_at)
     windows = term_member_windows(current_term_members(members))
 
@@ -354,6 +406,10 @@ def claims_by_member_status(
 
     return {
         "as_at": as_at,
+        # Set explicitly by the underwriter, or read off the roster. They
+        # need to know which, because only one of them is their decision.
+        "cut_date_source": "supplied" if supplied else "roster",
+        "warning": warning,
         "continuing": continuing_totals,
         "leaving": leaving_totals,
         "total": {

@@ -5096,6 +5096,16 @@ async function loadRenewalBenchCensusMovement() {
    Membership export is what makes the expiring roster recoverable), so a
    failure here is a normal state for a hand-built case, not an error -
    the per-relation counts above still stand on their own. */
+// The cut date the underwriter is pricing to. Blank means "read it off
+// the roster" - see roster_term_end, which exists because the claims and
+// membership exports disagree about the same day by one.
+let _rbCutDate = '';
+
+function _rbSetCutDate(value) {
+  _rbCutDate = value || '';
+  loadRenewalBenchClaimsSplit();
+}
+
 // Last year's claims split between the members who are renewing and
 // the members who are not. A renewal quoted off the account's headline
 // loss ratio prices the incoming year against a population that
@@ -5108,7 +5118,8 @@ async function loadRenewalBenchClaimsSplit() {
   if (!client) { area.innerHTML = ''; return; }
   let r;
   try {
-    r = await api(`/portfolio-analysis/renewal-claims-split/${encodeURIComponent(client)}`);
+    const q = _rbCutDate ? `?as_at=${encodeURIComponent(_rbCutDate)}` : '';
+    r = await api(`/portfolio-analysis/renewal-claims-split/${encodeURIComponent(client)}${q}`);
   } catch (err) { area.innerHTML = ''; return; }
 
   const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
@@ -5123,21 +5134,32 @@ async function loadRenewalBenchClaimsSplit() {
     ? r.total.loss_ratio - r.loss_ratio_excluding_leavers : null;
   const verdict = moved == null ? ''
     : Math.abs(moved) < 0.02
-      ? `<div class="hint" style="margin-top:10px;">Taking the leavers out barely moves the ratio
+      ? `<div class="hint" style="margin-top:10px;">Taking the deleted members out barely moves the ratio
          (${pct(r.total.loss_ratio)} &rarr; ${pct(r.loss_ratio_excluding_leavers)}). The base rate is
          what it is &mdash; renewing on headcount carries it into the new year.</div>`
       : `<div class="hint" style="margin-top:10px;">Taking the leavers out moves the ratio
          ${pct(r.total.loss_ratio)} &rarr; <strong>${pct(r.loss_ratio_excluding_leavers)}</strong>.
-         Last year's headline overstates what the renewing ${c.member_count} actually cost.</div>`;
+         Last year's headline overstates what the active ${c.member_count} actually cost.</div>`;
 
   area.innerHTML = `
     <div class="card">
-      <h3>Renewing vs leaving &mdash; last year's claims</h3>
-      <div class="hint">Measured at ${escapeHtml(String(r.as_at || ''))}, the expiring term's end.
-        A leaver's premium is earned for part of a year while their claims are not, so their own
-        ratio runs high even when their claims are ordinary.</div>
+      <h3>Active vs deleted members &mdash; last year's claims</h3>
+      <div class="hint">A member whose cover runs to the cut date is active; one whose cover ended
+        earlier is deleted. A deleted member's premium is earned for part of a year while their
+        claims are not, so their own ratio runs high even when their claims are ordinary.</div>
+      <div style="margin:10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+        <label style="font-size:12px; color:var(--muted);">Cut date</label>
+        <input type="date" id="rb-cut-date" value="${escapeHtml(String(r.as_at || ''))}"
+               onchange="_rbSetCutDate(this.value)">
+        <span class="hint" style="margin:0;">${r.cut_date_source === 'supplied'
+          ? 'set for this renewal'
+          : "taken from the roster - the date most members' cover runs to"}</span>
+        ${_rbCutDate ? `<button onclick="_rbSetCutDate('')">Reset</button>` : ''}
+      </div>
+      ${r.warning ? `<div class="hint" style="background:#fbf3e6;border-left:3px solid #c98a2b;
+         padding:9px 12px;margin-bottom:10px;color:#8a5f1e;">${escapeHtml(r.warning)}</div>` : ''}
       <table style="margin-top:12px;">
-        <tr><th></th><th class="num">Renewing</th><th class="num">Leaving</th><th class="num">Total</th></tr>
+        <tr><th></th><th class="num">Active</th><th class="num">Deleted</th><th class="num">Total</th></tr>
         <tr><td>Members</td><td class="num">${c.member_count}</td><td class="num">${l.member_count}</td>
             <td class="num">${r.total.member_count}</td></tr>
         <tr><td>Paid</td><td class="num">${aed(c.paid)}</td><td class="num">${aed(l.paid)}</td>
@@ -5157,8 +5179,8 @@ async function loadRenewalBenchClaimsSplit() {
             <td class="num">${pct(l.loss_ratio)}</td>
             <td class="num">${pct(r.total.loss_ratio)}</td></tr>
       </table>
-      <div class="hint" style="margin-top:8px;">Leavers are ${pct(r.leaver_share_of_members)} of the
-        members and ${pct(r.leaver_share_of_claims)} of the claims.</div>
+      <div class="hint" style="margin-top:8px;">Deleted members are ${pct(r.leaver_share_of_members)}
+        of the roster and ${pct(r.leaver_share_of_claims)} of the claims.</div>
       ${verdict}
     </div>`;
 }
