@@ -1277,19 +1277,6 @@ def test_renewal_intake_is_idempotent_and_does_not_open_a_second_case(client, bo
     assert second["census_seeded"] == 0
     assert second["claims_seeded"] == 0
 
-
-def test_renewal_intake_reseed_snapshots_the_expiring_census_first(client, book_for_intake):
-    opened = client.post("/portfolio-analysis/renewal-intake", json={"master_client": "Intake Holdings"}).json()
-    case_id = opened["case"]["id"]
-    again = client.post(
-        "/portfolio-analysis/renewal-intake",
-        json={"master_client": "Intake Holdings", "reseed_census": True},
-    ).json()
-    assert again["census_seeded"] == 2
-    movement = client.get(f"/cases/{case_id}/census-movement").json()
-    assert movement["rows"], "reseeding must leave an expiring snapshot to compare against"
-
-
 def test_renewal_due_list_says_which_accounts_already_have_a_case_open(client, book_for_intake):
     due = client.get("/portfolio-analysis/renewal-due-list", params={"within_days": 60, "as_of": "2026-04-01"}).json()
     assert [d["case_id"] for d in due] == [None]

@@ -253,151 +253,6 @@ def upload_census(
     return records
 
 
-@router.get("/{case_id}/census-movement")
-def get_census_movement(case_id: int, db: Session = Depends(get_db)):
-    """Compares the expiring census (captured as a CensusSnapshot right
-    before the most recent replace-mode census upload) against the
-    renewal census now on the case, so Renewal Bench can surface
-    population movement per relation (Employee/Spouse/Child/...) plus an
-    approximate premium impact. Requires at least two census uploads on
-    this case - the first upload has nothing to snapshot yet.
-    """
-    case = _get_case_or_404(db, case_id)
-    snapshots = db.query(models.CensusSnapshot).filter_by(case_id=case_id).all()
-    if not snapshots:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "No prior census snapshot to compare against - upload a "
-                "renewal census over an existing one to see movement."
-            ),
-        )
-    expiring_by_relation = {s.relation: s.member_count for s in snapshots}
-    total_expiring = sum(expiring_by_relation.values())
-
-    current_counts: dict = defaultdict(int)
-    for r in case.census_records:
-        current_counts[r.relation or "Unspecified"] += 1
-    total_renewal = sum(current_counts.values())
-
-    avg_premium_per_member = (
-        case.current_annual_premium / total_expiring
-        if case.current_annual_premium and total_expiring
-        else None
-    )
-
-    relations = sorted(set(expiring_by_relation) | set(current_counts))
-    rows = []
-    total_impact = 0.0
-    for rel in relations:
-        expiring = expiring_by_relation.get(rel, 0)
-        renewal = current_counts.get(rel, 0)
-        change = renewal - expiring
-        impact = round(change * avg_premium_per_member, 2) if avg_premium_per_member is not None else None
-        if impact is not None:
-            total_impact += impact
-        rows.append(
-            {
-                "relation": rel,
-                "expiring_count": expiring,
-                "renewal_count": renewal,
-                "change": change,
-                "premium_impact": impact,
-            }
-        )
-
-    return {
-        "rows": rows,
-        "total_expiring": total_expiring,
-        "total_renewal": total_renewal,
-        "total_change": total_renewal - total_expiring,
-        "total_premium_impact": round(total_impact, 2) if avg_premium_per_member is not None else None,
-        "premium_impact_basis": (
-            "Approximate: case average premium per member "
-            "(current_annual_premium / expiring member count), not "
-            "category-specific pricing."
-        ),
-    }
-
-
-@router.get("/{case_id}/member-movement")
-def get_member_movement(case_id: int, db: Session = Depends(get_db)):
-    """Which members actually left, which joined, and what each of them
-    claimed - the member-level counterpart to get_census-movement's
-    per-relation counts.
-
-    Only available for a case opened from HealthCross's own book (see
-    routes_portfolio_analysis' open_renewal_intake), because that is what
-    makes the expiring population recoverable: the Membership export
-    still holds the expiring term's roster, so it can be rebuilt on
-    demand rather than needing to have been preserved when the renewal
-    census replaced it. A manually-created case has no such source, and
-    gets the count-level comparison only.
-    """
-    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
-    from app.scoring.rules.member_movement import movement_with_claims
-    from app.scoring.rules.renewal_intake import (
-        account_members,
-        census_rows_from_members,
-        current_term_members,
-    )
-
-    case = _get_case_or_404(db, case_id)
-    if not case.portfolio_master_client:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "Member-level movement needs a case opened from the book - "
-                "open this renewal from the Renewal Due List so its expiring "
-                "population can be recovered from the Membership export."
-            ),
-        )
-
-    members = _member_dicts(db)
-    if not members:
-        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-
-    account = account_members(members, case.portfolio_master_client, _subgroup_master_by_name(db))
-    if not account:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No members found for '{case.portfolio_master_client}' in the current Membership export",
-        )
-    expiring = census_rows_from_members(current_term_members(account))
-
-    renewal = [
-        {
-            "employee_ref": r.employee_ref,
-            "category": r.category,
-            "date_of_birth": r.date_of_birth,
-            "age": r.age,
-            "gender": r.gender,
-            "relation": r.relation,
-            "nationality": r.nationality,
-            "existing_annual_rate": r.existing_annual_rate,
-        }
-        for r in case.census_records
-    ]
-    if not renewal:
-        raise HTTPException(
-            status_code=400,
-            detail="No renewal census on this case yet - upload the renewal member list to compare against the expiring population.",
-        )
-
-    claims = [
-        {
-            "patient_id": c.patient_id,
-            "claim_status": c.claim_status,
-            "final_amount": c.final_amount,
-        }
-        for c in case.claims_ledger_entries
-    ]
-
-    movement = movement_with_claims(expiring, renewal, claims)
-    movement["master_client"] = case.portfolio_master_client
-    return movement
-
-
 @router.get("/{case_id}/renewal-premium")
 def get_renewal_premium(
     case_id: int,
@@ -411,11 +266,17 @@ def get_renewal_premium(
     """The renewal price for the members who are actually renewing, built
     from this account's own experience.
 
-    Leavers' claims are excluded (see member_movement): they do not carry
-    forward, and charging the continuing members for them prices the
-    account on risk it no longer holds. IBNR uses the same 30-day tail
-    rule the Loss Ratio board uses, so a renewal quote and the loss ratio
-    for the same account can't disagree about what the year cost.
+    Leavers' claims are excluded: they do not carry forward, and
+    charging the continuing members for them prices the account on risk
+    it no longer holds. Who left is read off each member's own cover
+    dates rather than by matching the expiring roster to the renewal
+    census - that matching falls back to guessing on relation, gender
+    and age, and on Safran it did all of the work, reporting 93 leavers
+    taking half the year's claims when the census simply carried no
+    dates of birth. A renewal price is the last place to accept a
+    guessed split. IBNR uses the same 30-day tail rule the Loss Ratio
+    board uses, so a renewal quote and the loss ratio for the same
+    account can't disagree about what the year cost.
 
     `non_recurring_claims` and `forward_provision` are the underwriter's
     two judgement inputs and are deliberately separate rather than netted:
@@ -428,8 +289,37 @@ def get_renewal_premium(
     from app.scoring.rules.expected_cost_pricing import renewal_premium_from_experience
     from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
 
+    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
+    from app.scoring.rules.portfolio_analysis import group_claims_by_beneficiary
+    from app.scoring.rules.renewal_intake import account_members, claims_by_member_status
+
     case = _get_case_or_404(db, case_id)
-    movement = get_member_movement(case_id, db)
+    if not case.portfolio_master_client:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "This renewal price needs a case opened from the book - the split between "
+                "continuing and leaving members is read off the Membership export's own cover "
+                "dates. Open this renewal from the Renewal Due List."
+            ),
+        )
+    book = _member_dicts(db)
+    account = account_members(book, case.portfolio_master_client, _subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No members on the book for '{case.portfolio_master_client}'",
+        )
+    claim_rows = [
+        {"patient_id": pid, "date_of_treatment": dot, "final_amount": amt, "claim_status": st}
+        for pid, dot, amt, st in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+        ).all()
+    ]
+    split = claims_by_member_status(account, group_claims_by_beneficiary(claim_rows))
 
     reference = as_of or date.today()
     start = case.policy_start_date
@@ -443,14 +333,16 @@ def get_renewal_premium(
         days = min(days, FULL_POLICY_TERM_DAYS) if days > 0 else None
 
     priced = renewal_premium_from_experience(
-        continuing_incurred=movement["continuing_claims"]["incurred"],
+        continuing_incurred=split["continuing"]["incurred"],
         elapsed_days=days,
         ibnr_tail_days=ACCOUNT_IBNR_TAIL_DAYS,
         loading_pct=loading_pct if loading_pct is not None else _case_loading_pct(case),
         trend_pct=trend_pct,
         non_recurring_claims=non_recurring_claims,
         forward_provision=forward_provision,
-        member_count=movement["continuing_count"] + movement["joiner_count"],
+        # The population being priced is the one still on risk at the
+        # term's end - joiners who are staying are already in it.
+        member_count=split["continuing"]["member_count"],
     )
 
     expiring_premium = case.current_annual_premium
@@ -461,13 +353,13 @@ def get_renewal_premium(
     )
     priced["elapsed_days"] = days
     priced["movement"] = {
-        "expiring_count": movement["expiring_count"],
-        "continuing_count": movement["continuing_count"],
-        "leaver_count": movement["leaver_count"],
-        "joiner_count": movement["joiner_count"],
-        "total_incurred": movement["total_incurred"],
-        "leaver_incurred": movement["leaver_claims"]["incurred"],
-        "leaver_claims_share": movement["leaver_claims_share"],
+        "as_at": split["as_at"],
+        "continuing_count": split["continuing"]["member_count"],
+        "leaver_count": split["leaving"]["member_count"],
+        "total_incurred": split["total"]["incurred"],
+        "continuing_incurred": split["continuing"]["incurred"],
+        "leaver_incurred": split["leaving"]["incurred"],
+        "leaver_claims_share": split["leaver_share_of_claims"],
     }
     return priced
 

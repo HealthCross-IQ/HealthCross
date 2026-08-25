@@ -2928,9 +2928,7 @@ function renderCaseWorkspace() {
           <div id="renewal-bench-trend-area"></div>
         </div>
         <div id="renewal-bench-population-movement-area"></div>
-        <div id="renewal-bench-member-movement-area"></div>
-        <div id="renewal-bench-census-area"></div>
-        <div id="renewal-bench-claims-split-area"></div>
+                        <div id="renewal-bench-claims-split-area"></div>
         <div id="renewal-bench-repricing-area"></div>
         <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
@@ -2996,7 +2994,12 @@ function renderCaseWorkspace() {
   loadRenewalBenchScorecard();
   loadRenewalBenchNbComparison();
   loadRenewalBenchLargeClaims();
-  loadRenewalBenchCensusMovement();
+  // These used to be called from the tail of the census-movement loader,
+  // which is gone. Called here so they load with the rest of the bench
+  // rather than depending on a panel that no longer exists.
+  loadRenewalBenchPopulationMovement();
+  loadRenewalBenchClaimsSplit();
+  loadRenewalBenchRepricing();
 }
 
 function _completenessPillHtml(label, done, required, extra, missingText) {
@@ -3418,7 +3421,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -3429,7 +3432,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -3627,7 +3630,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -3638,7 +3641,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchCensusMovement(); await loadRenewalBenchSummary(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   // The executive summary sits ABOVE the upload panel and reads the case
@@ -4814,7 +4817,17 @@ function _rbExistingPremiumHtml(existing) {
       <div class="rb-card-title">Existing premium (computed)</div>
       <div class="rb-card-sub">Bottom-up from the active list's own existing rate x current headcount, by category - not a manually-typed figure.</div>
       <div class="rb-kpi-strip" style="grid-template-columns:1fr 1fr; margin-bottom:14px;">
-        ${_rbKpi('Total existing premium', `AED ${Math.round(existing.total_existing_premium).toLocaleString()}`, `${existing.rated_members} of ${existing.total_members} members rated (${existing.coverage_pct != null ? existing.coverage_pct : 0}%)`)}
+        ${_rbKpi('Total existing premium',
+          // Nought rated members means the total is UNKNOWN, not nil, and
+          // "AED 0" beside a case record showing millions reads as the
+          // second. A figure nobody can stand behind should not be
+          // printed as though somebody could.
+          existing.rated_members
+            ? `AED ${Math.round(existing.total_existing_premium).toLocaleString()}`
+            : 'Not known',
+          existing.rated_members
+            ? `${existing.rated_members} of ${existing.total_members} members rated (${existing.coverage_pct != null ? existing.coverage_pct : 0}%)`
+            : `none of ${existing.total_members} members carries a rate`)}
         ${_rbKpi('On case record', existing.current_annual_premium_on_case != null ? `AED ${Math.round(existing.current_annual_premium_on_case).toLocaleString()}` : 'Not set', 'current_annual_premium')}
       </div>
       ${existing.rated_members === 0 && existing.total_members ? `
@@ -5091,72 +5104,6 @@ async function loadRenewalBenchLargeClaims() {
     area.innerHTML = '';
   }
 }
-
-async function loadRenewalBenchCensusMovement() {
-  const area = document.getElementById('renewal-bench-census-area');
-  if (!area) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/census-movement`);
-    const rows = r.rows.map(row => `
-      <tr>
-        <td>${escapeHtml(row.relation)}</td>
-        <td class="num">${row.expiring_count}</td>
-        <td class="num">${row.renewal_count}</td>
-        <td class="num ${row.change > 0 ? 'rb-row-up' : row.change < 0 ? 'rb-row-down' : ''}">${row.change > 0 ? '+' : ''}${row.change}</td>
-        <td class="num">${row.premium_impact != null ? `AED ${row.premium_impact.toLocaleString()}` : '-'}</td>
-      </tr>
-    `).join('');
-    // Shown only when two census uploads genuinely differ. This panel
-    // compares UPLOADS, not the population: on a case whose census was
-    // never re-uploaded it reports zero movement over a year in which
-    // people plainly joined and left, and a confident zero is worse than
-    // no panel. Population movement, read off the roster's own dates,
-    // is the one that answers the question - see
-    // loadRenewalBenchPopulationMovement.
-    if (!r.total_change && !r.rows.some(row => row.change)) {
-      area.innerHTML = '';
-    } else {
-      area.innerHTML = `
-      <div class="rb-card">
-        <div class="rb-card-title">Census upload comparison</div>
-        <div class="rb-card-sub">What changed between the last two census UPLOADS on this case, by
-          relation - ${r.premium_impact_basis}. This is a document comparison, not the population:
-          for who actually joined and left over the term, see Population movement below.</div>
-        <table class="rb-table"><tr><th>Relation</th><th class="num">Previous upload</th><th class="num">Current upload</th><th class="num">Change</th><th class="num">Premium impact</th></tr>${rows}</table>
-        <div class="rb-kpi-strip" style="margin-top:16px;">
-          ${_rbKpi('Total change', `${r.total_change > 0 ? '+' : ''}${r.total_change}`, `${r.total_expiring} &rarr; ${r.total_renewal}`)}
-          ${r.total_premium_impact != null ? _rbKpi('Total premium impact', `${r.total_premium_impact > 0 ? '+' : ''}AED ${r.total_premium_impact.toLocaleString()}`, '') : ''}
-        </div>
-      </div>
-    `;
-    }
-  } catch (err) {
-    area.innerHTML = '';
-  }
-  await loadRenewalBenchMemberMovement();
-  await loadRenewalBenchPopulationMovement();
-  await loadRenewalBenchClaimsSplit();
-  await loadRenewalBenchRepricing();
-}
-
-/* Member-level movement: not how many left, but WHICH members left and
-   what they claimed. Only available on a case opened from the book (the
-   Membership export is what makes the expiring roster recoverable), so a
-   failure here is a normal state for a hand-built case, not an error -
-   the per-relation counts above still stand on their own. */
-// Which members are being held out of the renewal price. Holding one
-// out is a QUESTION - what would this have cost without them - and only
-// becomes a price if they are genuinely not renewing or their condition
-// is excluded on the renewal terms. The panel says so on every result.
-let _rbExcluded = [];
-
-function _rbToggleExclude(id) {
-  _rbExcluded = _rbExcluded.includes(id)
-    ? _rbExcluded.filter(x => x !== id)
-    : _rbExcluded.concat([id]);
-  loadRenewalBenchRepricing();
-}
-
 async function loadRenewalBenchRepricing() {
   const area = document.getElementById('renewal-bench-repricing-area');
   if (!area || !currentCase || !currentCase.company_name) return;
@@ -5373,101 +5320,6 @@ async function loadRenewalBenchClaimsSplit() {
       ${verdict}
     </div>`;
 }
-
-async function loadRenewalBenchMemberMovement() {
-  const area = document.getElementById('renewal-bench-member-movement-area');
-  if (!area) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/member-movement`);
-    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-    const who = m => `${escapeHtml(m.relation || '-')}, ${escapeHtml(m.gender || '-')}, age ${m.age != null ? m.age : '-'}${m.nationality ? ', ' + escapeHtml(m.nationality) : ''}`;
-
-    const leaverRows = r.leavers.map(m => `
-      <tr>
-        <td>${escapeHtml(m.employee_ref || '-')}</td>
-        <td>${who(m)}</td>
-        <td class="num">${m.claims.claim_count}</td>
-        <td class="num">${money(m.claims.incurred)}</td>
-      </tr>`).join('');
-
-    const joinerRows = r.joiners.map(m => `
-      <tr><td>${escapeHtml(m.employee_ref || 'new')}</td><td>${who(m)}</td></tr>`).join('');
-
-    // Continuing members are shown biggest claimer first - at renewal the
-    // question is which of the people who STAYED drive the price.
-    const continuingRows = r.continuing
-      .slice().sort((a, b) => b.claims.incurred - a.claims.incurred)
-      .map(m => `
-      <tr>
-        <td>${escapeHtml(m.employee_ref || '-')}</td>
-        <td>${who(m)}</td>
-        <td>${m.match === 'dob' ? '<span class="tier-pill dir-improved">exact</span>' : '<span class="tier-pill dir-review">inferred</span>'}</td>
-        <td class="num">${m.claims.claim_count}</td>
-        <td class="num">${money(m.claims.incurred)}</td>
-      </tr>`).join('');
-
-    // A pairing done entirely on demographics is guesswork, and the
-    // claims split it produces is an artefact rather than evidence -
-    // Safran reported 93 leavers taking half the year's claims when the
-    // renewal census simply carried no dates of birth to match on.
-    // Saying so is the whole panel in that case; the numbers below it
-    // would only invite being used.
-    if (!r.reliable) {
-      area.innerHTML = `
-        <div class="rb-card">
-          <div class="rb-card-title">Who left, who joined</div>
-          <div class="rb-insight sev-critical" style="margin-top:12px;">
-            <div class="rb-insight-icon">⚠</div>
-            <div>
-              <span class="rb-insight-tag">Cannot be relied on</span>
-              <div class="rb-insight-text">${escapeHtml(r.caveat)}</div>
-            </div>
-          </div>
-        </div>`;
-      return;
-    }
-
-    area.innerHTML = `
-      <div class="rb-card">
-        <div class="rb-card-title">Who left, who joined - and what they claimed</div>
-        <div class="rb-card-sub">The expiring population from the book matched member by member against the renewal census. Leavers' claims do not carry forward: the experience the renewing members actually bring is <strong>${money(r.continuing_claims.incurred)}</strong>, not the ${money(r.total_incurred)} the expiring year cost in total.</div>
-        <div class="rb-kpi-strip" style="margin-top:14px;">
-          ${_rbKpi('Continuing', r.continuing_count, `of ${r.expiring_count} expiring`)}
-          ${_rbKpi('Left', r.leaver_count, money(r.leaver_claims.incurred) + ' in claims')}
-          ${_rbKpi('Joined', r.joiner_count, 'no claims history')}
-          ${_rbKpi('Leavers’ share of claims', (r.leaver_claims_share * 100).toFixed(1) + '%', r.leaver_claims_share > 0.3 ? 'expiring LR overstates the renewing risk' : 'experience largely carries forward')}
-        </div>
-        ${r.demographic_match_count ? `<div class="hint" style="margin-top:10px;">${r.demographic_match_count} of ${r.continuing_count} continuing members were matched on demographics rather than date of birth - those pairings are inferred, not certain.</div>` : ''}
-        ${r.unattributed_incurred ? `<div class="hint" style="margin-top:10px;">${money(r.unattributed_incurred)} of claims belong to member IDs not on the expiring census - the split below excludes them.</div>` : ''}
-
-        ${leaverRows ? `
-          <div class="rb-card-title" style="font-size:13px; margin-top:18px;">Left the scheme (${r.leaver_count})</div>
-          <table class="rb-table"><tr><th>Member</th><th>Who</th><th class="num">Claims</th><th class="num">Incurred</th></tr>${leaverRows}</table>` : ''}
-
-        ${joinerRows ? `
-          <div class="rb-card-title" style="font-size:13px; margin-top:18px;">New on the renewal census (${r.joiner_count})</div>
-          <div class="rb-card-sub">Added exposure with no claims history of their own - typically newborns and new hires.</div>
-          <table class="rb-table"><tr><th>Member</th><th>Who</th></tr>${joinerRows}</table>` : ''}
-
-        <div class="rb-card-title" style="font-size:13px; margin-top:18px;">Continuing members (${r.continuing_count})</div>
-        <div class="rb-card-sub">Highest claimers first - this is the experience being renewed.</div>
-        <table class="rb-table"><tr><th>Member</th><th>Who</th><th>Match</th><th class="num">Claims</th><th class="num">Incurred</th></tr>${continuingRows}</table>
-      </div>
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
-  await loadRenewalPremiumBuildUp();
-}
-
-/* The renewal price, built from this account's own experience rather
-   than from a scaling of last year's premium. The two judgement inputs
-   (what won't repeat, what to provide for) are editable here because
-   they ARE judgements - a completed maternity is over, but the group
-   still contains members who may deliver, and only an underwriter can
-   say which. */
-let renewalPricingInputs = { trend: 10, loading: null, nonRecurring: 0, provision: 0 };
-
 async function loadRenewalPremiumBuildUp() {
   const area = document.getElementById('renewal-premium-buildup-area');
   if (!area) return;

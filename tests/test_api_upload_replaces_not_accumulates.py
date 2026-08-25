@@ -116,41 +116,6 @@ def test_census_movement_404s_before_any_prior_snapshot_exists(client):
     resp = client.get(f"/cases/{case_id}/census-movement")
     assert resp.status_code == 404
 
-
-def test_census_movement_reports_population_change_and_premium_impact(client):
-    resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
-    case_id = resp.json()["id"]
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 100000})
-
-    expiring = ["Employee"] * 8 + ["Spouse"] * 2  # 10 total
-    resp = client.post(
-        f"/cases/{case_id}/census",
-        files={"file": ("expiring.xlsx", _xlsx_bytes(_census_df_relations(expiring)), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert resp.status_code == 200
-
-    renewal = ["Employee"] * 9 + ["Spouse"] * 2 + ["Child"] * 1  # 12 total
-    resp = client.post(
-        f"/cases/{case_id}/census",
-        files={"file": ("renewal.xlsx", _xlsx_bytes(_census_df_relations(renewal)), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
-    )
-    assert resp.status_code == 200
-
-    resp = client.get(f"/cases/{case_id}/census-movement")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["total_expiring"] == 10
-    assert data["total_renewal"] == 12
-    assert data["total_change"] == 2
-
-    rows = {r["relation"]: r for r in data["rows"]}
-    assert rows["employee"] == {"relation": "employee", "expiring_count": 8, "renewal_count": 9, "change": 1, "premium_impact": 10000.0}
-    assert rows["spouse"]["change"] == 0
-    assert rows["spouse"]["premium_impact"] == 0.0
-    assert rows["child"] == {"relation": "child", "expiring_count": 0, "renewal_count": 1, "change": 1, "premium_impact": 10000.0}
-    assert data["total_premium_impact"] == pytest.approx(20000.0)
-
-
 def test_reuploading_benefits_replaces_rather_than_accumulates(client):
     resp = client.post("/cases", json={"broker_name": "Broker A", "company_name": "Widgets LLC", "industry": "trading"})
     case_id = resp.json()["id"]
