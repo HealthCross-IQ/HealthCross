@@ -2930,6 +2930,7 @@ function renderCaseWorkspace() {
         <div id="renewal-bench-census-area"></div>
         <div id="renewal-bench-member-movement-area"></div>
         <div id="renewal-bench-claims-split-area"></div>
+        <div id="renewal-bench-repricing-area"></div>
         <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
         <div id="renewal-bench-scorecard-area"></div>
@@ -5089,6 +5090,7 @@ async function loadRenewalBenchCensusMovement() {
   }
   await loadRenewalBenchMemberMovement();
   await loadRenewalBenchClaimsSplit();
+  await loadRenewalBenchRepricing();
 }
 
 /* Member-level movement: not how many left, but WHICH members left and
@@ -5096,6 +5098,91 @@ async function loadRenewalBenchCensusMovement() {
    Membership export is what makes the expiring roster recoverable), so a
    failure here is a normal state for a hand-built case, not an error -
    the per-relation counts above still stand on their own. */
+// Which members are being held out of the renewal price. Holding one
+// out is a QUESTION - what would this have cost without them - and only
+// becomes a price if they are genuinely not renewing or their condition
+// is excluded on the renewal terms. The panel says so on every result.
+let _rbExcluded = [];
+
+function _rbToggleExclude(id) {
+  _rbExcluded = _rbExcluded.includes(id)
+    ? _rbExcluded.filter(x => x !== id)
+    : _rbExcluded.concat([id]);
+  loadRenewalBenchRepricing();
+}
+
+async function loadRenewalBenchRepricing() {
+  const area = document.getElementById('renewal-bench-repricing-area');
+  if (!area || !currentCase || !currentCase.company_name) return;
+  const p = new URLSearchParams();
+  if (_rbCutDate) p.set('as_at', _rbCutDate);
+  _rbExcluded.forEach(id => p.append('exclude', id));
+  let r;
+  try {
+    r = await api(`/portfolio-analysis/renewal-repricing/${encodeURIComponent(currentCase.company_name)}?${p}`);
+  } catch (err) { area.innerHTML = ''; return; }
+
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const sgn = v => v == null ? '&mdash;' : (v >= 0 ? '+' : '') + (v * 100).toFixed(0) + '%';
+  const a = r.as_priced, e = r.excluding;
+  if (!a || !a.member_count) { area.innerHTML = ''; return; }
+
+  const col = (d, label) => !d ? '' : `
+    <td class="num">${aed(d.incurred_to_date)}</td>
+    <td class="num">${aed(d.annualised)}</td>
+    <td class="num">${aed(d.trended_claims)}</td>
+    <td class="num"><strong>${aed(d.required_premium)}</strong></td>
+    <td class="num">${sgn(d.increase_vs_current_pct)}</td>`;
+
+  // A member claiming in most of the months they were exposed for is
+  // being treated, not unlucky - and treatment renews with them.
+  const rows = r.top_claimants.map(m => {
+    const on = _rbExcluded.includes(m.beneficiary_id);
+    const run = m.months_with_claims >= (a.full_months || 12) * 0.7
+      ? '<span class="pill warn">still running</span>' : '';
+    return `<tr${on ? ' style="opacity:.5;"' : ''}>
+      <td><label style="cursor:pointer;"><input type="checkbox" ${on ? 'checked' : ''}
+          onchange="_rbToggleExclude('${escapeHtml(m.beneficiary_id)}')"> ${escapeHtml(m.beneficiary_id)}</label></td>
+      <td>${escapeHtml(m.relation || '')}</td>
+      <td class="num">${m.age == null ? '' : m.age}</td>
+      <td class="num">${aed(m.incurred)}</td>
+      <td class="num">${pct(m.share_of_claims)}</td>
+      <td class="num">${m.months_with_claims} / ${a.full_months || '?'}</td>
+      <td>${run}</td>
+      <td>${escapeHtml(String(m.top_diagnosis || ''))}</td></tr>`;
+  }).join('');
+
+  area.innerHTML = `
+    <div class="card">
+      <h3>Renewal price &mdash; and what one member is worth to it</h3>
+      <div class="hint">Claims to ${escapeHtml(String(r.data_to || ''))} annualised off
+        ${a.full_months} complete months${(a.months_dropped || []).length
+          ? ` (${a.months_dropped.join(', ')} dropped as part months)` : ''},
+        carried ${pct(r.trend_pct)} for trend, priced to a ${pct(r.target_loss_ratio)} loss ratio
+        at a ${pct(r.loading_pct)} loading.</div>
+      <div class="scroll"><table style="margin-top:12px;">
+        <tr><th></th><th class="num">Members</th><th class="num">Incurred</th>
+            <th class="num">Annualised</th><th class="num">Trended</th>
+            <th class="num">Required premium</th><th class="num">vs current</th></tr>
+        <tr><th>Everyone in</th><td class="num">${a.member_count}</td>${col(a)}</tr>
+        ${e ? `<tr class="total"><th>Holding ${r.excluded_members.length} out</th>
+            <td class="num">${e.member_count}</td>${col(e)}</tr>` : ''}
+      </table></div>
+      <div class="hint" style="margin-top:8px;">Current premium ${aed(r.current_premium)}.
+        ${r.worth_of_exclusion != null
+          ? `Holding those members out is worth <strong>${aed(r.worth_of_exclusion)}</strong> of premium.` : ''}</div>
+      ${r.caveat ? `<div class="hint" style="background:#fbf3e6;border-left:3px solid #c98a2b;
+         padding:9px 12px;margin-top:10px;color:#8a5f1e;">${escapeHtml(r.caveat)}</div>` : ''}
+      <h4 style="margin:18px 0 6px;">Largest claimants &mdash; tick to hold out of the price</h4>
+      <div class="scroll"><table>
+        <tr><th>Member</th><th>Relation</th><th class="num">Age</th><th class="num">Incurred</th>
+            <th class="num">Share</th><th class="num">Months claiming</th><th></th><th>Main diagnosis</th></tr>
+        ${rows}
+      </table></div>
+    </div>`;
+}
+
 // The cut date the underwriter is pricing to. Blank means "read it off
 // the roster" - see roster_term_end, which exists because the claims and
 // membership exports disagree about the same day by one.

@@ -905,6 +905,96 @@ def renewal_claims_split(
     return {"master_client": master_client, **split}
 
 
+@router.get("/renewal-repricing/{master_client}")
+def renewal_repricing(
+    master_client: str,
+    exclude: List[str] = Query([], description="Beneficiary IDs to hold out of the price"),
+    as_at: Optional[date] = Query(None, description="Cut date deciding who is active"),
+    trend_pct: float = Query(None, description="Claims inflation carried onto the expiring year"),
+    target_loss_ratio: float = Query(None, description="The loss ratio the price is built to land on"),
+    loading_pct: float = Query(None, description="Expense loading as a fraction of premium"),
+    top: int = Query(15, description="How many of the largest claimants to list"),
+    db: Session = Depends(get_db),
+):
+    """The renewal price, with any set of members held out.
+
+    An account's renewal is usually decided by a handful of people, and a
+    total hides them. This ranks the largest claimants with their monthly
+    run - so a finished event and a condition still being treated can be
+    told apart - and reprices the account without whichever of them the
+    underwriter names.
+
+    The price with everybody in is always returned beside it. A figure
+    produced by holding someone out is only a price if that member is not
+    renewing or their condition is excluded on the renewal terms, and
+    showing it on its own invites it to be quoted as though it were.
+    """
+    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+    from app.scoring.rules.renewal_intake import (
+        continuing_and_leaving,
+        current_term_members,
+        member_annual_rate,
+        roster_term_end,
+        term_member_windows,
+    )
+    from app.scoring.rules.renewal_repricing import (
+        DEFAULT_TREND_PCT,
+        member_claim_ranking,
+        reprice,
+    )
+
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+
+    cut_date, warning = (as_at, None) if as_at else roster_term_end(account)
+    active, _ = continuing_and_leaving(account, cut_date)
+    windows = term_member_windows(current_term_members(account))
+
+    claims = [
+        {
+            "patient_id": patient_id,
+            "date_of_treatment": date_of_treatment,
+            "final_amount": final_amount,
+            "claim_status": claim_status,
+        }
+        for patient_id, date_of_treatment, final_amount, claim_status in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+        ).all()
+    ]
+    by_beneficiary = group_claims_by_beneficiary(claims)
+
+    # The export's own last treatment date, so a month cut half way
+    # through is not averaged in as though it were whole.
+    treated = [c["date_of_treatment"] for c in claims if c.get("date_of_treatment")]
+    data_to = max(treated) if treated else None
+
+    current_premium = sum(member_annual_rate(m) or 0.0 for m in active) or None
+    priced = reprice(
+        active, by_beneficiary, windows,
+        current_premium=current_premium,
+        loading_pct=loading_pct if loading_pct is not None else DEFAULT_EXPENSE_RATIO_PCT,
+        target_loss_ratio=target_loss_ratio if target_loss_ratio is not None else HOUSE_TARGET_LOSS_RATIO,
+        exclude=exclude,
+        trend_pct=trend_pct if trend_pct is not None else DEFAULT_TREND_PCT,
+        data_to=data_to,
+    )
+    return {
+        "master_client": master_client,
+        "as_at": cut_date,
+        "warning": warning,
+        "data_to": data_to,
+        "top_claimants": member_claim_ranking(active, by_beneficiary, windows, top=top),
+        **priced,
+    }
+
+
 @router.post("/renewal-intake")
 def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Depends(get_db)):
     """Open the renewal case for an account already on HealthCross's own
