@@ -2927,9 +2927,9 @@ function renderCaseWorkspace() {
           <div id="renewal-bench-donut-area"></div>
           <div id="renewal-bench-trend-area"></div>
         </div>
-        <div id="renewal-bench-census-area"></div>
-        <div id="renewal-bench-member-movement-area"></div>
         <div id="renewal-bench-population-movement-area"></div>
+        <div id="renewal-bench-member-movement-area"></div>
+        <div id="renewal-bench-census-area"></div>
         <div id="renewal-bench-claims-split-area"></div>
         <div id="renewal-bench-repricing-area"></div>
         <div id="renewal-premium-buildup-area"></div>
@@ -5106,17 +5106,30 @@ async function loadRenewalBenchCensusMovement() {
         <td class="num">${row.premium_impact != null ? `AED ${row.premium_impact.toLocaleString()}` : '-'}</td>
       </tr>
     `).join('');
-    area.innerHTML = `
+    // Shown only when two census uploads genuinely differ. This panel
+    // compares UPLOADS, not the population: on a case whose census was
+    // never re-uploaded it reports zero movement over a year in which
+    // people plainly joined and left, and a confident zero is worse than
+    // no panel. Population movement, read off the roster's own dates,
+    // is the one that answers the question - see
+    // loadRenewalBenchPopulationMovement.
+    if (!r.total_change && !r.rows.some(row => row.change)) {
+      area.innerHTML = '';
+    } else {
+      area.innerHTML = `
       <div class="rb-card">
-        <div class="rb-card-title">Census movement</div>
-        <div class="rb-card-sub">Expiring census (captured just before the most recent census re-upload) vs. the current/renewal census, by relation - ${r.premium_impact_basis}</div>
-        <table class="rb-table"><tr><th>Relation</th><th class="num">Expiring</th><th class="num">Renewal</th><th class="num">Change</th><th class="num">Premium impact</th></tr>${rows}</table>
+        <div class="rb-card-title">Census upload comparison</div>
+        <div class="rb-card-sub">What changed between the last two census UPLOADS on this case, by
+          relation - ${r.premium_impact_basis}. This is a document comparison, not the population:
+          for who actually joined and left over the term, see Population movement below.</div>
+        <table class="rb-table"><tr><th>Relation</th><th class="num">Previous upload</th><th class="num">Current upload</th><th class="num">Change</th><th class="num">Premium impact</th></tr>${rows}</table>
         <div class="rb-kpi-strip" style="margin-top:16px;">
           ${_rbKpi('Total change', `${r.total_change > 0 ? '+' : ''}${r.total_change}`, `${r.total_expiring} &rarr; ${r.total_renewal}`)}
           ${r.total_premium_impact != null ? _rbKpi('Total premium impact', `${r.total_premium_impact > 0 ? '+' : ''}AED ${r.total_premium_impact.toLocaleString()}`, '') : ''}
         </div>
       </div>
     `;
+    }
   } catch (err) {
     area.innerHTML = '';
   }
