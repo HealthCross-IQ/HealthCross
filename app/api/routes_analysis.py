@@ -1618,6 +1618,69 @@ def update_member_rates(case_id: int, rates: List[schemas.MemberRateIn], db: Ses
     return _member_rates_response(case)
 
 
+@router.post("/{case_id}/member-rates/from-book")
+def fill_member_rates_from_book(case_id: int, db: Session = Depends(get_db)):
+    """Fills existing_annual_rate from HealthCross's own membership,
+    matching each census member by their beneficiary ID.
+
+    A renewal case opened from the Renewal Due List carries every
+    member's rate across with it. A case whose census was uploaded from a
+    broker file does not - broker censuses rarely carry per-member rates
+    - and the Existing Premium build-up then reads "0 of 178 members
+    rated" against a case record showing millions. The rates exist; they
+    are just on the book rather than on the case.
+
+    Non-destructive on purpose. It only fills a rate that is missing, so
+    a rate an underwriter has typed or imported is never overwritten by
+    the book, and running it twice changes nothing the second time. Re-
+    seeding the whole census would fill the rates too, and would throw
+    away every other edit made since - which is why this exists instead.
+    """
+    from app.api.routes_portfolio_analysis import _member_dicts
+    from app.scoring.rules.renewal_intake import member_annual_rate
+
+    case = _get_case_or_404(db, case_id)
+    if not case.census_records:
+        raise HTTPException(status_code=400, detail="This case has no census to fill rates on")
+
+    rate_by_beneficiary = {}
+    for member in _member_dicts(db):
+        beneficiary_id = member.get("beneficiary_id")
+        rate = member_annual_rate(member)
+        if beneficiary_id and rate:
+            # A member can appear on more than one policy year. The
+            # renewing term's rate is the one being renewed off, so the
+            # latest policy end wins.
+            previous = rate_by_beneficiary.get(beneficiary_id)
+            end = member.get("policy_end_date")
+            if previous is None or (end and (previous[1] is None or end >= previous[1])):
+                rate_by_beneficiary[beneficiary_id] = (rate, end)
+
+    filled, already_rated, unmatched = 0, 0, []
+    for record in case.census_records:
+        if record.existing_annual_rate:
+            already_rated += 1
+            continue
+        found = rate_by_beneficiary.get(record.employee_ref)
+        if found:
+            record.existing_annual_rate = found[0]
+            filled += 1
+        else:
+            unmatched.append({"census_record_id": record.id, "employee_ref": record.employee_ref})
+
+    db.commit()
+    _maybe_auto_populate_current_premium(case, db)
+    return _member_rates_response(case, extra={
+        "filled_from_book": filled,
+        "already_rated": already_rated,
+        # Named, not just counted - a member the book has never heard of
+        # is a census/roster mismatch worth looking at rather than a
+        # number to shrug past.
+        "unmatched_count": len(unmatched),
+        "unmatched": unmatched[:50],
+    })
+
+
 @router.post("/{case_id}/member-rates/import-rate-card")
 async def import_member_rate_card(case_id: int, file: UploadFile = File(...), db: Session = Depends(get_db)):
     """Bulk-fills existing_annual_rate for every census member matched

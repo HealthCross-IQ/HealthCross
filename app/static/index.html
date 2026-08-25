@@ -4778,6 +4778,25 @@ function _rbClaimsTrendHtml(trend) {
   `;
 }
 
+// Fills each census member's existing annual rate from the book,
+// matching on beneficiary ID. Only fills what is missing, so a rate an
+// underwriter typed is never overwritten and running it twice is a
+// no-op - re-seeding the census would fill the rates too, and throw
+// away every other edit made since.
+async function fillMemberRatesFromBook() {
+  if (!currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/member-rates/from-book`, { method: 'POST' });
+    const parts = [`${r.filled_from_book} member(s) rated from the book`];
+    if (r.already_rated) parts.push(`${r.already_rated} already had a rate`);
+    if (r.unmatched_count) parts.push(`${r.unmatched_count} not found on the book`);
+    toast(parts.join('; '), r.filled_from_book === 0);
+    await loadRenewalBenchSummary();
+  } catch (err) {
+    toast(err.message || 'Could not fill rates from the book', true);
+  }
+}
+
 function _rbExistingPremiumHtml(existing) {
   if (!existing) return '';
   const rows = existing.categories.map(c => `
@@ -4797,6 +4816,18 @@ function _rbExistingPremiumHtml(existing) {
         ${_rbKpi('Total existing premium', `AED ${Math.round(existing.total_existing_premium).toLocaleString()}`, `${existing.rated_members} of ${existing.total_members} members rated (${existing.coverage_pct != null ? existing.coverage_pct : 0}%)`)}
         ${_rbKpi('On case record', existing.current_annual_premium_on_case != null ? `AED ${Math.round(existing.current_annual_premium_on_case).toLocaleString()}` : 'Not set', 'current_annual_premium')}
       </div>
+      ${existing.rated_members === 0 && existing.total_members ? `
+        <div class="rb-insight" style="margin-bottom:14px;">
+          <div class="rb-insight-icon">i</div>
+          <div>
+            <span class="rb-insight-tag">No member rates</span>
+            <div class="rb-insight-text">None of the ${existing.total_members} census members carries an
+              existing annual rate, so there is nothing to add up - the total reads AED 0 because it is
+              unknown, not because it is nil. A census uploaded from a broker file rarely carries rates;
+              HealthCross's own membership does.</div>
+            <button class="rb-btn" style="margin-top:10px;" onclick="fillMemberRatesFromBook()">Fill rates from the book</button>
+          </div>
+        </div>` : ''}
       ${existing.categories.length ? `<table class="rb-table"><tr><th>Category</th><th class="num">Rated / Members</th><th class="num">Avg rate</th><th class="num">Total</th></tr>${rows}</table>` : ''}
       ${showDiscrepancy ? `
         <div class="rb-insight sev-critical" style="margin-top:14px;">
