@@ -279,3 +279,50 @@ def test_entities_in_our_own_headings_render_as_characters_not_as_text():
 def test_every_verdict_has_a_word_for_it(verdict, word):
     html = _render(decision={**_payload()["decision"], "verdict": verdict})
     assert word in html
+
+
+# --- the shapes real data actually arrives in ----------------------------
+
+def test_a_census_whose_relation_is_not_the_word_employee_still_renders():
+    # The membership exports say "Principal", not "Employee". Counting
+    # zero employees used to take the whole page down: the ratio
+    # `children / employees` was evaluated before the `if employees`
+    # meant to guard it, so the report 500'd on real data while passing
+    # on every fixture.
+    html = _render(census={**_payload()["census"], "employee_count": 0, "male_employees": 0,
+                           "relation_counts": {"Principal": 67, "Child": 26, "Spouse": 15}})
+    assert "Children per employee" in html
+    assert "Principal" in html
+
+
+@pytest.mark.parametrize("census", [
+    {"total_members": 5},          # a summary carrying only the headline
+    {},                            # nothing at all
+    {"total_members": 0},          # an empty census
+    {"total_members": 8, "relation_counts": {}, "age_band_counts": {}, "gender_counts": {}},
+    {"total_members": 8, "age_band_counts": {"Unmapped": 5, "65+": 3}},
+    {"total_members": 8, "avg_age": None, "maternity_risk_pct": None},
+])
+def test_a_thin_census_prints_dashes_rather_than_raising(census):
+    # Every one of these is a shape the portal can genuinely produce.
+    # A report that raises on a half-filled case is useless exactly when
+    # an underwriter wants it - early.
+    html = _render(census=census)
+    assert "Page 4 of 4" in html
+
+
+@pytest.mark.parametrize("claims_report", [
+    {},
+    {"monthly_paid": [{"month": "Jan"}, {"month": "Feb"}]},          # no figure on the row
+    {"monthly_paid": [{"month": "Jan", "paid": 0}, {"month": "Feb", "paid": 0}]},
+    {"diagnosis_breakdown": [{"label": "X"}]},                        # no value
+])
+def test_a_thin_claims_report_does_not_take_the_page_down(claims_report):
+    assert "Page 4 of 4" in _render(claims_report=claims_report)
+
+
+@pytest.mark.parametrize("decision_patch", [
+    {"quoted": 0}, {"loading_pct": 1.0}, {"break_even": 0}, {"recommended_minimum": 0},
+])
+def test_degenerate_prices_do_not_divide_by_zero(decision_patch):
+    assert "Page 4 of 4" in _render(decision={**_payload()["decision"], **decision_patch})

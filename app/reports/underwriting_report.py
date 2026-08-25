@@ -585,7 +585,7 @@ def _population_donut(census: Optional[dict], members: int) -> str:
     if not census or not census.get("relation_counts"):
         return ('<h2 class="sec">Who is on the scheme</h2>'
                 + _note("No census on file. Upload one and the population mix appears here."))
-    counts = census["relation_counts"]
+    counts = census.get("relation_counts") or {}
     palette = ["#1c2947", "#4ab0e3", "#a4d7f1", "#d2ebf8", "#8e94a3"]
     ordered = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
     segments = [{"value": n, "colour": palette[i % len(palette)]} for i, (_, n) in enumerate(ordered)]
@@ -663,7 +663,7 @@ def _page_census(payload: dict) -> str:
       <section>
         <h2 class="sec">Population</h2>
         <div class="split">
-          <div><h3 style="margin-top:0">Relation mix</h3>{_mix_bars(census["relation_counts"], census["total_members"])}</div>
+          <div><h3 style="margin-top:0">Relation mix</h3>{_mix_bars(census.get("relation_counts") or {}, census.get("total_members") or 0)}</div>
           <div><h3 style="margin-top:0">Gender</h3>{_gender_bars(census)}</div>
         </div>
         <h3>Age distribution</h3>
@@ -693,7 +693,7 @@ def _gender_bars(census: dict) -> str:
     counts = {k: v for k, v in (census.get("gender_counts") or {}).items() if v}
     if not counts:
         return _note("No gender recorded on the census.")
-    total = census["total_members"]
+    total = census.get("total_members") or 0
     top = max(counts.values()) or 1
     names = {"M": "Male", "F": "Female", "Other": "Not stated"}
     rows = bar_rows([
@@ -706,7 +706,7 @@ def _gender_bars(census: dict) -> str:
     if census.get("employee_count"):
         male = census.get("male_employees") or 0
         caption = (f'<div class="caption">Employees run {male} male to '
-                   f'{census["employee_count"] - male} female</div>')
+                   f'{(census.get("employee_count") or 0) - male} female</div>')
     return rows + caption
 
 
@@ -742,7 +742,7 @@ def _age_bars(census: dict) -> str:
             for name, n in subset
         ], label_width=68, value_width=30)
 
-    total = census["total_members"] or 1
+    total = census.get("total_members") or 1
     older_bands = [name for name in bands if (_band_floor(name) or 0) >= _OLDER_BAND_FROM]
     older = sum(bands[name] for name in older_bands)
     share = older / total
@@ -794,24 +794,42 @@ def _section_demographic_indicators(census: dict) -> str:
     relations = census.get("relation_counts") or {}
     spouses, children = relations.get("Spouse") or 0, relations.get("Child") or 0
     zones = census.get("nationality_zone_counts") or {}
-    total = census["total_members"]
+    total = census.get("total_members") or 0
     top_zone = max(zones.items(), key=lambda kv: kv[1]) if zones else None
+
+    def per_employee(count: int, good_below: float) -> tuple:
+        """A dependant ratio, and how it reads - or an em-dash when there
+        is nothing to divide by.
+
+        This used to be written inline as `"g" if count / employees < x
+        else "a" if employees else "n"`, which evaluates the division
+        BEFORE the guard that was meant to protect it. Any census whose
+        relation column says something other than the literal word
+        "employee" - "Principal", as the real membership exports use -
+        counts zero employees and took the whole page down with a
+        ZeroDivisionError.
+        """
+        if not employees:
+            return "n", DASH
+        ratio = count / employees
+        return ("g" if ratio < good_below else "a"), f"{ratio:.2f}"
+
+    children_letter, children_value = per_employee(children, 0.5)
+    spouses_letter, spouses_value = per_employee(spouses, 0.3)
 
     rows = [
         ("a" if (census.get("avg_age") or 0) >= 40 else "g", "Average age, scheme",
          f'{census.get("avg_age"):.1f}' if census.get("avg_age") is not None else DASH,
          "Claims cost rises steeply with age from the late thirties"),
-        ("g" if children / employees < 0.5 else "a" if employees else "n", "Children per employee",
-         f"{children / employees:.2f}" if employees else DASH,
+        (children_letter, "Children per employee", children_value,
          "A child costs roughly half an employee"),
-        ("g" if spouses / employees < 0.3 else "a" if employees else "n", "Spouses per employee",
-         f"{spouses / employees:.2f}" if employees else DASH,
+        (spouses_letter, "Spouses per employee", spouses_value,
          "Adult dependants carry adult claims costs"),
         ("a" if (census.get("maternity_risk_pct") or 0) > 0.10 else "g", "Maternity-age females",
          f'{census.get("maternity_risk_count", DASH)}',
          f'{pct(census.get("maternity_risk_pct"))} of the scheme'),
     ]
-    if top_zone:
+    if top_zone and total:
         # The zone arrives as its storage key ("zone_2_middle_east"),
         # which is not a thing to print on a document someone reads.
         rows.append(("n", "Largest nationality zone",
