@@ -69,12 +69,17 @@ NAS_TO_MSH_NETWORK = {
 #: on that buying power. Without this, every NAS category is quoted at
 #: an MSH price.
 #:
-#: The midpoint of the stated range, not a measured figure. It is a
-#: single named constant precisely so it can be replaced by one once
-#: there is real NAS book data to measure - see NAS_TO_MSH_NETWORK,
-#: which the same caveat applies to.
+#: Set at 10%, the CAUTIOUS end of the 10-15% range rather than its
+#: midpoint - a house decision. The adjustment is a discount applied to
+#: the only experience we have, so claiming the larger one buys a lower
+#: price on a belief the book cannot yet evidence. Assuming the smaller
+#: discount is wrong in the direction that costs nothing.
+#:
+#: Not a measured figure. It is a single named constant precisely so it
+#: can be replaced by one once there is real NAS book data - the same
+#: caveat NAS_TO_MSH_NETWORK carries.
 NAS_VS_MSH_BURNING_COST_RANGE = (0.85, 0.90)
-NAS_VS_MSH_BURNING_COST = 0.875
+NAS_VS_MSH_BURNING_COST = 0.90
 
 #: Spellings of the same network that arrive from different uploads.
 #: Applied before the lookup, so one canonical key covers all of them.
