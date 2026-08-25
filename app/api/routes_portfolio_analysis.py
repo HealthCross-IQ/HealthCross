@@ -854,6 +854,57 @@ def preview_renewal_intake(master_client: str, db: Session = Depends(get_db)):
     return profile
 
 
+@router.get("/renewal-claims-split/{master_client}")
+def renewal_claims_split(
+    master_client: str,
+    as_at: Optional[date] = Query(
+        None,
+        description=(
+            "Who counts as continuing, measured at this date. Defaults to the expiring "
+            "term's own end date - the question a renewal turns on is not who is covered "
+            "today, it is who walks into the new policy year."
+        ),
+    ),
+    db: Session = Depends(get_db),
+):
+    """The expiring year's claims, split between the members who are
+    renewing and the members who are not.
+
+    A renewal quoted off the account's headline loss ratio prices the
+    incoming year against a population that includes people who will not
+    be in it. Whether that matters is an empirical question this answers:
+    if taking the leavers out moves the ratio a long way, last year's
+    headline overstates what the renewing population costs; if it barely
+    moves, the base rate is the problem and renewing on headcount carries
+    it straight into the new year.
+    """
+    from app.scoring.rules.renewal_intake import claims_by_member_status
+
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+
+    claims = [
+        {
+            "patient_id": patient_id,
+            "date_of_treatment": date_of_treatment,
+            "final_amount": final_amount,
+            "claim_status": claim_status,
+        }
+        for patient_id, date_of_treatment, final_amount, claim_status in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+        ).all()
+    ]
+    split = claims_by_member_status(account, group_claims_by_beneficiary(claims), as_at=as_at)
+    return {"master_client": master_client, **split}
+
+
 @router.post("/renewal-intake")
 def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Depends(get_db)):
     """Open the renewal case for an account already on HealthCross's own

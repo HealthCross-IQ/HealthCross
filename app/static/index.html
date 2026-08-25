@@ -2929,6 +2929,7 @@ function renderCaseWorkspace() {
         </div>
         <div id="renewal-bench-census-area"></div>
         <div id="renewal-bench-member-movement-area"></div>
+        <div id="renewal-bench-claims-split-area"></div>
         <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
         <div id="renewal-bench-scorecard-area"></div>
@@ -5087,6 +5088,7 @@ async function loadRenewalBenchCensusMovement() {
     area.innerHTML = '';
   }
   await loadRenewalBenchMemberMovement();
+  await loadRenewalBenchClaimsSplit();
 }
 
 /* Member-level movement: not how many left, but WHICH members left and
@@ -5094,6 +5096,73 @@ async function loadRenewalBenchCensusMovement() {
    Membership export is what makes the expiring roster recoverable), so a
    failure here is a normal state for a hand-built case, not an error -
    the per-relation counts above still stand on their own. */
+// Last year's claims split between the members who are renewing and
+// the members who are not. A renewal quoted off the account's headline
+// loss ratio prices the incoming year against a population that
+// includes people who will not be in it - and whether that matters is
+// an empirical question, not an assumption.
+async function loadRenewalBenchClaimsSplit() {
+  const area = document.getElementById('renewal-bench-claims-split-area');
+  if (!area || !currentCase) return;
+  const client = currentCase.company_name;
+  if (!client) { area.innerHTML = ''; return; }
+  let r;
+  try {
+    r = await api(`/portfolio-analysis/renewal-claims-split/${encodeURIComponent(client)}`);
+  } catch (err) { area.innerHTML = ''; return; }
+
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const c = r.continuing, l = r.leaving;
+  if (!c.member_count && !l.member_count) { area.innerHTML = ''; return; }
+
+  // The headline only overstates the renewing population's cost if the
+  // leavers cost more per head. Say which it is rather than leaving the
+  // reader to compare two ratios.
+  const moved = (r.total.loss_ratio != null && r.loss_ratio_excluding_leavers != null)
+    ? r.total.loss_ratio - r.loss_ratio_excluding_leavers : null;
+  const verdict = moved == null ? ''
+    : Math.abs(moved) < 0.02
+      ? `<div class="hint" style="margin-top:10px;">Taking the leavers out barely moves the ratio
+         (${pct(r.total.loss_ratio)} &rarr; ${pct(r.loss_ratio_excluding_leavers)}). The base rate is
+         what it is &mdash; renewing on headcount carries it into the new year.</div>`
+      : `<div class="hint" style="margin-top:10px;">Taking the leavers out moves the ratio
+         ${pct(r.total.loss_ratio)} &rarr; <strong>${pct(r.loss_ratio_excluding_leavers)}</strong>.
+         Last year's headline overstates what the renewing ${c.member_count} actually cost.</div>`;
+
+  area.innerHTML = `
+    <div class="card">
+      <h3>Renewing vs leaving &mdash; last year's claims</h3>
+      <div class="hint">Measured at ${escapeHtml(String(r.as_at || ''))}, the expiring term's end.
+        A leaver's premium is earned for part of a year while their claims are not, so their own
+        ratio runs high even when their claims are ordinary.</div>
+      <table style="margin-top:12px;">
+        <tr><th></th><th class="num">Renewing</th><th class="num">Leaving</th><th class="num">Total</th></tr>
+        <tr><td>Members</td><td class="num">${c.member_count}</td><td class="num">${l.member_count}</td>
+            <td class="num">${r.total.member_count}</td></tr>
+        <tr><td>Paid</td><td class="num">${aed(c.paid)}</td><td class="num">${aed(l.paid)}</td>
+            <td class="num">${aed((c.paid || 0) + (l.paid || 0))}</td></tr>
+        <tr><td>Outstanding</td><td class="num">${aed(c.outstanding)}</td><td class="num">${aed(l.outstanding)}</td>
+            <td class="num">${aed((c.outstanding || 0) + (l.outstanding || 0))}</td></tr>
+        <tr class="total"><th>Incurred</th><td class="num"><strong>${aed(c.incurred)}</strong></td>
+            <td class="num"><strong>${aed(l.incurred)}</strong></td>
+            <td class="num"><strong>${aed(r.total.incurred)}</strong></td></tr>
+        <tr><td>Annual premium</td><td class="num">${aed(c.premium)}</td><td class="num">${aed(l.premium)}</td>
+            <td class="num">${aed(r.total.premium)}</td></tr>
+        <tr><td>Claims per member</td><td class="num">${aed(c.claims_per_member)}</td>
+            <td class="num">${aed(l.claims_per_member)}</td><td class="num">&mdash;</td></tr>
+        <tr><td>Members who claimed</td><td class="num">${c.members_who_claimed}</td>
+            <td class="num">${l.members_who_claimed}</td><td class="num">&mdash;</td></tr>
+        <tr class="total"><th>Loss ratio</th><td class="num"><strong>${pct(c.loss_ratio)}</strong></td>
+            <td class="num">${pct(l.loss_ratio)}</td>
+            <td class="num">${pct(r.total.loss_ratio)}</td></tr>
+      </table>
+      <div class="hint" style="margin-top:8px;">Leavers are ${pct(r.leaver_share_of_members)} of the
+        members and ${pct(r.leaver_share_of_claims)} of the claims.</div>
+      ${verdict}
+    </div>`;
+}
+
 async function loadRenewalBenchMemberMovement() {
   const area = document.getElementById('renewal-bench-member-movement-area');
   if (!area) return;

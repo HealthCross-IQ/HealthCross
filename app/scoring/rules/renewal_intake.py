@@ -251,3 +251,126 @@ def census_rows_from_members(members: List[dict]) -> List[dict]:
             "existing_annual_rate": member_annual_rate(m),
         })
     return rows
+
+
+def continuing_and_leaving(
+    members: List[dict],
+    as_at: Optional[date_cls] = None,
+) -> Tuple[List[dict], List[dict]]:
+    """The renewing term's members split by whether they are still on
+    risk at the term's end.
+
+    `as_at` defaults to the term end, which is the date that matters for
+    a renewal: the question is not who is covered today, it is who walks
+    into the new policy year. A member whose cover ended in April is part
+    of the expiring year's cost and none of the incoming year's exposure.
+
+    A member whose cover ends ON the date is continuing - the term runs
+    to the end of that day.
+    """
+    term_members = current_term_members(members)
+    if as_at is None:
+        _, as_at = current_term(term_members)
+    if as_at is None:
+        return term_members, []
+
+    continuing, leaving = [], []
+    for m in term_members:
+        end = m.get("member_end_date")
+        start = m.get("member_start_date")
+        gone = end is not None and end < as_at
+        unstarted = start is not None and start > as_at
+        (leaving if (gone or unstarted) else continuing).append(m)
+    return continuing, leaving
+
+
+def claims_by_member_status(
+    members: List[dict],
+    claims_by_beneficiary: Dict[str, List[dict]],
+    as_at: Optional[date_cls] = None,
+) -> dict:
+    """What the expiring year cost, split between the members who are
+    renewing and the members who are not.
+
+    A renewal quoted on the account's headline loss ratio prices the
+    incoming year off a population that includes people who will not be
+    in it. That is only harmless when leavers cost the same per head as
+    stayers, and they routinely do not - a leaver's premium is earned for
+    part of a year while their claims are not, so their own loss ratio
+    runs high even when their claims are ordinary.
+
+    Splitting the two says which it is. If stripping the leavers moves
+    the loss ratio a long way, last year's headline overstates what the
+    renewing population actually costs. If it barely moves, the base rate
+    is the problem and renewing on headcount carries it straight into the
+    new year.
+    """
+    # Resolved here rather than left to continuing_and_leaving, which
+    # works it out internally and keeps it. The date decides the whole
+    # split, so a caller must be able to see which one was used.
+    if as_at is None:
+        _, as_at = current_term(current_term_members(members))
+    continuing, leaving = continuing_and_leaving(members, as_at)
+    windows = term_member_windows(current_term_members(members))
+
+    def totals(group: List[dict]) -> dict:
+        paid = outstanding = premium = 0.0
+        lines = 0
+        claimants = set()
+        for m in group:
+            beneficiary_id = m.get("beneficiary_id")
+            premium += member_annual_rate(m) or 0.0
+            for claim in claims_by_beneficiary.get(beneficiary_id, ()):
+                if not claim_belongs_to_term(beneficiary_id, claim.get("date_of_treatment"), windows):
+                    continue
+                amount = claim.get("final_amount") or 0.0
+                status = str(claim.get("claim_status") or "")
+                if "outstanding" in status.lower():
+                    outstanding += amount
+                else:
+                    paid += amount
+                lines += 1
+                claimants.add(beneficiary_id)
+        incurred = paid + outstanding
+        count = len(group)
+        return {
+            "member_count": count,
+            "paid": round(paid, 2),
+            "outstanding": round(outstanding, 2),
+            "incurred": round(incurred, 2),
+            "premium": round(premium, 2),
+            "claim_lines": lines,
+            "members_who_claimed": len(claimants),
+            "claims_per_member": round(incurred / count, 2) if count else None,
+            # Against premium as booked. A leaver's is already prorated in
+            # the export, which is exactly why their ratio runs high.
+            "loss_ratio": round(incurred / premium, 4) if premium else None,
+        }
+
+    continuing_totals = totals(continuing)
+    leaving_totals = totals(leaving)
+    combined_incurred = continuing_totals["incurred"] + leaving_totals["incurred"]
+    combined_premium = continuing_totals["premium"] + leaving_totals["premium"]
+
+    return {
+        "as_at": as_at,
+        "continuing": continuing_totals,
+        "leaving": leaving_totals,
+        "total": {
+            "member_count": continuing_totals["member_count"] + leaving_totals["member_count"],
+            "incurred": round(combined_incurred, 2),
+            "premium": round(combined_premium, 2),
+            "loss_ratio": round(combined_incurred / combined_premium, 4) if combined_premium else None,
+        },
+        # The number the renewal actually turns on: what the loss ratio
+        # becomes once the people who are not renewing are taken out.
+        "loss_ratio_excluding_leavers": continuing_totals["loss_ratio"],
+        "leaver_share_of_claims": (
+            round(leaving_totals["incurred"] / combined_incurred, 4) if combined_incurred else None
+        ),
+        "leaver_share_of_members": (
+            round(leaving_totals["member_count"] /
+                  (continuing_totals["member_count"] + leaving_totals["member_count"]), 4)
+            if (continuing_totals["member_count"] + leaving_totals["member_count"]) else None
+        ),
+    }
