@@ -326,3 +326,30 @@ def test_a_thin_claims_report_does_not_take_the_page_down(claims_report):
 ])
 def test_degenerate_prices_do_not_divide_by_zero(decision_patch):
     assert "Page 4 of 4" in _render(decision={**_payload()["decision"], **decision_patch})
+
+
+# --- the uploaded quote document ----------------------------------------
+
+def test_an_uploaded_quote_puts_the_offer_as_issued_on_the_document():
+    # The per-category breakdown comes off the uploaded quotation, so it
+    # is what the broker received rather than what the card would have
+    # charged. A blended total hides which category carries the money.
+    html = _render(by_category={
+        "categories": [
+            {"category": "A", "plan_name": "Platinum - CAT A", "network": "MSH Platinum",
+             "member_count": 58, "gross_premium": 430_000.0, "premium_per_member": 7413.79},
+            {"category": "C", "plan_name": "Enhanced - CAT C", "network": "MSH Enhanced",
+             "member_count": 50, "gross_premium": 234_500.0, "premium_per_member": 4690.0},
+        ],
+        "total_members": 108, "total_gross_premium": 664_500.0,
+        "blended_premium_per_member": 6152.78,
+    })
+    assert "The offer as issued" in html
+    assert "MSH Enhanced" in html
+    assert "664,500" in html
+
+
+def test_without_an_uploaded_quote_the_offer_section_is_left_out_entirely():
+    # Not an empty table with a heading over it - there is no offer to
+    # show, and a heading implies there should be.
+    assert "The offer as issued" not in _render(by_category=None)

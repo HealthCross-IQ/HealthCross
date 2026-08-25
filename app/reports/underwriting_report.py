@@ -854,6 +854,7 @@ def _section_demographic_indicators(census: dict) -> str:
 
 def _page_pricing(payload: dict) -> str:
     body = _masthead(payload, "Pricing &amp; Claims") + f"""<div class="pad" style="padding-top:26px">
+      {_section_by_category(payload.get("by_category"))}
       {_section_bridge(payload)}
       {_section_premium_against_claims(payload)}
       {_section_claims_build(payload)}
@@ -865,6 +866,43 @@ def _page_pricing(payload: dict) -> str:
               f'{esc(report.get("report_period_start") or "")} to {esc(report.get("report_period_end") or "")}'
               ) if report else "No incumbent claims report on file"
     return _page("Page 3 of 4 &middot; Pricing &amp; Claims", body + _footer(source, "Internal"))
+
+
+def _section_by_category(by_category: Optional[dict]) -> str:
+    """The offer as it was actually issued, category by category.
+
+    This comes from the uploaded quote document rather than from the
+    rate card, so it is what the broker received rather than what the
+    card would have charged. Where a case has several categories the
+    blended total hides which one carries the money, and it is usually
+    one of them.
+    """
+    categories = (by_category or {}).get("categories") or []
+    if not categories:
+        return ""
+    rows = "".join(
+        f'<tr><td><strong>{esc(c.get("category") or DASH)}</strong></td>'
+        f'<td>{esc(c.get("plan_name") or "")}</td><td>{esc(c.get("network") or "")}</td>'
+        f'<td class="num">{c.get("member_count") if c.get("member_count") is not None else DASH}</td>'
+        f'<td class="num">{aed(c.get("gross_premium"))}</td>'
+        f'<td class="num">{aed(c.get("premium_per_member"))}</td></tr>'
+        for c in categories
+    )
+    total = by_category or {}
+    rows += (f'<tr class="emphatic"><td>Total</td><td></td><td></td>'
+             f'<td class="num">{total.get("total_members", DASH)}</td>'
+             f'<td class="num">{aed(total.get("total_gross_premium"))}</td>'
+             f'<td class="num">{aed(total.get("blended_premium_per_member"))}</td></tr>')
+    return f"""<section>
+      <h2 class="sec">The offer as issued</h2>
+      <p class="desc">Read off the uploaded quotation, not the rate card &mdash; this is what the
+        broker actually received.</p>
+      <div class="scroll"><table class="data">
+        <tr><th style="width:12%">Category</th><th>Plan</th><th>Network</th>
+            <th class="num">Members</th><th class="num">Annual premium</th>
+            <th class="num">Per member</th></tr>{rows}
+      </table></div>
+    </section>"""
 
 
 def _section_bridge(payload: dict) -> str:
