@@ -353,3 +353,30 @@ def test_without_an_uploaded_quote_the_offer_section_is_left_out_entirely():
     # Not an empty table with a heading over it - there is no offer to
     # show, and a heading implies there should be.
     assert "The offer as issued" not in _render(by_category=None)
+
+
+# --- it has to run on the machine it is run on ---------------------------
+
+def test_the_date_renders_without_a_leading_zero_and_without_glibc():
+    from app.reports.underwriting_report import long_date
+
+    assert long_date(date(2026, 8, 24)) == "24 August 2026"
+    assert long_date(date(2026, 8, 4)) == "4 August 2026"
+    assert long_date(date(2026, 12, 31)) == "31 December 2026"
+
+
+def test_no_platform_specific_strftime_directive_survives_anywhere():
+    # "%-d" strips the leading zero on glibc and raises ValueError on
+    # Windows. The report is developed on Linux and run on Windows, so
+    # this passed every test here and took the page down there. "%#d" is
+    # the same trap facing the other way.
+    import pathlib
+    import re
+
+    offenders = []
+    root = pathlib.Path(__file__).resolve().parent.parent / "app"
+    for path in root.rglob("*.py"):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if re.search(r'strftime\([^)]*%[-#][dmHIMjSyY]', line):
+                offenders.append(f"{path.name}:{number}")
+    assert not offenders, f"platform-specific strftime directives: {offenders}"

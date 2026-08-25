@@ -50,6 +50,18 @@ def _logo_img(height: int = 38) -> str:
             f'src="data:image/png;base64,{_logo_cache}" alt="Health Cross">')
 
 
+def long_date(day: date) -> str:
+    """"24 August 2026", on every operating system.
+
+    strftime's "%-d" - the day without its leading zero - is a glibc
+    extension. It renders on Linux, where this is developed, and raises
+    ValueError on Windows, where it is run. So the day is formatted as a
+    plain integer and only the parts every platform agrees on go through
+    strftime.
+    """
+    return f"{day.day} {day.strftime('%B %Y')}"
+
+
 # --- formatting ---------------------------------------------------------
 #
 # One rule throughout: a value that is not known prints as an em-dash.
@@ -435,7 +447,7 @@ def _verdict(decision: dict) -> tuple:
 def _meta_block(payload: dict, subtitle: str, today: date) -> str:
     case = payload["case"]
     return (f'<div class="meta">{subtitle}<br>Case #{case["id"]} &middot; New Business<br>'
-            f'{today.strftime("%-d %B %Y")} &middot; Internal</div>')
+            f'{long_date(today)} &middot; Internal</div>')
 
 
 def _masthead(payload: dict, subtitle: str) -> str:
@@ -1112,7 +1124,7 @@ def _page_decision(payload: dict, today: date) -> str:
     </div>"""
     return _page("Page 4 of 4 &middot; Scorecard, Benefits &amp; Decision",
                  body + _footer(f'Prepared by Health Cross Underwriting Intelligence &middot; '
-                                f'{today.strftime("%-d %B %Y")}', "Internal &mdash; not for release"))
+                                f'{long_date(today)}', "Internal &mdash; not for release"))
 
 
 def _section_scorecard_table(scorecard: dict) -> str:
