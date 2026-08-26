@@ -108,7 +108,7 @@ def test_the_html_report_is_a_page_the_browser_can_open(client, rate_card_files)
     assert resp.headers["content-type"].startswith("text/html")
     assert resp.text.startswith("<!doctype html>")
     assert "Freshly Frozen Foods Factory" in resp.text
-    assert "Page 4 of 4" in resp.text
+    assert "Page 2 of 2" in resp.text
 
 
 def test_the_document_and_the_payload_report_the_same_maternity_share(client, rate_card_files):  # noqa: F811

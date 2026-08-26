@@ -134,10 +134,14 @@ def test_the_document_carries_the_figures_the_decision_rests_on():
         assert expected in html, expected
 
 
-def test_all_four_pages_are_present():
+def test_both_pages_are_present():
+    # Two, not four. The census page said in three tables what the
+    # scorecard rows say in one line each with the judgement attached,
+    # and the population donut told a reader nothing they would act on.
     html = _render()
-    for page in range(1, 5):
-        assert f"Page {page} of 4" in html
+    assert "Page 1 of 2" in html
+    assert "Page 2 of 2" in html
+    assert "Page 3 of" not in html
 
 
 def test_the_verdict_word_is_the_same_on_the_dashboard_and_the_recommendation():
@@ -150,6 +154,13 @@ def test_the_verdict_word_is_the_same_on_the_dashboard_and_the_recommendation():
 
 
 # --- a case that is not finished yet ------------------------------------
+
+def test_the_scorecard_appears_once_in_full_rather_than_twice_in_part():
+    # It used to be five rows on page 1 and all seven on page 4.
+    html = _render()
+    assert html.count("Claims experience") == 1
+    assert "Group size" in html and "Benefit design" in html
+
 
 def test_a_case_with_nothing_on_it_still_renders():
     bare = {
@@ -175,7 +186,7 @@ def test_a_case_with_nothing_on_it_still_renders():
     }
     html = render_underwriting_report(bare, today=date(2026, 8, 24))
     assert "New Enquiry" in html
-    assert "Page 4 of 4" in html
+    assert "Page 2 of 2" in html
 
 
 def test_a_missing_section_says_what_is_missing_rather_than_going_blank():
@@ -191,10 +202,11 @@ def test_no_incumbent_plan_says_so_instead_of_showing_an_empty_table():
     assert "No incumbent table of benefits" in html
 
 
-def test_no_census_does_not_take_the_rest_of_the_document_with_it():
+def test_a_case_with_no_census_still_renders_both_pages():
+    # The census page is gone, but a payload without one must still not
+    # take the document down - the scorecard reads it for maternity.
     html = _render(census=None)
-    assert "No census has been uploaded" in html
-    assert "Page 3 of 4" in html
+    assert "Page 1 of 2" in html and "Page 2 of 2" in html
 
 
 # --- what must never be invented ----------------------------------------
@@ -286,16 +298,7 @@ def test_every_verdict_has_a_word_for_it(verdict, word):
 
 # --- the shapes real data actually arrives in ----------------------------
 
-def test_a_census_whose_relation_is_not_the_word_employee_still_renders():
-    # The membership exports say "Principal", not "Employee". Counting
-    # zero employees used to take the whole page down: the ratio
-    # `children / employees` was evaluated before the `if employees`
-    # meant to guard it, so the report 500'd on real data while passing
-    # on every fixture.
-    html = _render(census={**_payload()["census"], "employee_count": 0, "male_employees": 0,
-                           "relation_counts": {"Principal": 67, "Child": 26, "Spouse": 15}})
-    assert "Children per employee" in html
-    assert "Principal" in html
+
 
 
 @pytest.mark.parametrize("census", [
@@ -311,7 +314,7 @@ def test_a_thin_census_prints_dashes_rather_than_raising(census):
     # A report that raises on a half-filled case is useless exactly when
     # an underwriter wants it - early.
     html = _render(census=census)
-    assert "Page 4 of 4" in html
+    assert "Page 2 of 2" in html
 
 
 @pytest.mark.parametrize("claims_report", [
@@ -321,14 +324,14 @@ def test_a_thin_census_prints_dashes_rather_than_raising(census):
     {"diagnosis_breakdown": [{"label": "X"}]},                        # no value
 ])
 def test_a_thin_claims_report_does_not_take_the_page_down(claims_report):
-    assert "Page 4 of 4" in _render(claims_report=claims_report)
+    assert "Page 2 of 2" in _render(claims_report=claims_report)
 
 
 @pytest.mark.parametrize("decision_patch", [
     {"quoted": 0}, {"loading_pct": 1.0}, {"break_even": 0}, {"recommended_minimum": 0},
 ])
 def test_degenerate_prices_do_not_divide_by_zero(decision_patch):
-    assert "Page 4 of 4" in _render(decision={**_payload()["decision"], **decision_patch})
+    assert "Page 2 of 2" in _render(decision={**_payload()["decision"], **decision_patch})
 
 
 # --- the uploaded quote document ----------------------------------------
@@ -433,3 +436,41 @@ def test_an_account_with_no_room_says_so_rather_than_showing_a_negative():
 def test_the_technical_price_still_leads_when_there_is_no_room():
     html = _render()
     assert "Technical price" in html
+
+
+# --- the benefits table carries only what differs ------------------------
+
+def _benefits(rows):
+    return {"categories": [{"category": "A", "existing_plan_name": "Cigna",
+                            "product": "Platinum", "network": "MSH Platinum", "rows": rows}]}
+
+
+def test_lines_that_match_the_incumbent_are_left_off():
+    # On a real case eleven of thirteen read "Match". A table that is
+    # mostly agreement buries the lines somebody has to decide about.
+    html = _render(benefits=_benefits([
+        {"label": "Annual Limit", "existing": "US$ 7,500,000", "proposed": "USD 500,000",
+         "direction": "reduced"},
+        {"label": "Coinsurance", "existing": "0%", "proposed": "NIL", "direction": "same"},
+        {"label": "Deductible", "existing": "NIL", "proposed": "NIL", "direction": "same"},
+    ]))
+    assert "Annual Limit" in html
+    assert "Coinsurance" not in html
+    assert "2 line(s) either match" in html
+
+
+def test_a_line_neither_side_states_is_not_a_finding():
+    html = _render(benefits=_benefits([
+        {"label": "Annual Limit", "existing": "US$ 7,500,000", "proposed": "USD 500,000",
+         "direction": "reduced"},
+        {"label": "Dental", "existing": None, "proposed": None, "direction": "review"},
+    ]))
+    assert "Annual Limit" in html
+    assert ">Dental<" not in html
+
+
+def test_a_proposal_that_matches_on_every_line_says_so_rather_than_showing_nothing():
+    html = _render(benefits=_benefits([
+        {"label": "Coinsurance", "existing": "0%", "proposed": "NIL", "direction": "same"},
+    ]))
+    assert "All 1 benefit lines match" in html

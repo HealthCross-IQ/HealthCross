@@ -511,14 +511,19 @@ def _page_dashboard(payload: dict, today: date) -> str:
       </div>
     </div>"""
 
-    return _page("Page 1 of 4 &middot; Executive Underwriting Dashboard", hero + f"""
+    # The population mix used to sit here as a donut. It is context, not
+    # a driver: knowing the scheme is 70 employees and 18 children does
+    # not change what anyone does, and where the mix DOES matter it
+    # already has a scorecard row saying so with the judgement attached.
+    return _page("Page 1 of 2 &middot; Decision", hero + f"""
     <div class="pad" style="padding-top:30px">
       {_section_gap(quoted, expected, break_even, technical, decision)}
-      <section><div class="split">
-        <div>{_scorecard_gauge(payload["scorecard"])}</div>
-        <div>{_population_donut(payload.get("census"), members)}</div>
+      <section><div class="split" style="grid-template-columns:190px 1fr; gap:18px; align-items:center;">
+        <div>{gauge(payload["scorecard"].get("overall_score"), payload["scorecard"].get("overall_band"),
+                    {"high": "HIGH RISK", "medium": "MEDIUM RISK",
+                     "low": "LOW RISK"}.get(payload["scorecard"].get("overall_band") or "", "NOT SCORED"))}</div>
+        <div>{_section_scorecard_table(payload["scorecard"])}</div>
       </div></section>
-      {_section_risk_drivers(payload["scorecard"])}
     </div>
     """ + _footer("Health Cross &middot; Underwriting Intelligence",
                   "Internal &mdash; contains risk pricing. Not for release to broker or client."))
@@ -893,20 +898,24 @@ def _section_demographic_indicators(census: dict) -> str:
 # --- page 3: pricing & claims -------------------------------------------
 
 
-def _page_pricing(payload: dict) -> str:
-    body = _masthead(payload, "Pricing &amp; Claims") + f"""<div class="pad" style="padding-top:26px">
+def _page_pricing(payload: dict, today: date) -> str:
+    # Premium-against-claims came out: it restated the loss ratio the
+    # hero already leads with, as bars.
+    body = _masthead(payload, "Evidence &amp; Recommendation") + f"""<div class="pad" style="padding-top:26px">
       {_section_by_category(payload.get("by_category"))}
       {_section_bridge(payload)}
-      {_section_premium_against_claims(payload)}
       {_section_claims_build(payload)}
       {_section_monthly_claims(payload)}
       {_section_sensitivity(payload)}
+      {_section_benefits(payload.get("benefits"))}
+      {_section_recommendation(payload, today)}
     </div>"""
     report = payload.get("claims_report") or {}
     source = ("Source: incumbent claims report "
               f'{esc(report.get("report_period_start") or "")} to {esc(report.get("report_period_end") or "")}'
               ) if report else "No incumbent claims report on file"
-    return _page("Page 3 of 4 &middot; Pricing &amp; Claims", body + _footer(source, "Internal"))
+    return _page("Page 2 of 2 &middot; Evidence &amp; Recommendation",
+                 body + _footer(source, "Internal &mdash; not for release"))
 
 
 def _section_by_category(by_category: Optional[dict]) -> str:
@@ -1165,30 +1174,39 @@ def _section_scorecard_table(scorecard: dict) -> str:
         cls = ' class="emphatic"' if emphatic else ""
         return (f'<tr{cls}><td>{esc(label)}</td><td class="num">{pct(weight, 0)}</td>'
                 f'<td class="num">{f"{score:.0f}" if score is not None else DASH}</td>'
-                f'<td style="width:14%">{bar}</td><td>{esc(measure)}</td></tr>')
+                f'<td style="width:14%">{bar}</td>'
+                f'<td class="num" style="width:11%">{_impact(score)}</td>'
+                f'<td>{esc(measure)}</td></tr>')
 
+    # Worst first. Ordering by weight puts the factor that decided the
+    # account halfway down a table, and the reader has to work out which
+    # row is the problem - which is the one thing the page exists to say.
+    ordered = sorted(
+        scorecard["rows"],
+        key=lambda r: (r["score"] if r["score"] is not None else 999, -r["weight"]),
+    )
     body = "".join(
         row(r["label"], r["weight"], r["score"], r["band"], r["measure"])
-        for r in scorecard["rows"]
+        for r in ordered
     )
     overall = scorecard.get("overall_score")
     verdict = {"high": "High risk", "medium": "Medium risk", "low": "Low risk"}.get(
         scorecard.get("overall_band") or "", "Not enough measured to score")
     scored_note = ""
     if scorecard.get("weight_unscored"):
-        scored_note = (f' &mdash; out of the {pct(scorecard["weight_scored"], 0)} of the weighting that '
-                       f'could be measured')
+        scored_note = (f' \u2014 out of the {pct(scorecard["weight_scored"], 0)} of the weighting '
+                       f'that could be measured')
     body += row("Overall", scorecard.get("weight_scored"), overall, scorecard.get("overall_band"),
                 verdict + scored_note, emphatic=True)
     return f"""<section>
       <h2 class="sec">Risk scorecard</h2>
-      <p class="desc">Higher is safer, on every line &mdash; one direction throughout, so a high number
-        never means a good thing on one row and a bad thing on the next. A factor with no evidence
-        behind it is left unscored rather than guessed at the middle, and its weight is shared out
-        across the rest.</p>
+      <p class="desc">Worst first. Higher is safer on every line &mdash; one direction throughout, so
+        a high number never means a good thing on one row and a bad thing on the next. A factor with
+        no evidence behind it is left unscored rather than guessed at the middle, and its weight is
+        shared across the rest.</p>
       <div class="scroll"><table class="data">
-        <tr><th style="width:20%">Factor</th><th class="num">Weight</th><th class="num">Score</th>
-            <th>&nbsp;</th><th>Measured from</th></tr>{body}
+        <tr><th style="width:19%">Factor</th><th class="num">Weight</th><th class="num">Score</th>
+            <th>&nbsp;</th><th class="num">Impact</th><th>Measured from</th></tr>{body}
       </table></div>
     </section>"""
 
@@ -1213,8 +1231,20 @@ def _section_benefits(benefits: Optional[dict]) -> str:
                 + "</section>")
     blocks = []
     for category in categories:
-        rows = category.get("rows") or []
-        richer = sum(1 for r in rows if r.get("direction") == "improved")
+        all_rows = category.get("rows") or []
+        richer = sum(1 for r in all_rows if r.get("direction") == "improved")
+        # Only the lines that differ. On a typical case eleven of
+        # thirteen read "Match", and a table that is mostly agreement
+        # buries the two lines somebody has to decide about.
+        # Lines that match are dropped, and so are lines where neither
+        # side states anything: "Dental - - Check" is not a finding, it
+        # is two documents that both went quiet, and a table of them
+        # buries the two lines somebody has to decide about.
+        rows = [
+            r for r in all_rows
+            if r.get("direction") != "same" and (r.get("existing") or r.get("proposed"))
+        ]
+        matched = len(all_rows) - len(rows)
         body = "".join(
             f'<tr><td><strong>{esc(r.get("label"))}</strong></td>'
             f'<td>{esc(r.get("existing")) or DASH}</td><td>{esc(r.get("proposed")) or DASH}</td>'
@@ -1225,17 +1255,25 @@ def _section_benefits(benefits: Optional[dict]) -> str:
         if category.get("product") or category.get("network"):
             heading += (f' &middot; {esc(category.get("product") or "")} '
                         f'{esc(category.get("network") or "")}'.rstrip())
+        if not rows:
+            blocks.append(f'<h3>{esc(category.get("category")) or ""}</h3>'
+                          + _note(f"All {matched} benefit lines match the incumbent's."))
+            continue
         caption = (f'<div class="caption">{richer} line(s) richer than the incumbent\'s. Buying up '
                    f'against the plan these claims were incurred on means the benefit will be used '
                    f'harder than the experience implies.</div>') if richer else ""
         blocks.append(f'<h3>{heading}</h3><div class="scroll"><table class="data">'
                       f'<tr><th style="width:22%">Benefit</th>'
                       f'<th>Incumbent{" &mdash; " + esc(category["existing_plan_name"]) if category.get("existing_plan_name") else ""}</th>'
-                      f'<th>Health Cross proposal</th><th>&nbsp;</th></tr>{body}</table></div>{caption}')
+                      f'<th>Health Cross proposal</th><th>&nbsp;</th></tr>{body}</table></div>'
+                      + (f'<div class="caption">The other {matched} line(s) either match the '
+                         f'incumbent or are unstated on both sides, and are not shown.</div>'
+                         if matched else '')
+                      + caption)
     return f"""<section>
-      <h2 class="sec">Benefits against the incumbent</h2>
-      <p class="desc">Line by line, with the direction of each change. <strong>Richer</strong> is the
-        one to look at: it is the only direction that costs money.</p>
+      <h2 class="sec">Benefits that differ from the incumbent's</h2>
+      <p class="desc">Only the lines that changed. <strong>Richer</strong> is the one to look at:
+        it is the only direction that costs money.</p>
       {"".join(blocks)}
     </section>"""
 
@@ -1370,8 +1408,6 @@ def render_underwriting_report(payload: dict, today: Optional[date] = None) -> s
     return (
         _HEAD.format(title=html.escape(f"{company} - Underwriting Dashboard"), css=STYLESHEET)
         + _page_dashboard(payload, today)
-        + _page_census(payload)
-        + _page_pricing(payload)
-        + _page_decision(payload, today)
+        + _page_pricing(payload, today)
         + "</body></html>"
     )
