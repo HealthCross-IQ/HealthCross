@@ -6541,7 +6541,6 @@ async function nbRenderArea() {
     <div id="nb-price-comparison-area"></div>
     <div id="nb-opportunity-area"></div>
     <div id="nb-existing-vs-proposed-area"></div>
-    <div id="nb-annual-limit-area"></div>
     <div id="nb-risk-price-area"></div>
     <div id="nb-nationality-mix-area"></div>
   `;
@@ -6549,7 +6548,6 @@ async function nbRenderArea() {
   loadNbPriceComparison();
   loadNbOpportunityAssessment();
   loadNbExistingVsProposed();
-  loadNbAnnualLimitExposure();
   loadNbRiskBasedPrice();
   loadNbNationalityMix();
 }
@@ -6799,56 +6797,6 @@ async function loadNbExistingVsProposed() {
     area.innerHTML = '';
   }
 }
-
-/* The annual limit on this quote, read against the book that will pay
-   it. Whole book rather than this client's own claims - one group's
-   members are far too few to say anything about a limit that binds on a
-   fraction of a percent of them. */
-async function loadNbAnnualLimitExposure() {
-  const area = document.getElementById('nb-annual-limit-area');
-  if (!area || !currentCase) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/annual-limit-exposure`);
-    if (!r.categories.length && !r.categories_without_a_readable_limit.length) { area.innerHTML = ''; return; }
-
-    const rows = r.categories.map(c => `
-      <tr>
-        <th>Category ${escapeHtml(c.category)}</th>
-        <td>AED ${Math.round(c.limit_aed).toLocaleString()}</td>
-        <td>${c.members_above.toLocaleString()}</td>
-        <td>${(c.share_of_members * 100).toFixed(2)}%</td>
-        <td>${Math.round(c.spend_above_limit).toLocaleString()}</td>
-      </tr>
-    `).join('');
-
-    const unreadable = r.categories_without_a_readable_limit.length
-      ? `<div class="hint" style="margin-top:8px;">No readable annual limit on category
-         ${r.categories_without_a_readable_limit.map(escapeHtml).join(', ')} - a limit written
-         as "Covered up to Policy Limit" is a real answer, but it is not a number this can check.</div>`
-      : '';
-
-    area.innerHTML = `
-      <div class="card">
-        <h3>What this annual limit would have cost</h3>
-        <div class="hint">Every member in the book measured against the limit proposed here, over a rolling 365 days rather than per calendar year. <strong>Members above</strong> is how often the limit binds at all; <strong>spend above</strong> is what it would not have paid - the figure that prices the decision. Read against the whole portfolio, not this client's own claims: one group has far too few members to say anything about a limit that binds on a fraction of a percent of them. USD limits converted at ${r.aed_per_usd}.</div>
-        <div style="overflow-x:auto;">
-        <table style="margin-top:12px;">
-          <tr><th style="width:18%;">Category</th><th>Annual limit</th><th>Members above</th><th>Share</th><th>Spend above (AED)</th></tr>
-          ${rows || '<tr><td colspan="5" class="hint">No readable limit on any category.</td></tr>'}
-        </table>
-        </div>
-        ${unreadable}
-      </div>
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
-}
-
-/* Import the offer straight from the pricing tool's own export.
-   The plan was already decided there - product, network, TPA and every
-   benefit selection. Re-keying it is not data entry, it is a chance to
-   disagree with the tool that produced it. */
 async function nbUploadPlanDetails() {
   const input = document.getElementById('file-hc-plan-details');
   const statusEl = document.getElementById('status-hc-plan-details');
