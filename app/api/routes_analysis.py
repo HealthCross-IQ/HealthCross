@@ -1128,7 +1128,40 @@ def get_renewal_vs_new_business(case_id: int, db: Session = Depends(get_db)):
         "new_business_quote_id": latest_quote.id if latest_quote else None,
         "gap": gap,
         "gap_pct": gap_pct,
+        # Which picks are actually missing, rather than "set them on the
+        # Benefits tab". The rate card needs three per category and
+        # naming the ones that are blank is the difference between a
+        # complaint and an instruction.
+        "missing_for_new_business": (
+            _missing_quote_inputs(case, db) if new_business_premium is None else []
+        ),
     }
+
+
+def _missing_quote_inputs(case, db: Session) -> List[dict]:
+    """Per category, which of Product / Network / TPA has not been set."""
+    quoted = {
+        c["category"]: c
+        for c in (
+            (db.query(models.NewBusinessQuote)
+             .filter_by(case_id=case.id)
+             .order_by(models.NewBusinessQuote.created_at.desc())
+             .first() or type("q", (), {"categories": []})()).categories or []
+        )
+    }
+    categories = sorted({(r.category or "").strip() for r in case.census_records if r.category})
+    if not categories:
+        return [{"category": None, "missing": ["a census"]}]
+
+    rows = []
+    for category in categories:
+        design = quoted.get(category) or {}
+        missing = [name for name, key in
+                   (("Product", "product"), ("Network", "network"), ("TPA", "tpa"))
+                   if not design.get(key)]
+        if missing:
+            rows.append({"category": category, "missing": missing})
+    return rows
 
 
 @router.get("/{case_id}/renewal-bench-summary")

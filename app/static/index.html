@@ -5017,30 +5017,45 @@ async function loadRenewalBenchNbComparison() {
     const gapCls = r.gap != null ? (r.gap > 0 ? 'pos' : (r.gap < 0 ? 'neg' : '')) : '';
     area.innerHTML = `
       <div class="rb-card">
-        <div class="rb-card-title">Renewal vs. New Business module rate</div>
-        <div class="rb-card-sub">Compares this renewal's own required premium against what the current New Business rate card would charge this same case's own census/category mix - generated automatically from the Benefits tab's Product/Network/TPA picks, no manual re-entry.</div>
+        <div class="rb-card-title">Renewal vs. New Business rate card</div>
+        <div class="rb-card-sub">What this account needs from its own claims, beside what the rate card
+          would charge a stranger with the same census and the same benefits. The rate card figure is
+          generated from the Benefits tab's Product/Network/TPA picks - no re-entry.</div>
         <div class="rb-driver-row">
           <div class="rb-driver-block">
             <div class="val" style="font-size:14px;">AED ${Math.round(r.renewal_required_premium).toLocaleString()}</div>
-            <div class="lbl">Renewal required (Method A)</div>
+            <div class="lbl">Renewal required &middot; IBNR from this account's own paid run-rate</div>
           </div>
           <div class="rb-driver-block">
             <div class="val" style="font-size:14px;">AED ${Math.round(r.renewal_required_premium_method_b).toLocaleString()}</div>
-            <div class="lbl">Renewal required (Method B)</div>
+            <div class="lbl">Renewal required &middot; IBNR at a flat 10%</div>
           </div>
           ${r.new_business_module_premium != null ? `
+            <div class="rb-driver-op">vs</div>
             <div class="rb-driver-block">
               <div class="val" style="font-size:14px;">AED ${Math.round(r.new_business_module_premium).toLocaleString()}</div>
-              <div class="lbl">New Business module rate &middot; quote #${r.new_business_quote_id}</div>
+              <div class="lbl">New Business rate card &middot; quote #${r.new_business_quote_id}</div>
             </div>
             <div class="rb-driver-op">=</div>
             <div class="rb-driver-block ${gapCls}">
               <div class="val">${r.gap > 0 ? '+' : ''}${r.gap_pct}%</div>
-              <div class="lbl">Gap vs. renewal (A) &middot; ${r.gap > 0 ? '+' : ''}AED ${Math.round(r.gap).toLocaleString()}</div>
+              <div class="lbl">${r.gap > 0 ? 'the card charges more than the account needs' : 'the card would under-rate this account'} &middot; ${r.gap > 0 ? '+' : ''}AED ${Math.round(r.gap).toLocaleString()}</div>
             </div>
           ` : ''}
         </div>
-        ${r.new_business_module_premium == null ? `<div class="rb-nb-source">No New Business module premium available yet - upload a rate card and pick each Benefits category's Product/Network/TPA to generate one automatically.</div>` : ''}
+        ${r.new_business_module_premium == null ? `<div class="rb-nb-source">
+          No rate card figure yet. The card needs Product, Network and TPA per category
+          ${(r.missing_for_new_business || []).length ? `&mdash; still to set:
+            ${r.missing_for_new_business.map(m => `<strong>${m.category ? 'Category ' + escapeHtml(m.category) : ''}
+              ${escapeHtml(m.missing.join(', '))}</strong>`).join('; ')}` : ''}.
+          Set them on the Benefits tab and this generates automatically.</div>` : ''}
+        <div class="hint" style="margin-top:10px;">
+          The two renewal figures rest on the same claims and differ only in how the claims incurred
+          but not yet reported are estimated - from this account's own paid run-rate, or at a flat 10%.
+          They are ${Math.abs(((r.renewal_required_premium_method_b / r.renewal_required_premium) - 1) * 100).toFixed(1)}%
+          apart, so treat them as the range rather than picking one. The run-rate figure is the
+          measured one; the flat 10% is an assumption.
+        </div>
       </div>
     `;
   } catch (err) {

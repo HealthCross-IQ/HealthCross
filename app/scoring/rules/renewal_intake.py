@@ -209,6 +209,13 @@ def renewal_intake_profile(
         "average_annual_rate": round(annualised / rated, 2) if rated else None,
         "region": _mode([m.get("region") for m in term_members]),
         "product": _mode([m.get("product_name") for m in term_members]),
+        # The network this account is actually on, off its own membership
+        # rows. The rate card needs Product, Network and TPA to price a
+        # census; two of the three are already on the book, and asking an
+        # underwriter to re-pick those on the Benefits tab is asking them
+        # to retype what the portal holds. TPA is not on the membership
+        # export at all, so it stays a manual pick rather than a guess.
+        "network": _mode([m.get("network_type_raw") for m in term_members]),
         "prior_term_member_count": len(account) - len(term_members),
         "by_category": sorted(by_category.values(), key=lambda b: b["category"]),
         "by_relation": [{"relation": k, "member_count": v} for k, v in sorted(relations.items())],
