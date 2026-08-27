@@ -540,6 +540,23 @@ def population_movement(
 RENEWAL_IBNR_TAIL_DAYS = 30
 
 
+def data_covered_to(claims_by_beneficiary: Dict[str, List[dict]]) -> Optional[date_cls]:
+    """The last day the claims export actually covers.
+
+    A property of the file rather than of the account: an account with a
+    quiet August has not stopped being covered, so this reads the latest
+    treatment date across everything given, not the account's own last
+    claim.
+    """
+    latest = None
+    for claims in claims_by_beneficiary.values():
+        for claim in claims:
+            treated = claim.get("date_of_treatment")
+            if treated and (latest is None or treated > latest):
+                latest = treated
+    return latest
+
+
 def renewal_loss_ratio(
     members: List[dict],
     claims_by_beneficiary: Dict[str, List[dict]],
@@ -567,8 +584,17 @@ def renewal_loss_ratio(
     members' paid claims, after the leavers have gone. Computing it on
     everybody's would reserve a tail for people who are no longer on
     risk.
+
+    ``as_of`` defaults to the last day the claims data covers, not to
+    today. Earning premium to today against claims that stop at the
+    extract date credits the account with premium for weeks nobody has
+    reported a claim in yet, and it flatters the ratio by more the
+    longer the extract sits: KIKO's 15 August file read on 27 August
+    came out at 104.1% earned to today against 108.8% earned to the
+    data. Pass a date to measure to a specific day.
     """
-    as_of = as_of or date_cls.today()
+    as_of_supplied = as_of is not None
+    as_of = as_of or data_covered_to(claims_by_beneficiary) or date_cls.today()
     term_members = current_term_members(members)
     continuing, leaving = continuing_and_leaving(members, cut_date)
     windows = term_member_windows(term_members)
@@ -614,6 +640,7 @@ def renewal_loss_ratio(
 
     return {
         "as_of": as_of,
+        "as_of_source": "supplied" if as_of_supplied else "the last day the claims data covers",
         "cut_date": cut_date,
         "active_member_count": len(continuing),
         "deleted_member_count": len(leaving),
@@ -669,15 +696,26 @@ def compare_against_supplied_census(
     pairing on demographics - a guessed pairing produced 93 phantom
     leavers on another account and halved its experience.
 
-    A name on the census that is not on this account's roster is not
-    automatically a joiner. Groups are booked as several contracts far
+    A name on the census that is not on this account's active roster is
+    not automatically a joiner, and the distinction is the whole of how
+    they price: a joiner has no experience and goes to the rate card,
+    everybody else has a year of claims sitting in the file. Three
+    things it can be instead.
+
+    On a sibling contract. Groups are booked as several contracts far
     more often than they are quoted as several: KIKO's census covers
-    seven entities and comparing it against the one master client the
+    seven entities, and comparing it against the one master client the
     renewal is filed under reported 26 joiners, of which 23 were
-    already on the book under a sibling contract. Pass
-    ``elsewhere_in_book`` - every reference in the portfolio mapped to
-    the account it sits on - and those are named as what they are
-    instead of being counted as new lives.
+    already on the book elsewhere. Pass ``elsewhere_in_book`` - every
+    reference in the portfolio mapped to the account it sits on - and
+    those are named rather than counted as new lives.
+
+    Returning. A member whose cover ended before the cut date is off the
+    active roster but not off the book, and if the broker has put them
+    back on the census they are coming back with their history. KIKO
+    carries two, one off risk since July and one since August.
+
+    Genuinely new, which is what is left.
     """
     active, _ = continuing_and_leaving(members, cut_date)
     supplied = {str(r).strip() for r in supplied_refs if r is not None and str(r).strip()}
@@ -687,8 +725,8 @@ def compare_against_supplied_census(
     leaving = [m for ref, m in by_ref.items() if ref not in supplied]
     unmatched = sorted(supplied - set(by_ref))
 
-    # Split the unmatched names: on another contract in the book, or
-    # genuinely new. Only the second group has no experience behind it.
+    # Split the unmatched names three ways. Only the last has no
+    # experience behind it, and only the last prices off the rate card.
     on_other_contracts: Dict[str, List[str]] = {}
     if elsewhere_in_book:
         for ref in unmatched:
@@ -696,7 +734,23 @@ def compare_against_supplied_census(
             if account:
                 on_other_contracts.setdefault(account, []).append(ref)
     seen_elsewhere = {r for refs in on_other_contracts.values() for r in refs}
-    joining = [r for r in unmatched if r not in seen_elsewhere]
+
+    # A member whose cover ended before the cut date is off the active
+    # roster but not off the book: KIKO's census carries two of them,
+    # one who left in July and one in August, and both have a year of
+    # claims behind them. Reading them as new lives would price them off
+    # the rate card while their own history sat in the file.
+    all_on_account = {}
+    for member in members:
+        ref = str(member.get("beneficiary_id") or "").strip()
+        if ref and ref not in all_on_account:
+            all_on_account[ref] = member
+    returning_members = [
+        all_on_account[r] for r in unmatched
+        if r not in seen_elsewhere and r in all_on_account and r not in by_ref
+    ]
+    returning_refs = {str(m.get("beneficiary_id") or "").strip() for m in returning_members}
+    joining = [r for r in unmatched if r not in seen_elsewhere and r not in returning_refs]
 
     windows = term_member_windows(current_term_members(members))
 
@@ -731,6 +785,22 @@ def compare_against_supplied_census(
                          "claims": claims_for([m])}
                         for m in sorted(leaving, key=lambda x: -claims_for([x]))
                     ]},
+        # Back on the census after coming off risk mid-term. They price
+        # off their own experience, not off the rate card.
+        "returning": {
+            "member_count": len(returning_members),
+            "claims": claims_for(returning_members),
+            "premium": premium_for(returning_members),
+            "members": [
+                {"beneficiary_id": m.get("beneficiary_id"),
+                 "relation": m.get("relation"), "age": m.get("age"),
+                 "gender": m.get("gender"),
+                 "cover_ended": m.get("member_end_date"),
+                 "annual_rate": member_annual_rate(m),
+                 "claims": claims_for([m])}
+                for m in sorted(returning_members, key=lambda x: -claims_for([x]))
+            ],
+        },
         "joining": {"member_count": len(joining), "references": joining},
         # Named, not counted as joiners: these are on the book already,
         # under another contract. Whether they belong in this renewal is

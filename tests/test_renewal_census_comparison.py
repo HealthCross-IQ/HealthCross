@@ -244,3 +244,90 @@ def test_the_endpoint_404s_for_an_account_that_is_not_on_the_book(client):
 
 def test_the_endpoint_400s_before_any_membership_is_uploaded(client):
     assert _post(client, "Acme", ["A"]).status_code == 400
+
+
+# --- coming back after coming off risk -----------------------------------
+
+def test_a_member_off_risk_before_the_cut_date_is_returning_not_joining():
+    # KIKO's census carries two of these, one off risk since July and one
+    # since August. Both have a year of claims behind them; reading them
+    # as new lives would price them off the rate card with their own
+    # history sitting in the file.
+    left = _m("R1", end=date(2026, 7, 9))
+    out = compare_against_supplied_census([_m("A"), left], ["A", "R1"],
+                                          _claims(A=1000, R1=25_000), as_of=AS_OF)
+    assert out["joining"]["member_count"] == 0
+    assert out["returning"]["member_count"] == 1
+    assert out["returning"]["claims"] == 25_000
+    assert out["returning"]["members"][0]["cover_ended"] == date(2026, 7, 9)
+
+
+def test_a_returning_member_is_in_neither_loss_ratio():
+    # Neither roster has them on risk at the cut date, so neither ratio
+    # can carry them - saying so beats letting a reader assume they are
+    # in one of the two.
+    left = _m("R1", end=date(2026, 7, 9))
+    out = compare_against_supplied_census([_m("A"), left], ["A", "R1"],
+                                          _claims(A=1000, R1=25_000), as_of=AS_OF)
+    assert out["on_book_roster"]["active_member_count"] == 1
+    assert out["on_supplied_census"]["active_member_count"] == 1
+
+
+def test_a_sibling_contract_still_wins_over_returning():
+    # A name on another live contract is a scoping question; only a name
+    # on THIS account that has come off risk is a returning member.
+    out = compare_against_supplied_census(
+        [_m("A")], ["A", "S1"], _claims(A=1000), as_of=AS_OF,
+        elsewhere_in_book={"S1": "KIKO COSMETICS LLC"},
+    )
+    assert out["returning"]["member_count"] == 0
+    assert out["on_other_contracts"]["member_count"] == 1
+
+
+def test_an_account_with_nobody_returning_says_zero():
+    out = compare_against_supplied_census([_m("A")], ["A", "NEW1"], _claims(A=1000), as_of=AS_OF)
+    assert out["returning"]["member_count"] == 0
+    assert out["joining"]["references"] == ["NEW1"]
+
+
+# --- what date the year is measured to -----------------------------------
+
+def test_the_year_is_measured_to_the_data_not_to_today():
+    # Earning premium to today against claims that stop at the extract
+    # date credits the account with premium for weeks nobody has
+    # reported a claim in yet, and it flatters the ratio by more the
+    # longer the extract sits. KIKO's 15 August file read on 27 August
+    # came out 4.7 points better earned to today.
+    from app.scoring.rules.renewal_intake import renewal_loss_ratio
+
+    claims = {"A": [{"patient_id": "A", "final_amount": 5000.0, "claim_status": "Paid Claims",
+                     "date_of_treatment": date(2026, 3, 1)}]}
+    out = renewal_loss_ratio([_m("A")], claims)
+    assert out["as_of"] == date(2026, 3, 1)
+    assert out["as_of_source"] == "the last day the claims data covers"
+
+
+def test_an_explicit_date_still_wins():
+    from app.scoring.rules.renewal_intake import renewal_loss_ratio
+
+    claims = {"A": [{"patient_id": "A", "final_amount": 5000.0, "claim_status": "Paid Claims",
+                     "date_of_treatment": date(2026, 3, 1)}]}
+    out = renewal_loss_ratio([_m("A")], claims, as_of=date(2026, 8, 15))
+    assert out["as_of"] == date(2026, 8, 15)
+    assert out["as_of_source"] == "supplied"
+
+
+def test_the_extract_date_is_read_across_the_book_not_the_account():
+    # An account with a quiet August has not stopped being covered.
+    from app.scoring.rules.renewal_intake import data_covered_to
+
+    claims = {"A": [{"date_of_treatment": date(2026, 3, 1)}],
+              "Z": [{"date_of_treatment": date(2026, 8, 15)}]}
+    assert data_covered_to(claims) == date(2026, 8, 15)
+
+
+def test_no_dated_claims_at_all_falls_back_rather_than_raising():
+    from app.scoring.rules.renewal_intake import data_covered_to
+
+    assert data_covered_to({}) is None
+    assert data_covered_to({"A": [{"final_amount": 1.0}]}) is None

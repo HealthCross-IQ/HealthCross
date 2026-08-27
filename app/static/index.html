@@ -5465,6 +5465,11 @@ function _rbCensusRender() {
             <td class="num">${aed(r.staying.claims)}</td><td class="num">${aed(r.staying.premium)}</td></tr>
         <tr><td>On the book, not on the census &mdash; leaving</td><td class="num">${r.leaving.member_count}</td>
             <td class="num">${aed(r.leaving.claims)}</td><td class="num">${aed(r.leaving.premium)}</td></tr>
+        ${(r.returning && r.returning.member_count) ? `
+        <tr><td>Off risk before the cut date, back on the census &mdash; returning</td>
+            <td class="num">${r.returning.member_count}</td>
+            <td class="num">${aed(r.returning.claims)}</td>
+            <td class="num">${aed(r.returning.premium)}</td></tr>` : ''}
         <tr><td>On the census, nowhere on the book &mdash; joining</td>
             <td class="num">${r.joining.member_count}</td>
             <td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
@@ -5480,6 +5485,10 @@ function _rbCensusRender() {
       ${siblingBlock}
 
       <h4 style="margin-top:18px;">The year measured both ways</h4>
+      <div class="hint">Measured to ${escapeHtml(String(book.as_of || ''))}${
+        book.as_of_source === 'supplied' ? '' : ', the last day the claims export covers'} &mdash;
+        ${book.elapsed_days} days of the term. Premium is earned to the same day the claims stop, so
+        the ratio is not credited with weeks nobody has reported a claim in yet.</div>
       <div class="scroll"><table style="margin-top:8px;">
         <tr><th></th><th class="num">Active</th><th class="num">Paid</th><th class="num">Outstanding</th>
             <th class="num">IBNR</th><th class="num">Incurred</th><th class="num">Earned premium</th>
@@ -5496,6 +5505,23 @@ function _rbCensusRender() {
              ${(Math.abs(moved) * 100).toFixed(1)} points. That is only a price if those members are
              genuinely not renewing &mdash; the broker's list is a statement of intent, not a
              cancellation.</div>`}
+
+      ${(r.returning && r.returning.member_count) ? `
+        <h4 style="margin-top:18px;">Returning &mdash; off risk now, back on the census</h4>
+        <div class="hint">These have a year of claims behind them, so they price off their own
+          experience rather than off the rate card. They are not in either loss ratio below: neither
+          roster has them on risk at the cut date.</div>
+        <div class="scroll"><table style="margin-top:8px;">
+          <tr><th>Member</th><th>Relation</th><th class="num">Age</th><th>Cover ended</th>
+              <th class="num">Claims</th><th class="num">Annual rate</th></tr>
+          ${r.returning.members.map(m => `
+            <tr><td>${escapeHtml(String(m.beneficiary_id || ''))}</td>
+                <td>${escapeHtml(String(m.relation || ''))}</td>
+                <td class="num">${m.age == null ? '&mdash;' : m.age}</td>
+                <td>${escapeHtml(String(m.cover_ended || ''))}</td>
+                <td class="num">${aed(m.claims)}</td>
+                <td class="num">${aed(m.annual_rate)}</td></tr>`).join('')}
+        </table></div>` : ''}
 
       ${r.leaving.member_count ? `
         <h4 style="margin-top:18px;">Leaving the account, worst first</h4>
