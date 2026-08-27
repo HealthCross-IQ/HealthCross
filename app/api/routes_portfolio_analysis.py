@@ -928,6 +928,105 @@ def population_movement_for_account(master_client: str, db: Session = Depends(ge
     return {"master_client": master_client, **population_movement(account)}
 
 
+@router.post("/renewal-census-comparison/{master_client}")
+async def compare_renewal_census(
+    master_client: str,
+    file: UploadFile = File(..., description="The census the broker has sent for the renewal"),
+    as_at: Optional[date] = Query(None, description="Cut date deciding who is active on the book"),
+    as_of: Optional[date] = Query(None, description="Date the year is measured as elapsed to"),
+    include: List[str] = Query(
+        default_factory=list,
+        description="Further master clients to read as part of this account, for a group booked as several contracts",
+    ),
+    db: Session = Depends(get_db),
+):
+    """The book's active roster against the census a broker has sent,
+    priced both ways.
+
+    A renewal census usually differs from the book, and the difference
+    is the account's shape at renewal rather than a reconciliation
+    chore: KIKO arrived with 69 names against 71, five leaving - four of
+    them one household carrying 9% of the year's claims - and three
+    joining with no history at all.
+
+    Both scenarios come back, never one. On the book's roster the
+    account is what it has been; on the broker's list it is what it will
+    be, and the two beside each other is the only way to see whether the
+    difference is worth anything. Nothing is written to the case - this
+    reads the file and answers.
+
+    A group is often booked as several contracts and quoted as one.
+    ``include`` widens the roster to those contracts; without it, names
+    on the census that sit under a sibling contract are reported as
+    exactly that rather than counted as joiners - KIKO's census read
+    against its lead entity alone shows 26 joiners, of which 23 are
+    already on the book.
+    """
+    from app.ingestion.census import parse_census
+    from app.scoring.rules.renewal_intake import compare_against_supplied_census
+
+    members = _member_dicts(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    subgroups = _subgroup_master_by_name(db)
+    account = account_members(members, master_client, subgroups)
+    for sibling in include:
+        account += account_members(members, sibling, subgroups)
+    if not account:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+
+    try:
+        rows = parse_census(file.file, file.filename)
+    except Exception as exc:  # noqa: BLE001 - the parser raises many shapes
+        raise HTTPException(status_code=400, detail=f"Could not read that census: {exc}")
+    if not rows:
+        raise HTTPException(status_code=400, detail="No member rows found in that file")
+
+    refs = [r.get("employee_ref") for r in rows if r.get("employee_ref")]
+    if not refs:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "That census carries no member reference column, so it cannot be matched against "
+                "the book. The comparison needs one identifier per row - Dependent_Insured_Number, "
+                "Employee ID or similar."
+            ),
+        )
+
+    claims = [
+        {"patient_id": pid, "date_of_treatment": dot, "final_amount": amt, "claim_status": st}
+        for pid, dot, amt, st in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+        ).all()
+    ]
+    # Where else in the portfolio a census name might already sit, so a
+    # sibling contract's member is not reported as a new life.
+    on_this_account = {id(m) for m in account}
+    elsewhere = {}
+    for member in members:
+        if id(member) in on_this_account:
+            continue
+        ref = str(member.get("beneficiary_id") or "").strip()
+        if ref:
+            elsewhere.setdefault(ref, resolve_master_client(member, subgroups))
+
+    result = compare_against_supplied_census(
+        account, refs, group_claims_by_beneficiary(claims),
+        as_of=as_of, cut_date=as_at, elsewhere_in_book=elsewhere,
+    )
+    return {
+        "master_client": master_client,
+        "also_included": include,
+        "filename": file.filename,
+        "rows_read": len(rows),
+        "rows_with_a_reference": len(refs),
+        **result,
+    }
+
+
 @router.get("/renewal-repricing/{master_client}")
 def renewal_repricing(
     master_client: str,

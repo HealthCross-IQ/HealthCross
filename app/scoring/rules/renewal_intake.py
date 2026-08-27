@@ -25,7 +25,7 @@ against hand-built rows.
 """
 from collections import Counter
 from datetime import date as date_cls
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 from app.scoring.rules.portfolio_analysis import _claim_matches_period, resolve_master_client
 
@@ -638,4 +638,138 @@ def renewal_loss_ratio(
                 if (active_paid + active_outstanding + leaver_paid + leaver_outstanding) else None
             ),
         },
+    }
+
+
+def compare_against_supplied_census(
+    members: List[dict],
+    supplied_refs: Sequence[str],
+    claims_by_beneficiary: Dict[str, List[dict]],
+    as_of: Optional[date_cls] = None,
+    cut_date: Optional[date_cls] = None,
+    elsewhere_in_book: Optional[Dict[str, str]] = None,
+) -> dict:
+    """The book's active roster against a census the broker has sent.
+
+    A renewal census usually differs from the book, and the difference
+    is the account's shape at renewal rather than a reconciliation
+    chore. KIKO arrived with 69 names against 71 on the book: five
+    leaving - four of them one household carrying 9% of the year's
+    claims - and three joining with no history at all.
+
+    Both scenarios are returned, never one. Priced on the book's own
+    roster the account is what it has been; priced on the broker's list
+    it is what it will be, and an underwriter needs to see the two
+    beside each other to know whether the difference is worth anything.
+    Showing only the second invites a better ratio to be quoted without
+    anyone seeing what produced it.
+
+    Matching is on beneficiary reference alone. Where the two sides do
+    not share identifiers this reports that rather than falling back to
+    pairing on demographics - a guessed pairing produced 93 phantom
+    leavers on another account and halved its experience.
+
+    A name on the census that is not on this account's roster is not
+    automatically a joiner. Groups are booked as several contracts far
+    more often than they are quoted as several: KIKO's census covers
+    seven entities and comparing it against the one master client the
+    renewal is filed under reported 26 joiners, of which 23 were
+    already on the book under a sibling contract. Pass
+    ``elsewhere_in_book`` - every reference in the portfolio mapped to
+    the account it sits on - and those are named as what they are
+    instead of being counted as new lives.
+    """
+    active, _ = continuing_and_leaving(members, cut_date)
+    supplied = {str(r).strip() for r in supplied_refs if r is not None and str(r).strip()}
+    by_ref = {str(m.get("beneficiary_id") or "").strip(): m for m in active}
+
+    staying = [m for ref, m in by_ref.items() if ref in supplied]
+    leaving = [m for ref, m in by_ref.items() if ref not in supplied]
+    unmatched = sorted(supplied - set(by_ref))
+
+    # Split the unmatched names: on another contract in the book, or
+    # genuinely new. Only the second group has no experience behind it.
+    on_other_contracts: Dict[str, List[str]] = {}
+    if elsewhere_in_book:
+        for ref in unmatched:
+            account = elsewhere_in_book.get(ref)
+            if account:
+                on_other_contracts.setdefault(account, []).append(ref)
+    seen_elsewhere = {r for refs in on_other_contracts.values() for r in refs}
+    joining = [r for r in unmatched if r not in seen_elsewhere]
+
+    windows = term_member_windows(current_term_members(members))
+
+    def claims_for(group) -> float:
+        total = 0.0
+        for m in group:
+            bid = m.get("beneficiary_id")
+            total += sum(
+                c.get("final_amount") or 0.0
+                for c in claims_by_beneficiary.get(bid, ())
+                if claim_belongs_to_term(bid, c.get("date_of_treatment"), windows)
+            )
+        return round(total, 2)
+
+    def premium_for(group) -> float:
+        return round(sum(member_annual_rate(m) or 0.0 for m in group), 2)
+
+    matched = len(staying)
+    return {
+        "as_at": cut_date,
+        "book_active_count": len(active),
+        "supplied_count": len(supplied),
+        "staying": {"member_count": matched, "claims": claims_for(staying),
+                    "premium": premium_for(staying)},
+        "leaving": {"member_count": len(leaving), "claims": claims_for(leaving),
+                    "premium": premium_for(leaving),
+                    "members": [
+                        {"beneficiary_id": m.get("beneficiary_id"),
+                         "relation": m.get("relation"), "age": m.get("age"),
+                         "gender": m.get("gender"),
+                         "annual_rate": member_annual_rate(m),
+                         "claims": claims_for([m])}
+                        for m in sorted(leaving, key=lambda x: -claims_for([x]))
+                    ]},
+        "joining": {"member_count": len(joining), "references": joining},
+        # Named, not counted as joiners: these are on the book already,
+        # under another contract. Whether they belong in this renewal is
+        # an underwriting question, and it needs the account names to be
+        # answerable.
+        "on_other_contracts": {
+            "member_count": len(seen_elsewhere),
+            "accounts": [
+                {"master_client": account, "member_count": len(refs), "references": sorted(refs)}
+                for account, refs in sorted(on_other_contracts.items(), key=lambda kv: -len(kv[1]))
+            ],
+            "note": (
+                f"{len(seen_elsewhere)} of the {len(unmatched)} names on the census that are not on "
+                f"this account's roster are already in the portfolio under "
+                f"{len(on_other_contracts)} other contract(s). They are only joiners to this "
+                f"renewal if the account is being written as one contract - re-run the comparison "
+                f"including those contracts to price it that way."
+            ) if seen_elsewhere else None,
+        },
+        # Both prices. On the book's roster, and on the roster the
+        # broker actually sent.
+        "on_book_roster": renewal_loss_ratio(members, claims_by_beneficiary,
+                                             as_of=as_of, cut_date=cut_date),
+        # The same measurement with only the active members the census
+        # left out removed. Rows that are not on the active roster at
+        # all - prior policy years, members already off risk - stay in,
+        # because the loss ratio needs them to build its term windows.
+        "on_supplied_census": renewal_loss_ratio(
+            [m for m in members
+             if str(m.get("beneficiary_id") or "").strip() in supplied
+             or str(m.get("beneficiary_id") or "").strip() not in by_ref],
+            claims_by_beneficiary, as_of=as_of, cut_date=cut_date),
+        # A census that shares no references with the book has not been
+        # compared, it has been guessed at, and saying so is the only
+        # honest output.
+        "reliable": bool(supplied) and matched > 0,
+        "warning": (
+            f"None of the {len(supplied)} references on the supplied census matches the book. "
+            f"The two files do not share member identifiers, so this is not a comparison."
+            if supplied and not matched else None
+        ),
     }

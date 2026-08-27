@@ -156,3 +156,29 @@ def test_parse_census_floors_age_at_zero_for_a_newborn_added_mid_term():
     )
     records = parse_census(_xlsx(df), "census.xlsx")
     assert records[0]["age"] == 0
+
+
+def test_the_insurers_own_member_number_is_read_as_the_reference():
+    # An insurer's active-member list calls the per-member identifier
+    # Dependent_Insured_Number, and the census parser only knew
+    # "Employee ID". KIKO's 69 rows all parsed with a blank reference,
+    # so the renewal census could not be matched against the book at all
+    # - every member came back as both a leaver and a joiner.
+    df = pd.DataFrame([
+        {"Dependent_Insured_Number": "KKM0020S", "Main_Insured_Number": "KKM0020",
+         "Relation": "Spouse", "Gender": "F", "DOB": "1986-02-03"},
+        {"Dependent_Insured_Number": "KKM0020", "Main_Insured_Number": "KKM0020",
+         "Relation": "Employee", "Gender": "M", "DOB": "1987-05-19"},
+    ])
+    records = parse_census(_xlsx(df), "active members.xlsx")
+
+    # The member's own number, not the household's - Main_Insured_Number
+    # would pair a spouse and three children with each other.
+    assert [r["employee_ref"] for r in records] == ["KKM0020S", "KKM0020"]
+
+
+def test_the_household_number_is_used_only_when_nothing_better_is_there():
+    df = pd.DataFrame([
+        {"Main_Insured_Number": "KKM0031", "Relation": "Employee", "Gender": "M"},
+    ])
+    assert parse_census(_xlsx(df), "c.xlsx")[0]["employee_ref"] == "KKM0031"

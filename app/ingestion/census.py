@@ -11,7 +11,20 @@ from app.reference.nationality_zones import classify_zone
 # Salary, Nationality); the extra aliases keep other brokers' templates
 # working without a rewrite.
 CENSUS_ALIASES: Dict[str, List[str]] = {
-    "employee_ref": ["employee id", "emp id", "staff no", "id", "member id"],
+    # The member's own identifier, which is what a renewal census has to
+    # be matched on. The insurer's exports call it Dependent_Insured_
+    # Number - the row is per member, and a dependant carries their own
+    # number - so a census that only knew "employee id" parsed every row
+    # with a blank reference and could not be compared with the book at
+    # all. Main_Insured_Number is the household, not the member, so it
+    # sits last: it would pair three siblings with each other.
+    "employee_ref": [
+        "dependent_insured_number", "dependent insured number",
+        "insured_ref_employee_id", "insured ref employee id",
+        "employee id", "emp id", "staff no", "id", "member id",
+        "beneficiary id", "beneficiary_id", "member number",
+        "main_insured_number", "main insured number",
+    ],
     "category": ["category", "plan category", "class", "plan class"],
     "age": ["age", "current age"],
     "date_of_birth": ["dob", "date of birth", "birth date"],
