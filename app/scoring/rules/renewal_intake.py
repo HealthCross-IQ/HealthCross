@@ -533,3 +533,109 @@ def population_movement(
     )
 
     return {"term_start": term_start, "term_end": term_end, "rows": rows, "totals": totals}
+
+
+#: The unreported tail the house prices on - the same 30 days the
+#: portfolio Loss Ratio board uses, so the two cannot disagree.
+RENEWAL_IBNR_TAIL_DAYS = 30
+
+
+def renewal_loss_ratio(
+    members: List[dict],
+    claims_by_beneficiary: Dict[str, List[dict]],
+    as_of: Optional[date_cls] = None,
+    cut_date: Optional[date_cls] = None,
+    ibnr_tail_days: int = RENEWAL_IBNR_TAIL_DAYS,
+) -> dict:
+    """The house renewal loss ratio, in the order underwriting states it:
+
+      1. Drop the claims of members who are not renewing.
+      2. Add IBNR - the active members' own paid run-rate over a 30-day
+         unreported tail.
+      3. Divide by premium EARNED by those same active members.
+
+    Every step is about keeping the two halves of the ratio describing
+    the same thing. Leavers' claims do not carry forward, so they are
+    not part of what the renewing population costs. And claims measured
+    over part of a year belong against premium earned over that same
+    part - earning the premium down is a measurement, where scaling the
+    claims up asserts the rest of the year looks like the part observed.
+    On KIKO, where one family carried 9% of the claims, that assumption
+    is exactly the one that fails.
+
+    Ordering matters and is not cosmetic: IBNR is computed on the ACTIVE
+    members' paid claims, after the leavers have gone. Computing it on
+    everybody's would reserve a tail for people who are no longer on
+    risk.
+    """
+    as_of = as_of or date_cls.today()
+    term_members = current_term_members(members)
+    continuing, leaving = continuing_and_leaving(members, cut_date)
+    windows = term_member_windows(term_members)
+    term_start, term_end = current_term(term_members)
+
+    def split(group):
+        paid = outstanding = 0.0
+        for m in group:
+            bid = m.get("beneficiary_id")
+            for claim in claims_by_beneficiary.get(bid, ()):
+                if not claim_belongs_to_term(bid, claim.get("date_of_treatment"), windows):
+                    continue
+                amount = claim.get("final_amount") or 0.0
+                if "outstanding" in str(claim.get("claim_status") or "").lower():
+                    outstanding += amount
+                else:
+                    paid += amount
+        return paid, outstanding
+
+    active_paid, active_outstanding = split(continuing)
+    leaver_paid, leaver_outstanding = split(leaving)
+
+    # Elapsed exposure, per member, on their own cover - not on the
+    # scheme term. A member endorsed on in month ten has earned two
+    # months of premium, not ten.
+    earned = 0.0
+    elapsed_days = 0
+    for m in continuing:
+        rate = member_annual_rate(m) or 0.0
+        start = m.get("member_start_date") or term_start
+        end = m.get("member_end_date") or term_end
+        if not (rate and start and end):
+            continue
+        on = max(start, term_start) if term_start else start
+        off = min(end, as_of, term_end) if term_end else min(end, as_of)
+        days = max(0, (off - on).days + 1)
+        term_days = ((term_end - term_start).days + 1) if (term_start and term_end) else 365
+        earned += rate * min(1.0, days / term_days)
+        elapsed_days = max(elapsed_days, days)
+
+    ibnr = round(active_paid / elapsed_days * ibnr_tail_days, 2) if (active_paid and elapsed_days) else 0.0
+    incurred = active_paid + active_outstanding + ibnr
+
+    return {
+        "as_of": as_of,
+        "cut_date": cut_date,
+        "active_member_count": len(continuing),
+        "deleted_member_count": len(leaving),
+        "paid": round(active_paid, 2),
+        "outstanding": round(active_outstanding, 2),
+        "ibnr": ibnr,
+        "ibnr_tail_days": ibnr_tail_days,
+        "incurred": round(incurred, 2),
+        "earned_premium": round(earned, 2),
+        "elapsed_days": elapsed_days,
+        "loss_ratio": round(incurred / earned, 4) if earned else None,
+        # Reported so the exclusion can be seen rather than taken on
+        # trust - a leaver group carrying a large share of the year is
+        # the finding, not a footnote.
+        "excluded": {
+            "paid": round(leaver_paid, 2),
+            "outstanding": round(leaver_outstanding, 2),
+            "incurred": round(leaver_paid + leaver_outstanding, 2),
+            "share_of_all_claims": (
+                round((leaver_paid + leaver_outstanding) /
+                      (active_paid + active_outstanding + leaver_paid + leaver_outstanding), 4)
+                if (active_paid + active_outstanding + leaver_paid + leaver_outstanding) else None
+            ),
+        },
+    }

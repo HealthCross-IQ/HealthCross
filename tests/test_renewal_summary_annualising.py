@@ -1,5 +1,6 @@
-"""A part-year numerator over a whole-year denominator is not a loss
-ratio - app/api/routes_cases.py's get_renewal_summary.
+"""Claims to date belong against premium earned to date - both over the
+same elapsed part of the year, neither side projected.
+app/api/routes_cases.py's get_renewal_summary.
 """
 from datetime import date
 
@@ -29,18 +30,20 @@ def _row(client, **params):
     return body["cases"][0], body
 
 
-def test_a_part_year_ledger_is_annualised_before_it_is_compared_with_premium(client):
-    # Ten and a half months into the year, the raw sum divided by a full
-    # year's premium understated Safran at 86% and suggested giving 6%
-    # back, while the same account's Renewal Bench asked for +26%.
+def test_premium_is_earned_down_rather_than_claims_projected_up(client):
+    # Both halves of the ratio cover the same elapsed period. Earning
+    # the premium down is a measurement; projecting the claims up
+    # asserts the rest of the year looks like the part observed, which
+    # on an account carried by one family is exactly what fails.
     _case(client, premium=3_235_630.0, start=date(2025, 10, 1),
           renewal=date(2026, 9, 30), claims=[2_043_338.0])
     row, _ = _row(client, as_of="2026-08-15")
 
-    assert row["incurred_claims_to_date"] == 2_043_338.0
-    assert row["annualised"] is True
-    assert row["incurred_claims"] > row["incurred_claims_to_date"]
-    assert row["elapsed_days"] < 365
+    assert row["paid"] == 2_043_338.0
+    assert row["earned_fraction"] < 1.0
+    assert row["earned_premium"] < row["current_annual_premium"]
+    # Claims are reported as measured, plus the IBNR tail - never scaled.
+    assert row["incurred_claims"] == row["paid"] + row["outstanding"] + row["ibnr"]
 
 
 def test_annualising_turns_the_answer_from_a_reduction_into_an_increase(client):
@@ -50,24 +53,26 @@ def test_annualising_turns_the_answer_from_a_reduction_into_an_increase(client):
     assert row["suggested_increase_pct"] > 0, "the account needs more premium, not less"
 
 
-def test_a_completed_year_is_not_annualised_again(client):
-    # Once the term is over the figure is complete. Scaling it up a
-    # second time would inflate every expired account on the list.
+def test_a_completed_year_earns_its_whole_premium_and_carries_no_ibnr(client):
+    # Past expiry both sides are final: the premium is fully earned and
+    # claims have had a year to filter through.
     _case(client, premium=1_000_000.0, start=date(2025, 1, 1),
           renewal=date(2025, 12, 31), claims=[800_000.0])
     row, _ = _row(client, as_of="2026-08-15")
-    assert row["annualised"] is False
+    assert row["earned_fraction"] == 1.0
+    assert row["ibnr"] == 0.0
     assert row["incurred_claims"] == 800_000.0
 
 
-def test_a_case_with_no_policy_start_is_left_as_measured(client):
-    # Nothing to measure elapsed time against. Reporting the raw sum is
-    # honest; inventing a term to scale it by is not.
+def test_a_case_with_no_policy_start_earns_its_whole_premium(client):
+    # Nothing to measure elapsed time against. Treating the premium as
+    # fully earned is the conservative reading - it cannot understate
+    # the loss ratio.
     _case(client, premium=1_000_000.0, start=None, renewal=None, claims=[500_000.0])
     row, _ = _row(client)
     assert row["elapsed_days"] is None
+    assert row["earned_fraction"] == 1.0
     assert row["incurred_claims"] == 500_000.0
-    assert row["annualised"] is False
 
 
 def test_the_list_prices_to_the_house_target_not_to_break_even(client):
@@ -82,12 +87,13 @@ def test_the_list_prices_to_the_house_target_not_to_break_even(client):
     assert body["target_net_loss_ratio"] == HOUSE_TARGET_LOSS_RATIO
 
 
-def test_both_the_measured_and_the_projected_figure_are_reported(client):
-    # So a reader can see what was counted and what was inferred from it,
-    # rather than being handed one number and asked to trust it.
+def test_the_build_up_is_reported_line_by_line(client):
+    # So the figure can be checked against a spreadsheet rather than
+    # trusted whole - which is how the 71% against 112% was caught.
     _case(client, premium=1_000_000.0, start=date(2025, 10, 1),
           renewal=date(2026, 9, 30), claims=[400_000.0])
     row, _ = _row(client, as_of="2026-08-15")
-    assert row["incurred_claims_to_date"] == 400_000.0
-    assert row["incurred_claims"] != row["incurred_claims_to_date"]
-    assert row["elapsed_days"]
+    for field in ("paid", "outstanding", "ibnr", "earned_premium",
+                  "earned_fraction", "current_annual_premium", "elapsed_days"):
+        assert field in row, field
+    assert row["ibnr"] > 0, "a part-run year carries an unreported tail"

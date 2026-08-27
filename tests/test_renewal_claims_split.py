@@ -262,3 +262,54 @@ def test_the_endpoint_accepts_a_cut_date(client):
     assert late["leaving"]["member_count"] == 1
     assert early["leaving"]["member_count"] == 0
     assert early["cut_date_source"] == "supplied"
+
+
+# --- the house loss ratio ------------------------------------------------
+
+def _lr(members, claims, **kw):
+    from app.scoring.rules.renewal_intake import renewal_loss_ratio
+    return renewal_loss_ratio(members, claims, **kw)
+
+
+def test_the_three_steps_run_in_the_order_underwriting_states_them():
+    # Drop the leavers, THEN reserve the tail, THEN divide by what the
+    # active members earned. Reserving before dropping would hold an
+    # unreported tail for people who are no longer on risk.
+    members = [_m("A", premium=12_000.0), _m("L1", end=date(2026, 4, 23), premium=12_000.0)]
+    claims = _by_beneficiary([_c("A", 10_000.0), _c("L1", 40_000.0, when=date(2026, 2, 1))])
+    r = _lr(members, claims, as_of=date(2026, 9, 30))
+
+    assert r["paid"] == 10_000.0, "only the active member's claims"
+    assert r["excluded"]["incurred"] == 40_000.0
+    assert r["ibnr"] == pytest.approx(10_000.0 / r["elapsed_days"] * 30, abs=1)
+
+
+def test_the_ratio_is_against_premium_the_active_members_earned():
+    members = [_m("A", premium=12_000.0)]
+    claims = _by_beneficiary([_c("A", 6_000.0)])
+    r = _lr(members, claims, as_of=date(2026, 3, 31))
+    assert r["earned_premium"] < 12_000.0, "half a year earns half a year's premium"
+    assert r["loss_ratio"] == pytest.approx(r["incurred"] / r["earned_premium"], abs=1e-4)
+
+
+def test_a_leaver_group_carrying_a_large_share_is_reported_not_hidden():
+    # The exclusion is the finding. Dropping it silently would hand back
+    # a better ratio with no way to see what produced it.
+    members = [_m("A"), _m("L1", end=date(2026, 4, 23))]
+    claims = _by_beneficiary([_c("A", 10_000.0), _c("L1", 90_000.0, when=date(2026, 2, 1))])
+    r = _lr(members, claims, as_of=date(2026, 9, 30))
+    assert r["excluded"]["share_of_all_claims"] == pytest.approx(0.9, abs=1e-3)
+
+
+def test_a_completed_year_still_earns_only_what_the_members_were_on_risk_for():
+    # A member endorsed on in month ten earned two months of premium,
+    # not ten - the exposure is theirs, not the scheme's.
+    late = _m("LATE", start=date(2026, 8, 1), premium=12_000.0)
+    r = _lr([late], _by_beneficiary([_c("LATE", 500.0, when=date(2026, 8, 15))]),
+            as_of=date(2026, 9, 30))
+    assert r["earned_premium"] < 12_000.0 * 0.25
+
+
+def test_no_earned_premium_gives_no_ratio_rather_than_a_division_by_zero():
+    r = _lr([_m("A", premium=0.0)], _by_beneficiary([_c("A", 900.0)]), as_of=date(2026, 9, 30))
+    assert r["loss_ratio"] is None
