@@ -345,6 +345,7 @@ def claims_by_member_status(
     members: List[dict],
     claims_by_beneficiary: Dict[str, List[dict]],
     as_at: Optional[date_cls] = None,
+    as_of: Optional[date_cls] = None,
 ) -> dict:
     """What the expiring year cost, split between the members who are
     renewing and the members who are not.
@@ -361,6 +362,14 @@ def claims_by_member_status(
     renewing population actually costs. If it barely moves, the base rate
     is the problem and renewing on headcount carries it straight into the
     new year.
+
+    Every ratio here is claims to ``as_of`` over premium EARNED to the
+    same day, which is the house basis (see renewal_loss_ratio). It used
+    to divide part-year claims by a full year's premium, which read 78%
+    on KIKO where the same account measured 108.8% one card further down
+    the page. The booked annual premium is still reported, because it is
+    what the renewal is quoted against - it is just not a denominator
+    for a part year.
     """
     # Resolved here rather than left to continuing_and_leaving, which
     # works it out internally and keeps it. The date decides the whole
@@ -369,8 +378,12 @@ def claims_by_member_status(
     warning = None
     if not supplied:
         as_at, warning = roster_term_end(members)
+    as_of_supplied = as_of is not None
+    as_of = as_of or data_covered_to(claims_by_beneficiary) or date_cls.today()
     continuing, leaving = continuing_and_leaving(members, as_at)
-    windows = term_member_windows(current_term_members(members))
+    term_members = current_term_members(members)
+    windows = term_member_windows(term_members)
+    term_start, term_end = current_term(term_members)
 
     def totals(group: List[dict]) -> dict:
         paid = outstanding = premium = 0.0
@@ -392,30 +405,44 @@ def claims_by_member_status(
                 claimants.add(beneficiary_id)
         incurred = paid + outstanding
         count = len(group)
+        earned, _ = earned_premium(group, term_start, term_end, as_of)
         return {
             "member_count": count,
             "paid": round(paid, 2),
             "outstanding": round(outstanding, 2),
             "incurred": round(incurred, 2),
+            # What the renewal is quoted against: a full year at each
+            # member's own rate.
             "premium": round(premium, 2),
+            # What the claims measured here were actually earned against.
+            "earned_premium": round(earned, 2),
             "claim_lines": lines,
             "members_who_claimed": len(claimants),
             "claims_per_member": round(incurred / count, 2) if count else None,
-            # Against premium as booked. A leaver's is already prorated in
-            # the export, which is exactly why their ratio runs high.
-            "loss_ratio": round(incurred / premium, 4) if premium else None,
+            "loss_ratio": round(incurred / earned, 4) if earned else None,
+            # Kept visible rather than dropped: it is the figure a
+            # headline quotes, and seeing how far below the earned basis
+            # it sits is the point.
+            "loss_ratio_on_annual_premium": round(incurred / premium, 4) if premium else None,
         }
 
     continuing_totals = totals(continuing)
     leaving_totals = totals(leaving)
     combined_incurred = continuing_totals["incurred"] + leaving_totals["incurred"]
     combined_premium = continuing_totals["premium"] + leaving_totals["premium"]
+    combined_earned = continuing_totals["earned_premium"] + leaving_totals["earned_premium"]
 
     return {
         "as_at": as_at,
         # Set explicitly by the underwriter, or read off the roster. They
         # need to know which, because only one of them is their decision.
         "cut_date_source": "supplied" if supplied else "roster",
+        # The day the claims are measured to, and the day premium is
+        # earned to. Defaults to the last day the export covers, never
+        # to today: earning to today against claims that stop at the
+        # extract date is weeks of free premium.
+        "as_of": as_of,
+        "as_of_source": "supplied" if as_of_supplied else "the last day the claims data covers",
         "warning": warning,
         "continuing": continuing_totals,
         "leaving": leaving_totals,
@@ -423,7 +450,11 @@ def claims_by_member_status(
             "member_count": continuing_totals["member_count"] + leaving_totals["member_count"],
             "incurred": round(combined_incurred, 2),
             "premium": round(combined_premium, 2),
-            "loss_ratio": round(combined_incurred / combined_premium, 4) if combined_premium else None,
+            "earned_premium": round(combined_earned, 2),
+            "loss_ratio": round(combined_incurred / combined_earned, 4) if combined_earned else None,
+            "loss_ratio_on_annual_premium": (
+                round(combined_incurred / combined_premium, 4) if combined_premium else None
+            ),
         },
         # The number the renewal actually turns on: what the loss ratio
         # becomes once the people who are not renewing are taken out.
@@ -557,6 +588,40 @@ def data_covered_to(claims_by_beneficiary: Dict[str, List[dict]]) -> Optional[da
     return latest
 
 
+def earned_premium(
+    members: Sequence[dict],
+    term_start: Optional[date_cls],
+    term_end: Optional[date_cls],
+    as_of: date_cls,
+) -> Tuple[float, int]:
+    """Premium earned by a group up to a date, and the longest exposure
+    in days behind it.
+
+    Elapsed exposure is measured per member on their own cover, not on
+    the scheme term: a member endorsed on in month ten has earned two
+    months of premium, not ten.
+
+    One implementation, shared by every panel that divides claims by
+    premium, because two of them measuring it differently is how the
+    same account came to read 78% on one card and 108.8% on the next.
+    """
+    earned = 0.0
+    elapsed_days = 0
+    for member in members:
+        rate = member_annual_rate(member) or 0.0
+        start = member.get("member_start_date") or term_start
+        end = member.get("member_end_date") or term_end
+        if not (rate and start and end):
+            continue
+        on = max(start, term_start) if term_start else start
+        off = min(end, as_of, term_end) if term_end else min(end, as_of)
+        days = max(0, (off - on).days + 1)
+        term_days = ((term_end - term_start).days + 1) if (term_start and term_end) else 365
+        earned += rate * min(1.0, days / term_days)
+        elapsed_days = max(elapsed_days, days)
+    return earned, elapsed_days
+
+
 def renewal_loss_ratio(
     members: List[dict],
     claims_by_beneficiary: Dict[str, List[dict]],
@@ -617,23 +682,7 @@ def renewal_loss_ratio(
     active_paid, active_outstanding = split(continuing)
     leaver_paid, leaver_outstanding = split(leaving)
 
-    # Elapsed exposure, per member, on their own cover - not on the
-    # scheme term. A member endorsed on in month ten has earned two
-    # months of premium, not ten.
-    earned = 0.0
-    elapsed_days = 0
-    for m in continuing:
-        rate = member_annual_rate(m) or 0.0
-        start = m.get("member_start_date") or term_start
-        end = m.get("member_end_date") or term_end
-        if not (rate and start and end):
-            continue
-        on = max(start, term_start) if term_start else start
-        off = min(end, as_of, term_end) if term_end else min(end, as_of)
-        days = max(0, (off - on).days + 1)
-        term_days = ((term_end - term_start).days + 1) if (term_start and term_end) else 365
-        earned += rate * min(1.0, days / term_days)
-        elapsed_days = max(elapsed_days, days)
+    earned, elapsed_days = earned_premium(continuing, term_start, term_end, as_of)
 
     ibnr = round(active_paid / elapsed_days * ibnr_tail_days, 2) if (active_paid and elapsed_days) else 0.0
     incurred = active_paid + active_outstanding + ibnr

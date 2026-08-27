@@ -5343,7 +5343,11 @@ async function loadRenewalBenchClaimsSplit() {
         <tr class="total"><th>Incurred</th><td class="num"><strong>${aed(c.incurred)}</strong></td>
             <td class="num"><strong>${aed(l.incurred)}</strong></td>
             <td class="num"><strong>${aed(r.total.incurred)}</strong></td></tr>
-        <tr><td>Annual premium</td><td class="num">${aed(c.premium)}</td><td class="num">${aed(l.premium)}</td>
+        <tr><td>Earned premium</td><td class="num">${aed(c.earned_premium)}</td>
+            <td class="num">${aed(l.earned_premium)}</td>
+            <td class="num">${aed(r.total.earned_premium)}</td></tr>
+        <tr><td>Annual premium (what the renewal is quoted against)</td>
+            <td class="num">${aed(c.premium)}</td><td class="num">${aed(l.premium)}</td>
             <td class="num">${aed(r.total.premium)}</td></tr>
         <tr><td>Claims per member</td><td class="num">${aed(c.claims_per_member)}</td>
             <td class="num">${aed(l.claims_per_member)}</td><td class="num">&mdash;</td></tr>
@@ -5353,6 +5357,12 @@ async function loadRenewalBenchClaimsSplit() {
             <td class="num">${pct(l.loss_ratio)}</td>
             <td class="num">${pct(r.total.loss_ratio)}</td></tr>
       </table>
+      <div class="hint" style="margin-top:8px;">Measured to
+        ${escapeHtml(String(r.as_of || ''))}${r.as_of_source === 'supplied' ? ''
+          : ', the last day the claims export covers'} &mdash; claims to that day over premium
+        earned to the same day. Against the full annual premium the same figures read
+        ${pct(r.total.loss_ratio_on_annual_premium)}, which is a part year's claims over a whole
+        year's premium and is not a loss ratio.</div>
       <div class="hint" style="margin-top:8px;">Deleted members are ${pct(r.leaver_share_of_members)}
         of the roster and ${pct(r.leaver_share_of_claims)} of the claims.</div>
       ${verdict}

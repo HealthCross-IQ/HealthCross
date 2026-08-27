@@ -313,3 +313,62 @@ def test_a_completed_year_still_earns_only_what_the_members_were_on_risk_for():
 def test_no_earned_premium_gives_no_ratio_rather_than_a_division_by_zero():
     r = _lr([_m("A", premium=0.0)], _by_beneficiary([_c("A", 900.0)]), as_of=date(2026, 9, 30))
     assert r["loss_ratio"] is None
+
+
+# --- the denominator -----------------------------------------------------
+
+def test_the_ratio_is_claims_over_premium_earned_to_the_same_day():
+    # This used to divide a part year's claims by a whole year's
+    # premium. On KIKO that read 78% on this card while the same account
+    # measured 108.8% on the next one down the page.
+    claims = _by_beneficiary([_c("A", 6_000.0, when=date(2026, 1, 1))])
+    split = claims_by_member_status([_m("A")], claims, as_at=TERM_END, as_of=date(2026, 3, 31))
+    c = split["continuing"]
+    assert c["premium"] == 12_000.0
+    # 1 Oct to 31 Mar is 182 of the term's 365 days.
+    assert c["earned_premium"] == pytest.approx(12_000 * 182 / 365, abs=1.0)
+    assert c["loss_ratio"] == pytest.approx(c["incurred"] / c["earned_premium"], abs=1e-4)
+    assert c["loss_ratio"] > c["loss_ratio_on_annual_premium"]
+
+
+def test_the_annual_premium_basis_is_still_reported():
+    # It is what a headline quotes and what the renewal is priced
+    # against; seeing how far below the earned basis it sits is the
+    # point of keeping it.
+    claims = _by_beneficiary([_c("A", 6_000.0, when=date(2026, 1, 1))])
+    split = claims_by_member_status([_m("A")], claims, as_at=TERM_END, as_of=date(2026, 3, 31))
+    assert split["continuing"]["loss_ratio_on_annual_premium"] == pytest.approx(0.5, abs=1e-4)
+    assert split["total"]["loss_ratio_on_annual_premium"] is not None
+
+
+def test_the_measurement_date_defaults_to_the_data_not_to_today():
+    claims = _by_beneficiary([_c("A", 6_000.0, when=date(2026, 1, 15))])
+    split = claims_by_member_status([_m("A")], claims, as_at=TERM_END)
+    assert split["as_of"] == date(2026, 1, 15)
+    assert split["as_of_source"] == "the last day the claims data covers"
+
+
+def test_a_member_endorsed_on_late_earns_only_their_own_exposure():
+    # Not the scheme's. A member on risk from 1 March has earned one
+    # month by 31 March, not six.
+    late = _m("A", start=date(2026, 3, 1))
+    split = claims_by_member_status([late], _by_beneficiary([_c("A", 500.0)]),
+                                    as_at=TERM_END, as_of=date(2026, 3, 31))
+    assert split["continuing"]["earned_premium"] == pytest.approx(12_000 * 31 / 365, abs=1.0)
+
+
+def test_both_renewal_cards_agree_on_the_same_account():
+    # The whole reason earned_premium is one shared function: two panels
+    # measuring the same account differently is what put 78% and 108.8%
+    # on the same page.
+    from app.scoring.rules.renewal_intake import renewal_loss_ratio
+
+    members = [_m("A"), _m("B"), _m("L1", end=date(2026, 4, 23))]
+    claims = _by_beneficiary([_c("A", 9_000.0), _c("L1", 15_000.0)])
+    as_of = date(2026, 6, 30)
+    split = claims_by_member_status(members, claims, as_at=TERM_END, as_of=as_of)
+    house = renewal_loss_ratio(members, claims, as_of=as_of, cut_date=TERM_END)
+    assert split["continuing"]["earned_premium"] == pytest.approx(house["earned_premium"], abs=0.01)
+    assert split["continuing"]["paid"] == house["paid"]
+    # The house ratio carries IBNR on top, so it is the higher of the two.
+    assert house["loss_ratio"] > split["continuing"]["loss_ratio"]

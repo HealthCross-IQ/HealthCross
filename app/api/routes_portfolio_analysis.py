@@ -72,6 +72,20 @@ def _get_stored_as_of(db: Session) -> Optional[date]:
     return snapshot.data_as_of_date if snapshot else None
 
 
+def _measurement_date(db: Session, supplied: Optional[date] = None) -> Optional[date]:
+    """The day the book's numbers are measured to, in the order that
+    keeps them honest: what the caller asked for, then the extract's own
+    production date if one was recorded on upload, then None - which
+    lets the rules fall back to the last day the claims data covers.
+
+    Never today. Earning premium to today against claims that stop at
+    the extract date credits an account with premium for weeks nobody
+    has reported a claim in yet, and it flatters every ratio by more the
+    longer the extract sits.
+    """
+    return supplied or _get_stored_as_of(db)
+
+
 def _set_stored_as_of(db: Session, as_of_date: date) -> None:
     snapshot = db.query(models.PortfolioDataSnapshot).first()
     if snapshot:
@@ -865,6 +879,13 @@ def renewal_claims_split(
             "today, it is who walks into the new policy year."
         ),
     ),
+    as_of: Optional[date] = Query(
+        None,
+        description=(
+            "The day claims are measured to and premium earned to. Defaults to the book's "
+            "recorded extract date, or the last day the claims data covers."
+        ),
+    ),
     db: Session = Depends(get_db),
 ):
     """The expiring year's claims, split between the members who are
@@ -901,7 +922,8 @@ def renewal_claims_split(
             models.PortfolioClaimEntry.claim_status,
         ).all()
     ]
-    split = claims_by_member_status(account, group_claims_by_beneficiary(claims), as_at=as_at)
+    split = claims_by_member_status(account, group_claims_by_beneficiary(claims),
+                                    as_at=as_at, as_of=_measurement_date(db, as_of))
     return {"master_client": master_client, **split}
 
 
@@ -1015,7 +1037,7 @@ async def compare_renewal_census(
 
     result = compare_against_supplied_census(
         account, refs, group_claims_by_beneficiary(claims),
-        as_of=as_of, cut_date=as_at, elsewhere_in_book=elsewhere,
+        as_of=_measurement_date(db, as_of), cut_date=as_at, elsewhere_in_book=elsewhere,
     )
     return {
         "master_client": master_client,
@@ -1092,10 +1114,13 @@ def renewal_repricing(
     ]
     by_beneficiary = group_claims_by_beneficiary(claims)
 
-    # The export's own last treatment date, so a month cut half way
-    # through is not averaged in as though it were whole.
+    # The day the data actually runs to, so a month cut half way through
+    # is not averaged in as though it were whole. The extract's recorded
+    # production date first where one was given on upload, since an
+    # export produced on the 15th has an incomplete month even if its
+    # last claim happens to fall on the 14th.
     treated = [c["date_of_treatment"] for c in claims if c.get("date_of_treatment")]
-    data_to = max(treated) if treated else None
+    data_to = _measurement_date(db) or (max(treated) if treated else None)
 
     current_premium = sum(member_annual_rate(m) or 0.0 for m in active) or None
     priced = reprice(
