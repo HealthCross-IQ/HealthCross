@@ -2929,6 +2929,7 @@ function renderCaseWorkspace() {
         </div>
         <div id="renewal-bench-population-movement-area"></div>
                         <div id="renewal-bench-claims-split-area"></div>
+        <div id="renewal-bench-census-comparison-area"></div>
         <div id="renewal-bench-repricing-area"></div>
         <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
@@ -2999,6 +3000,7 @@ function renderCaseWorkspace() {
   // rather than depending on a panel that no longer exists.
   loadRenewalBenchPopulationMovement();
   loadRenewalBenchClaimsSplit();
+  loadRenewalBenchCensusComparison();
   loadRenewalBenchRepricing();
 }
 
@@ -5119,6 +5121,23 @@ async function loadRenewalBenchLargeClaims() {
     area.innerHTML = '';
   }
 }
+// Which members are being held out of the renewal price. Holding one
+// out is a QUESTION - what would this have cost without them - and only
+// becomes a price if they are genuinely not renewing or their condition
+// is excluded on the renewal terms. The panel says so on every result.
+//
+// These two were deleted with the panels above them and left referenced
+// here, which threw a ReferenceError partway through the bench's own
+// loader: every panel after the repricing one stopped rendering.
+let _rbExcluded = [];
+
+function _rbToggleExclude(id) {
+  _rbExcluded = _rbExcluded.includes(id)
+    ? _rbExcluded.filter(x => x !== id)
+    : _rbExcluded.concat([id]);
+  loadRenewalBenchRepricing();
+}
+
 async function loadRenewalBenchRepricing() {
   const area = document.getElementById('renewal-bench-repricing-area');
   if (!area || !currentCase || !currentCase.company_name) return;
@@ -5255,6 +5274,10 @@ let _rbCutDate = '';
 function _rbSetCutDate(value) {
   _rbCutDate = value || '';
   loadRenewalBenchClaimsSplit();
+  // The census comparison splits active from leaving on the same date,
+  // so a cut date changed in one panel and not the other would put two
+  // different rosters on the same page.
+  if (_rbCensusResult) uploadRenewalCensus(_rbCensusInclude.length ? _rbCensusInclude : undefined);
 }
 
 // Last year's claims split between the members who are renewing and
@@ -5335,6 +5358,206 @@ async function loadRenewalBenchClaimsSplit() {
       ${verdict}
     </div>`;
 }
+// The census the broker has sent for the renewal, against the roster
+// the book holds. The two rarely match, and the difference is the
+// account's shape at renewal - who is walking out and what they cost.
+//
+// The comparison is always shown twice: on the book's roster the
+// account is what it has been, on the broker's list it is what it will
+// be. The second is usually the better-looking figure, and showing it
+// alone would be a discount with no argument attached to it.
+let _rbCensusResult = null;
+let _rbCensusInclude = [];
+let _rbCensusFile = null;
+
+// The other contracts the census reached into, read back off the last
+// result rather than baked into an onclick - a contract name carrying a
+// quote would break the attribute it was written into.
+function _rbCensusSiblings() {
+  const accounts = (_rbCensusResult && _rbCensusResult.on_other_contracts
+    && _rbCensusResult.on_other_contracts.accounts) || [];
+  return accounts.map(a => a.master_client).filter(Boolean);
+}
+
+function _rbCensusRender() {
+  const area = document.getElementById('renewal-bench-census-comparison-area');
+  if (!area) return;
+  const r = _rbCensusResult;
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+
+  const uploader = `
+    <div style="margin:10px 0; display:flex; align-items:center; gap:10px; flex-wrap:wrap;">
+      <input type="file" id="rb-census-file" accept=".xlsx,.xls,.csv" style="max-width:320px;">
+      <button class="primary" onclick="uploadRenewalCensus()">${r ? 'Compare a different file' : 'Compare against the book'}</button>
+      <span id="rb-census-status" class="hint" style="margin:0;">${r && _rbCensusFile
+        ? 'Loaded: ' + escapeHtml(_rbCensusFile.name) : ''}</span>
+    </div>`;
+
+  if (!r) {
+    area.innerHTML = `
+      <div class="card">
+        <h3>Broker's renewal census vs the book</h3>
+        <div class="hint">Upload the census the broker has sent for the renewal. Members are matched
+          on their own reference, and the year is measured twice &mdash; once on the roster the book
+          holds, once on the roster the broker has sent &mdash; so what the difference is worth is
+          visible rather than assumed. Nothing is saved to the case.</div>
+        ${uploader}
+      </div>`;
+    return;
+  }
+
+  // Everything the census carries that this account's roster does not.
+  // Most of it is usually a sibling contract rather than a new life, and
+  // the two price completely differently: a joiner has no history at all.
+  const other = r.on_other_contracts || {member_count: 0, accounts: []};
+  const siblings = other.accounts.map(a => `
+      <tr><td>${escapeHtml(a.master_client || '')}</td>
+          <td class="num">${a.member_count}</td></tr>`).join('');
+  const siblingBlock = other.member_count ? `
+    <div class="hint" style="background:#fbf3e6;border-left:3px solid #c98a2b;
+         padding:9px 12px;margin:10px 0;color:#8a5f1e;">
+      ${escapeHtml(other.note || '')}
+      <table style="margin-top:8px;background:transparent;">
+        <tr><th>Contract</th><th class="num">On the census</th></tr>${siblings}
+      </table>
+      <div style="margin-top:8px;">
+        <button onclick="uploadRenewalCensus(_rbCensusSiblings())">Price the group as one contract</button>
+      </div>
+    </div>` : '';
+
+  const scenario = (d, label, note) => `
+      <tr><th style="text-align:left;">${label}<div class="hint" style="margin:2px 0 0;font-weight:400;">${note}</div></th>
+          <td class="num">${d.active_member_count}</td>
+          <td class="num">${aed(d.paid)}</td>
+          <td class="num">${aed(d.outstanding)}</td>
+          <td class="num">${aed(d.ibnr)}</td>
+          <td class="num"><strong>${aed(d.incurred)}</strong></td>
+          <td class="num">${aed(d.earned_premium)}</td>
+          <td class="num"><strong>${pct(d.loss_ratio)}</strong></td></tr>`;
+
+  const book = r.on_book_roster, census = r.on_supplied_census;
+  const moved = (book.loss_ratio != null && census.loss_ratio != null)
+    ? book.loss_ratio - census.loss_ratio : null;
+
+  const leavers = (r.leaving.members || []).map(m => `
+      <tr><td>${escapeHtml(String(m.beneficiary_id || ''))}</td>
+          <td>${escapeHtml(String(m.relation || ''))}</td>
+          <td class="num">${m.age == null ? '&mdash;' : m.age}</td>
+          <td class="num">${aed(m.claims)}</td>
+          <td class="num">${aed(m.annual_rate)}</td></tr>`).join('');
+
+  area.innerHTML = `
+    <div class="card">
+      <h3>Broker's renewal census vs the book</h3>
+      <div class="hint">${escapeHtml(String(r.filename || 'census'))} &mdash; ${r.rows_read} rows,
+        ${r.rows_with_a_reference} carrying a member reference. Matched on reference alone; where the
+        two files share no identifiers this says so rather than pairing on age and relation.</div>
+      ${uploader}
+      ${r.warning ? `<div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;
+         padding:9px 12px;margin:10px 0;color:#922b21;">${escapeHtml(r.warning)}</div>` : ''}
+      ${(r.also_included || []).length ? `<div class="hint" style="margin:10px 0;">Priced as one
+         contract with ${escapeHtml((r.also_included || []).join(', '))}.</div>` : ''}
+
+      <table style="margin-top:12px;">
+        <tr><th></th><th class="num">Members</th><th class="num">Claims</th><th class="num">Annual premium</th></tr>
+        <tr><td>On both &mdash; staying</td><td class="num">${r.staying.member_count}</td>
+            <td class="num">${aed(r.staying.claims)}</td><td class="num">${aed(r.staying.premium)}</td></tr>
+        <tr><td>On the book, not on the census &mdash; leaving</td><td class="num">${r.leaving.member_count}</td>
+            <td class="num">${aed(r.leaving.claims)}</td><td class="num">${aed(r.leaving.premium)}</td></tr>
+        <tr><td>On the census, nowhere on the book &mdash; joining</td>
+            <td class="num">${r.joining.member_count}</td>
+            <td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
+        <tr class="total"><th>Book active / census rows</th>
+            <td class="num"><strong>${r.book_active_count} / ${r.supplied_count}</strong></td>
+            <td class="num">&mdash;</td><td class="num">&mdash;</td></tr>
+      </table>
+      <div class="hint" style="margin-top:8px;">Joiners have no claims history on this book, so they
+        price off the rate card rather than off experience.${(r.joining.references || []).length
+          ? ' ' + escapeHtml(r.joining.references.slice(0, 20).join(', '))
+            + (r.joining.references.length > 20 ? ` and ${r.joining.references.length - 20} more.` : '.')
+          : ''}</div>
+      ${siblingBlock}
+
+      <h4 style="margin-top:18px;">The year measured both ways</h4>
+      <div class="scroll"><table style="margin-top:8px;">
+        <tr><th></th><th class="num">Active</th><th class="num">Paid</th><th class="num">Outstanding</th>
+            <th class="num">IBNR</th><th class="num">Incurred</th><th class="num">Earned premium</th>
+            <th class="num">Loss ratio</th></tr>
+        ${scenario(book, "On the book's roster", 'what the account has been')}
+        ${scenario(census, "On the broker's census", 'what it will be if the census holds')}
+      </table></div>
+      ${moved == null ? '' : Math.abs(moved) < 0.02
+        ? `<div class="hint" style="margin-top:10px;">The census barely moves the ratio
+             (${pct(book.loss_ratio)} &rarr; ${pct(census.loss_ratio)}). The members it drops were not
+             the cost &mdash; the base rate is, and it renews.</div>`
+        : `<div class="hint" style="margin-top:10px;">The census moves the ratio
+             ${pct(book.loss_ratio)} &rarr; <strong>${pct(census.loss_ratio)}</strong>, worth
+             ${(Math.abs(moved) * 100).toFixed(1)} points. That is only a price if those members are
+             genuinely not renewing &mdash; the broker's list is a statement of intent, not a
+             cancellation.</div>`}
+
+      ${r.leaving.member_count ? `
+        <h4 style="margin-top:18px;">Leaving the account, worst first</h4>
+        <div class="scroll"><table style="margin-top:8px;">
+          <tr><th>Member</th><th>Relation</th><th class="num">Age</th>
+              <th class="num">Claims</th><th class="num">Annual rate</th></tr>
+          ${leavers}
+        </table></div>` : ''}
+    </div>`;
+}
+
+async function uploadRenewalCensus(include) {
+  const input = document.getElementById('rb-census-file');
+  const statusEl = document.getElementById('rb-census-status');
+  // Widening to the sibling contracts, and changing the cut date, both
+  // re-run the file already chosen. Rendering the result replaces the
+  // file input with an empty one and a file input cannot be repopulated
+  // from script, so the File itself is what is kept - reading it back
+  // off the input made both of those silently do nothing.
+  if (input && input.files.length) _rbCensusFile = input.files[0];
+  if (!_rbCensusFile) { toast('Choose the broker\'s census file first', true); return; }
+  _rbCensusInclude = include || [];
+
+  const form = new FormData();
+  form.append('file', _rbCensusFile);
+  const params = new URLSearchParams();
+  if (_rbCutDate) params.set('as_at', _rbCutDate);
+  _rbCensusInclude.forEach(name => params.append('include', name));
+  const q = params.toString() ? `?${params}` : '';
+
+  if (statusEl) { statusEl.textContent = 'Comparing...'; statusEl.className = 'hint'; }
+  try {
+    _rbCensusResult = await api(
+      `/portfolio-analysis/renewal-census-comparison/${encodeURIComponent(currentCase.company_name)}${q}`,
+      { method: 'POST', body: form });
+    _rbCensusRender();
+  } catch (err) {
+    if (statusEl) { statusEl.textContent = 'Comparison failed'; statusEl.className = 'status-err'; }
+    toast(err.message, true);
+  }
+}
+
+function loadRenewalBenchCensusComparison() {
+  // Only the empty uploader until a file is given - this reads a file
+  // the portal does not hold, so there is nothing to load.
+  _rbCensusResult = null;
+  _rbCensusInclude = [];
+  _rbCensusFile = null;
+  _rbCensusRender();
+}
+
+/* The renewal price, built from this account's own experience rather
+   than from a scaling of last year's premium. The two judgement inputs
+   (what won't repeat, what to provide for) are editable here because
+   they ARE judgements - a completed maternity is over, but the group
+   still contains members who may deliver, and only an underwriter can
+   say which.
+
+   Deleted alongside the panels above and still read by eleven lines in
+   this one, which threw on every load of the bench. */
+let renewalPricingInputs = { trend: 10, loading: null, nonRecurring: 0, provision: 0 };
+
 async function loadRenewalPremiumBuildUp() {
   const area = document.getElementById('renewal-premium-buildup-area');
   if (!area) return;
