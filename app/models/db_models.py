@@ -545,6 +545,13 @@ class Employee(Base):
     individual month's actual paid amount can still differ (e.g. a partial
     month, an installment) since that's recorded on the ExpenseEntry itself,
     never by editing this roster row.
+
+    `basic_salary` is optional and distinct from `monthly_salary` - UAE
+    end-of-service gratuity is legally calculated on basic salary alone,
+    which can be lower than the total monthly package once housing/
+    transport/other allowances are added. When not set, gratuity falls
+    back to `monthly_salary` (see routes_finance.py's _with_end_of_service),
+    matching this app's original behavior before the two were split apart.
     """
 
     __tablename__ = "employees"
@@ -553,6 +560,7 @@ class Employee(Base):
     full_name = Column(String, nullable=False)
     role_title = Column(String, nullable=True)
     monthly_salary = Column(Float, nullable=False)
+    basic_salary = Column(Float, nullable=True)
     currency = Column(String, default="AED")
     start_date = Column(Date, nullable=True)
     end_date = Column(Date, nullable=True)

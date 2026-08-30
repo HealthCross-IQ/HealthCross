@@ -9,6 +9,7 @@ from app.finance.cash_flow import forecast_expenses, monthly_cash_flow
 from app.finance.common import normalize_doc_no
 from app.finance.end_of_service import compute_end_of_service_gratuity
 from app.finance.fee_engine import FeeRate, compute_hc_fee
+from app.finance.payroll import prorated_monthly_salary
 from app.finance.reconciliation import (
     compare_qic_soa_periods,
     reconcile_tracker_received_vs_bank,
@@ -376,9 +377,12 @@ def _get_employee_or_404(db: Session, employee_id: int) -> models.Employee:
 def _with_end_of_service(employee: models.Employee) -> models.Employee:
     # Attached as plain (non-column) attributes - EmployeeOut picks them up
     # via from_attributes. Computed as-of end_date if the employee has left,
-    # otherwise as-of today (an ongoing accrual estimate).
+    # otherwise as-of today (an ongoing accrual estimate). Uses basic_salary
+    # when set - UAE gratuity is legally basic-salary-only - falling back to
+    # monthly_salary when it isn't, matching this app's original behavior.
+    basic = employee.basic_salary if employee.basic_salary is not None else employee.monthly_salary
     gratuity = compute_end_of_service_gratuity(
-        employee.start_date, employee.monthly_salary, employee.end_date or date.today()
+        employee.start_date, basic, employee.end_date or date.today()
     )
     employee.years_of_service = gratuity["years_of_service"] if employee.start_date else None
     employee.end_of_service_gratuity = gratuity["gratuity_amount"] if employee.start_date else None
@@ -540,13 +544,19 @@ def generate_expenses_for_period(
     for employee in db.query(models.Employee).filter_by(is_active=True).all():
         if employee.id in existing_employee_ids:
             continue
+        prorated = prorated_monthly_salary(employee.monthly_salary, period_start, employee.start_date, employee.end_date)
+        if prorated["amount"] <= 0:
+            continue  # not yet joined, or already left, for the whole of this period
+        description = f"{employee.full_name} - {employee.role_title or 'Salary'}"
+        if prorated["is_prorated"]:
+            description += f" (pro-rated, {prorated['days_worked']}/{prorated['days_in_month']} days)"
         created.append(
             models.ExpenseEntry(
                 period=period_start,
                 category="salary",
                 expense_type="fixed",
-                description=f"{employee.full_name} - {employee.role_title or 'Salary'}",
-                amount=employee.monthly_salary,
+                description=description,
+                amount=prorated["amount"],
                 currency=employee.currency,
                 employee_id=employee.id,
                 source="generated",

@@ -1172,6 +1172,7 @@ function loadPeoplePanel() {
         <div><label>Full name</label><input type="text" id="empName" /></div>
         <div><label>Role</label><input type="text" id="empRole" /></div>
         <div><label>Monthly salary</label><input type="number" id="empSalary" /></div>
+        <div><label>Basic salary (optional)</label><input type="number" id="empBasicSalary" placeholder="Defaults to monthly salary" /></div>
         <div><label>Currency</label><input type="text" id="empCurrency" value="AED" /></div>
         <div><label>Joining date</label><input type="date" id="empStartDate" /></div>
         <div><button class="primary" onclick="addEmployee()">Add</button></div>
@@ -1179,7 +1180,7 @@ function loadPeoplePanel() {
     </div>
     <div class="card">
       <h3>Employees</h3>
-      <div class="hint">"End of Service (est.)" is UAE gratuity per Federal Decree-Law No. 33 of 2021: 21 days' basic salary/year for the first 5 years, 30 days/year after that, pro-rated for a partial final year and capped at 2 years' salary - calculated on Monthly Salary as the basic-salary figure. For an active employee it's a running accrual estimate as of today; once an End date is set (Edit), it's the final figure as of that date.</div>
+      <div class="hint">"End of Service (est.)" is UAE gratuity per Federal Decree-Law No. 33 of 2021: 21 days' basic salary/year for the first 5 years, 30 days/year after that, pro-rated for a partial final year and capped at 2 years' salary - calculated on Basic Salary when set (legally the correct figure if Monthly Salary includes allowances), otherwise on Monthly Salary. For an active employee it's a running accrual estimate as of today; once an End date is set (Edit), it's the final figure as of that date.</div>
       <div class="table-wrap" id="employeeTable"><div class="empty-state">Loading&hellip;</div></div>
     </div>
 
@@ -1236,18 +1237,21 @@ async function addEmployee() {
   const full_name = document.getElementById('empName').value.trim();
   const role_title = document.getElementById('empRole').value.trim();
   const monthly_salary = parseFloat(document.getElementById('empSalary').value);
+  const basicSalaryRaw = document.getElementById('empBasicSalary').value;
+  const basic_salary = basicSalaryRaw ? parseFloat(basicSalaryRaw) : null;
   const currency = document.getElementById('empCurrency').value.trim() || 'AED';
   const start_date = document.getElementById('empStartDate').value || null;
   if (!full_name || !monthly_salary) { toast('Name and monthly salary are required', true); return; }
   try {
     await api('/finance/employees', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full_name, role_title, monthly_salary, currency, start_date }),
+      body: JSON.stringify({ full_name, role_title, monthly_salary, basic_salary, currency, start_date }),
     });
     toast(`Added ${full_name}`);
     document.getElementById('empName').value = '';
     document.getElementById('empRole').value = '';
     document.getElementById('empSalary').value = '';
+    document.getElementById('empBasicSalary').value = '';
     document.getElementById('empStartDate').value = '';
     loadEmployeeTable();
   } catch (e) { toast(e.message, true); }
@@ -1330,7 +1334,7 @@ function renderEmployeeTable() {
   el.innerHTML = `
     <table>
       <thead><tr>
-        <th>Name</th><th>Role</th><th>Monthly Salary</th><th>Joined</th><th>End Date</th>
+        <th>Name</th><th>Role</th><th>Monthly Salary</th><th>Basic Salary</th><th>Joined</th><th>End Date</th>
         <th>Years of Service</th><th>End of Service (est.)</th><th>Active</th><th></th>
       </tr></thead>
       <tbody>${employeeRows.map(employeeRowHtml).join('')}</tbody>
@@ -1345,6 +1349,7 @@ function employeeRowHtml(r) {
         <td><input type="text" id="editEmpName" value="${esc(r.full_name)}" /></td>
         <td><input type="text" id="editEmpRole" value="${esc(r.role_title || '')}" /></td>
         <td><input type="number" id="editEmpSalary" value="${r.monthly_salary}" /></td>
+        <td><input type="number" id="editEmpBasicSalary" value="${r.basic_salary !== null && r.basic_salary !== undefined ? r.basic_salary : ''}" placeholder="Defaults to monthly" /></td>
         <td><input type="date" id="editEmpStartDate" value="${r.start_date || ''}" /></td>
         <td><input type="date" id="editEmpEndDate" value="${r.end_date || ''}" /></td>
         <td colspan="2" class="hint" style="margin:0;">Recalculated on save</td>
@@ -1365,6 +1370,7 @@ function employeeRowHtml(r) {
       <td>${esc(r.full_name)}</td>
       <td>${esc(r.role_title)}</td>
       <td>${money(r.monthly_salary, r.currency)}</td>
+      <td>${r.basic_salary !== null && r.basic_salary !== undefined ? money(r.basic_salary, r.currency) : '—'}</td>
       <td>${esc(r.start_date || '—')}</td>
       <td>${esc(r.end_date || '—')}</td>
       <td>${r.years_of_service !== null && r.years_of_service !== undefined ? r.years_of_service.toFixed(2) : '—'}</td>
@@ -1381,6 +1387,8 @@ async function saveEmployee(id) {
   const full_name = document.getElementById('editEmpName').value.trim();
   const role_title = document.getElementById('editEmpRole').value.trim();
   const monthly_salary = parseFloat(document.getElementById('editEmpSalary').value);
+  const basicSalaryRaw = document.getElementById('editEmpBasicSalary').value;
+  const basic_salary = basicSalaryRaw ? parseFloat(basicSalaryRaw) : null;
   const start_date = document.getElementById('editEmpStartDate').value || null;
   const end_date = document.getElementById('editEmpEndDate').value || null;
   const is_active = document.getElementById('editEmpActive').value === 'true';
@@ -1388,7 +1396,7 @@ async function saveEmployee(id) {
   try {
     await api(`/finance/employees/${id}`, {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ full_name, role_title, monthly_salary, start_date, end_date, is_active }),
+      body: JSON.stringify({ full_name, role_title, monthly_salary, basic_salary, start_date, end_date, is_active }),
     });
     toast('Employee updated');
     editingEmployeeId = null;

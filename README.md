@@ -680,17 +680,34 @@ known once billed), and the actual monthly expense ledger itself
 auto-create this month's salary + fixed-recurring rows from the roster/
 templates, skipping anyone who already has one so it's safe to re-run).
 
-Each `Employee` carries a `start_date` (joining date) and optional
-`end_date`. `GET /finance/employees` (and create/update) attach two
-computed-on-read fields, `years_of_service` and `end_of_service_gratuity`,
-via `app/finance/end_of_service.py` - UAE end-of-service gratuity per
-Federal Decree-Law No. 33 of 2021: 21 days' basic salary per year of
-service for the first 5 years, 30 days/year after that, pro-rated for a
-partial final year, capped at two years' total salary. `monthly_salary` is
-treated as the basic-salary figure for this calculation. These fields are
-never stored - they're computed fresh on every read, as of `end_date` for
-an employee who has left, or "today" (a running accrual estimate) for one
-still active.
+Each `Employee` carries a `start_date` (joining date), optional `end_date`,
+and optional `basic_salary` (distinct from `monthly_salary` - UAE
+end-of-service gratuity is legally basic-salary-only, which can be lower
+than the total monthly package once housing/transport/other allowances are
+added; when not set, calculations fall back to `monthly_salary`).
+`GET /finance/employees` (and create/update) attach two computed-on-read
+fields, `years_of_service` and `end_of_service_gratuity`, via
+`app/finance/end_of_service.py` - UAE end-of-service gratuity per Federal
+Decree-Law No. 33 of 2021: 21 days' basic salary per year of service for
+the first 5 years, 30 days/year after that, pro-rated for a partial final
+year, capped at two years' total salary. These fields are never stored -
+they're computed fresh on every read, as of `end_date` for an employee who
+has left, or "today" (a running accrual estimate) for one still active.
+
+`POST /finance/expenses/generate?period=` pro-rates a mid-month joiner or
+leaver via `app/finance/payroll.py`'s `prorated_monthly_salary()` -
+`(monthly_salary / days_in_that_month) * days_actually_worked` - rather
+than generating a full month's salary regardless of when they joined/left,
+and skips generating an entry at all for a month entirely outside their
+employment (e.g. before their `start_date`). The generated `ExpenseEntry`'s
+`description` notes the pro-ration (e.g. "pro-rated, 8/31 days") so it's
+clear on the expense ledger why the amount differs from a full month.
+
+The **Salary Release List** (Employees & Expenses tab) is a printable
+sign-off sheet for finance: every active employee's `monthly_salary`, with
+a Print button (opens the browser's print dialog showing only this table,
+via a dedicated print-only region so nothing else on the page prints) and
+a CSV download.
 
 **Cash flow and expense forecast** (`app/finance/cash_flow.py`):
 - `GET /finance/cash-flow?year=` - actual monthly HC-fee inflow (tracker

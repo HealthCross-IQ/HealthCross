@@ -245,6 +245,40 @@ def test_employees_recurring_expenses_and_generate(client):
     assert len(resp.json()) == 2
 
 
+def test_generate_expenses_prorates_a_mid_month_joiner_and_skips_a_not_yet_joined_one(client):
+    # Joined the 24th - August 2026 has 31 days, so 8 days worked.
+    client.post("/finance/employees", json={"full_name": "Salim", "monthly_salary": 40000, "currency": "AED", "start_date": "2026-08-24"})
+    # Joins next month entirely - shouldn't get an August salary line at all.
+    client.post("/finance/employees", json={"full_name": "Future Hire", "monthly_salary": 15000, "currency": "AED", "start_date": "2026-09-01"})
+
+    resp = client.post("/finance/expenses/generate", params={"period": "2026-08-01"})
+    assert resp.status_code == 200
+    generated = resp.json()
+    assert len(generated) == 1
+    assert generated[0]["description"].startswith("Salim")
+    assert "pro-rated, 8/31 days" in generated[0]["description"]
+    assert generated[0]["amount"] == round((40000 / 31) * 8, 2)
+
+
+def test_employee_end_of_service_uses_basic_salary_when_set(client):
+    import datetime
+
+    six_years_ago = (datetime.date.today() - datetime.timedelta(days=365 * 6)).isoformat()
+    resp = client.post(
+        "/finance/employees",
+        json={"full_name": "Rania", "monthly_salary": 20000, "basic_salary": 12000, "currency": "AED", "start_date": six_years_ago},
+    )
+    body = resp.json()
+    assert body["basic_salary"] == 12000
+
+    # Gratuity should scale with basic_salary (12000), not the higher monthly_salary (20000).
+    no_basic_resp = client.post(
+        "/finance/employees",
+        json={"full_name": "Karim2", "monthly_salary": 12000, "currency": "AED", "start_date": six_years_ago},
+    )
+    assert body["end_of_service_gratuity"] == no_basic_resp.json()["end_of_service_gratuity"]
+
+
 def test_employee_edit_and_delete_keeps_expense_history(client):
     resp = client.post("/finance/employees", json={"full_name": "Dianne", "role_title": "Account Executive", "monthly_salary": 4500, "currency": "AED"})
     employee_id = resp.json()["id"]

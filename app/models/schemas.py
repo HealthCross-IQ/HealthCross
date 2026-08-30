@@ -483,6 +483,7 @@ class EmployeeCreate(BaseModel):
     full_name: str
     role_title: Optional[str] = None
     monthly_salary: float
+    basic_salary: Optional[float] = None
     currency: str = "AED"
     start_date: Optional[date] = None
     notes: Optional[str] = None
@@ -492,6 +493,7 @@ class EmployeeUpdate(BaseModel):
     full_name: Optional[str] = None
     role_title: Optional[str] = None
     monthly_salary: Optional[float] = None
+    basic_salary: Optional[float] = None
     currency: Optional[str] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
@@ -506,6 +508,7 @@ class EmployeeOut(BaseModel):
     full_name: str
     role_title: Optional[str] = None
     monthly_salary: float
+    basic_salary: Optional[float] = None
     currency: str
     start_date: Optional[date] = None
     end_date: Optional[date] = None
