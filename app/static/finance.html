@@ -158,6 +158,17 @@
     box-shadow: 0 4px 16px rgba(0,0,0,0.14);
     display: none; max-width: 420px;
   }
+
+  #printArea { display: none; }
+  @media print {
+    body > *:not(#printArea) { display: none !important; }
+    #printArea { display: block !important; }
+    #printArea h2 { font-size: 16px; margin: 0 0 2px; }
+    #printArea .hint { color: #555; font-size: 12px; margin-bottom: 14px; }
+    #printArea table { width: 100%; border-collapse: collapse; }
+    #printArea th, #printArea td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #ccc; font-size: 12.5px; }
+    #printArea tfoot td { font-weight: 700; border-top: 2px solid #000; }
+  }
 </style>
 </head>
 <body>
@@ -174,6 +185,7 @@
 </main>
 
 <div id="toast"></div>
+<div id="printArea"></div>
 
 <script>
 const money = (v, ccy) => (v === null || v === undefined) ? '—' : `${(ccy || 'AED')} ${Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
@@ -1172,6 +1184,17 @@ function loadPeoplePanel() {
     </div>
 
     <div class="card">
+      <h3>Salary Release List</h3>
+      <div class="hint">Active employees only, for finance to sign off and release this month's salary payments.</div>
+      <div class="row">
+        <div><label>Period label (shown on the printout)</label><input type="text" id="salaryReleasePeriod" placeholder="e.g. August 2026" /></div>
+        <div><button class="primary" onclick="printSalaryReleaseList()">&#128424; Print</button></div>
+        <div><button class="small" onclick="downloadSalaryReleaseCsv()">&#8595; Download CSV</button></div>
+      </div>
+      <div class="table-wrap" id="salaryReleaseTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
       <h3>Add recurring expense</h3>
       <div class="hint">A "variable" item (e.g. Etisalat) has no default amount - its real cost is entered fresh each month instead.</div>
       <div class="row">
@@ -1238,7 +1261,67 @@ async function loadEmployeeTable() {
   try {
     employeeRows = await api('/finance/employees');
     renderEmployeeTable();
+    renderSalaryReleaseList();
   } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function activeSalaryRows() {
+  return employeeRows.filter(r => r.is_active).slice().sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
+function renderSalaryReleaseList() {
+  const el = document.getElementById('salaryReleaseTable');
+  const rows = activeSalaryRows();
+  if (!rows.length) { el.innerHTML = `<div class="empty-state">No active employees.</div>`; return; }
+  const total = rows.reduce((s, r) => s + r.monthly_salary, 0);
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Employee</th><th>Role</th><th>Monthly Salary</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title || '—')}</td><td>${money(r.monthly_salary, r.currency)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr style="font-weight:700;"><td colspan="2">TOTAL (${rows.length} employees)</td><td>${money(total)}</td></tr></tfoot>
+    </table>
+  `;
+}
+
+function printSalaryReleaseList() {
+  const rows = activeSalaryRows();
+  if (!rows.length) { toast('No active employees to print', true); return; }
+  const period = (document.getElementById('salaryReleasePeriod').value || '').trim();
+  const total = rows.reduce((s, r) => s + r.monthly_salary, 0);
+  document.getElementById('printArea').innerHTML = `
+    <h2>HealthCross - Salary Release List${period ? ' - ' + esc(period) : ''}</h2>
+    <div class="hint">Generated ${new Date().toLocaleDateString()} &middot; ${rows.length} active employee(s)</div>
+    <table>
+      <thead><tr><th>Employee</th><th>Role</th><th>Monthly Salary</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title || '—')}</td><td>${money(r.monthly_salary, r.currency)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr><td colspan="2">TOTAL</td><td>${money(total)}</td></tr></tfoot>
+    </table>
+  `;
+  window.print();
+}
+
+function downloadSalaryReleaseCsv() {
+  const rows = activeSalaryRows();
+  if (!rows.length) { toast('No active employees to export', true); return; }
+  const period = (document.getElementById('salaryReleasePeriod').value || '').trim();
+  const lines = [['Employee', 'Role', 'Currency', 'Monthly Salary'].map(csvCell).join(',')];
+  for (const r of rows) {
+    lines.push([r.full_name, r.role_title || '', r.currency || 'AED', r.monthly_salary].map(csvCell).join(','));
+  }
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const suffix = period ? period.replace(/\s+/g, '_').toLowerCase() : new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `salary_release_${suffix}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function renderEmployeeTable() {
