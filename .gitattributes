@@ -1,0 +1,10 @@
+# Shell scripts must keep LF endings even when checked out on Windows.
+# Git's default core.autocrlf=true rewrites them to CRLF, and bash then
+# reads the shebang as "/usr/bin/env bash\r" and reports
+# "bad interpreter: No such file or directory" - which looks like a
+# missing interpreter rather than a line-ending problem, so it is a hard
+# failure to diagnose from the error alone.
+*.sh text eol=lf
+
+# The Windows launcher is the opposite case: cmd.exe needs CRLF.
+*.bat text eol=crlf
