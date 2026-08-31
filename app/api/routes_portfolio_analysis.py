@@ -10,6 +10,7 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api import analysis_cache
@@ -67,6 +68,18 @@ from app.scoring.rules.renewal_intake import (
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
 
 
+def _book_covered_to(db: Session) -> Optional[date]:
+    """The last day the uploaded claims actually cover.
+
+    Used when nobody has told us a report date. The alternative was
+    today, and today is always wrong in the same direction: it earns
+    premium through weeks the claims file does not reach, so the ratio
+    reads better the longer the extract sits. NOMADA measured 83.6% to
+    15 August and 79.3% to today, on identical data.
+    """
+    return db.query(func.max(models.PortfolioClaimEntry.date_of_treatment)).scalar()
+
+
 def account_loss_ratio_rows_for_book(
     db: Session,
     client: Optional[str] = None,
@@ -90,8 +103,9 @@ def account_loss_ratio_rows_for_book(
     # own claims ledger. Checked here so callers get [] either way.
     if not db.query(models.PortfolioMember.id).first():
         return []
+    effective_as_of = as_of or _get_stored_as_of(db) or _book_covered_to(db) or date.today()
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db),
+        results = _run_analysis(db, as_of=effective_as_of,
                                 client=client, require_rate_card=False)
     except HTTPException:
         # An account that is not on the book is a 400 to the Loss Ratio
@@ -106,7 +120,6 @@ def account_loss_ratio_rows_for_book(
             opex_records_by_client[cm.master_client_name].append(
                 {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
             )
-    effective_as_of = as_of or _get_stored_as_of(db) or date.today()
     rows = account_loss_ratio_rows(
         results,
         as_of=effective_as_of,

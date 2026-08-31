@@ -351,3 +351,34 @@ def test_the_ledger_fallback_still_names_itself(client):
 
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert body["rating_source"] == "case claims ledger"
+
+
+# --- what date it measures to when nobody says ---------------------------
+
+def test_with_no_report_date_it_measures_to_the_data_not_today(client):
+    # This is why NOMADA still looked wrong after the source was fixed.
+    # The Loss Ratio screen showed 83.6% because a report date of 15
+    # August was typed into it; the card, given none, fell back to today
+    # and earned premium through weeks the claims file does not reach -
+    # 79.3% on identical data. Today is always wrong in the same
+    # direction, and it drifts further every day the extract sits.
+    _nomada(client)
+    case_id = _case(client)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["from_book"]["as_of"] == AS_OF.isoformat()
+
+
+def test_the_stored_extract_date_still_wins_over_the_last_claim(client):
+    # A file produced on the 20th whose last claim fell on the 14th has
+    # six more days of exposure that simply had no claims in them.
+    _nomada(client)
+    db = client.db_session_local()
+    snapshot = db.query(models.PortfolioDataSnapshot).first()
+    snapshot.data_as_of_date = date(2026, 8, 20)
+    db.commit()
+    db.close()
+    case_id = _case(client)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["from_book"]["as_of"] == "2026-08-20"
