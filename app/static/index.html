@@ -2938,7 +2938,10 @@ function renderCaseWorkspace() {
           <div id="renewal-bench-premium-area"></div>
           <div id="renewal-bench-nb-area"></div>
         </div>
-        <div style="text-align:right; margin-top:4px;"><button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print / Save as PDF</button></div>
+        <div style="text-align:right; margin-top:4px; display:flex; gap:8px; justify-content:flex-end;">
+          <button class="primary" onclick="openRenewalReport()">Renewal Review (one page)</button>
+          <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print this tab</button>
+        </div>
       </div>
     </div>
 
@@ -4662,6 +4665,15 @@ function _rbBuildupHtml(steps) {
 // it reads the latest uploaded book, where the two methods below read a
 // claims ledger attached to the case that goes stale the moment the book
 // is refreshed. NOMADA showed 75.6% here against 83.6% there.
+// Server-rendered at a URL, so the button is a plain window.open with
+// nothing awaited - the popup cannot be blocked and the browser simply
+// loads a page. Assembling a document in the browser after an await is
+// what broke this twice before.
+function openRenewalReport() {
+  if (!currentCase) { toast('Open a case first', true); return; }
+  window.open(`/cases/${currentCase.id}/renewal-report.html`, '_blank');
+}
+
 function _renewalBookPanelHtml(r) {
   const f = r.from_book;
   if (!f) {

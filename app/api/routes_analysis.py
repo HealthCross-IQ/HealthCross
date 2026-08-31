@@ -1,10 +1,12 @@
 import calendar
 import io
+from collections import Counter
 import re
 from datetime import date
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
 from app.api.routes_new_business_rating import maybe_auto_requote
@@ -2105,3 +2107,168 @@ async def import_member_rate_card(case_id: int, file: UploadFile = File(...), db
         "unmatched": unmatched,
         "detected_fees": parsed["fees"],
     })
+
+
+@router.get("/{case_id}/renewal-report")
+def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
+    """Everything the renewal document needs, from the book.
+
+    One payload for one page. The Renewal Bench prints as seven pages of
+    screen cards and leaves an underwriter to assemble the argument from
+    figures scattered across them; this assembles it - what the account
+    cost, what it therefore needs, and what the claims are made of.
+    """
+    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
+    from app.scoring.rules.portfolio_analysis import group_claims_by_beneficiary
+    from app.scoring.rules.renewal_intake import (
+        account_members,
+        claim_belongs_to_term,
+        continuing_and_leaving,
+        current_term_members,
+        term_member_windows,
+    )
+    from app.scoring.rules.renewal_repricing import member_claim_ranking
+
+    case = _get_case_or_404(db, case_id)
+    rating = _case_renewal_rating(case)
+    if rating is None or not rating.get("from_book"):
+        # The reason, not just the refusal. A rating of None means the
+        # ledger fallback could not run either, so the explanation has to
+        # be computed here rather than read off a result that does not
+        # exist - otherwise the message is "cannot be reported" with no
+        # way to find out why.
+        why = (rating or {}).get("from_book_unavailable") or _why_no_book_figures(case)
+        raise HTTPException(
+            status_code=400,
+            detail=("This renewal cannot be reported from the book. "
+                    + (why.get("reason") or "")).strip(),
+        )
+    book = rating["from_book"]
+
+    account = account_members(_member_dicts(db), case.company_name, _subgroup_master_by_name(db))
+    term = current_term_members(account)
+    windows = term_member_windows(term)
+    claim_rows = [
+        {"patient_id": pid, "date_of_treatment": dot, "final_amount": amt,
+         "claim_status": st, "diagnosis_code": dc, "diagnosis_description": dd,
+         "ip_op_maternity": iom}
+        for pid, dot, amt, st, dc, dd, iom in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+            models.PortfolioClaimEntry.diagnosis_code,
+            models.PortfolioClaimEntry.diagnosis_description,
+            models.PortfolioClaimEntry.ip_op_maternity,
+        ).all()
+    ]
+    by_beneficiary = group_claims_by_beneficiary(claim_rows)
+
+    # Only this account's claims, inside each member's own exposure - the
+    # same window rule the loss ratio uses, so the breakdown below sums to
+    # the incurred figure above it rather than to something near it.
+    own = [
+        c for c in claim_rows
+        if claim_belongs_to_term(c["patient_id"], c.get("date_of_treatment"), windows)
+    ]
+    active, leaving = continuing_and_leaving(account)
+    leaver_ids = {m.get("beneficiary_id") for m in leaving}
+    leaver_claims = sum(c.get("final_amount") or 0.0 for c in own if c["patient_id"] in leaver_ids)
+    monthly = [
+        {"month": f"{m['year']}-{m['month']:02d}", "paid": m["final_amount"]}
+        for m in monthly_final_amount(own)
+    ]
+    # The keys are diagnosis_description/diagnosis_code, not description/
+    # code - reading the wrong ones printed a table of blank names.
+    diagnoses = [
+        {"label": d.get("diagnosis_description") or d.get("diagnosis_code"),
+         "claim_count": d.get("count"), "amount": d.get("value"),
+         "chronic": d.get("classification") == "chronic",
+         "high_exposure": d.get("high_exposure")}
+        for d in top_diagnoses_by_final_amount(own, top_n=8)
+    ]
+    return {
+        "case": {
+            "id": case.id,
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "product": _mode_of([m.get("product_name") for m in term]),
+            "renewal_date": case.renewal_date,
+        },
+        "book": book,
+        "rating": {
+            "required_premium": rating.get("required_premium"),
+            "renewal_increase_pct": rating.get("renewal_increase_pct"),
+            "renewal_base_premium": rating.get("renewal_base_premium"),
+            "expiring_premium": rating.get("expiring_premium"),
+            "case_current_annual_premium": rating.get("case_current_annual_premium"),
+            "premium_disagrees_with_book": rating.get("premium_disagrees_with_book"),
+            "assumptions_used": rating.get("assumptions_used"),
+        },
+        "monthly": monthly,
+        "top_diagnoses": diagnoses,
+        "top_claimants": member_claim_ranking(term, by_beneficiary, windows, top=8),
+        "census": _renewal_census_profile(term),
+        "encounter_split": utilization_by_encounter_type(own),
+        "population": {
+            "active_member_count": len(active),
+            "deleted_member_count": len(leaving),
+            "leaving": {"incurred": round(leaver_claims, 2)},
+        },
+    }
+
+
+def _renewal_census_profile(members: List[dict]) -> dict:
+    """The population being renewed, off the book's own roster.
+
+    Age band, relation mix and dependant ratio - the three things that
+    move next year's cost independently of this year's claims, and the
+    ones an underwriter would otherwise have to open another tab for.
+    """
+    bands = {"0-17": 0, "18-30": 0, "31-40": 0, "41-50": 0, "51-60": 0, "61+": 0}
+    relations: Counter = Counter()
+    genders: Counter = Counter()
+    ages = []
+    for m in members:
+        relations[(m.get("relation") or "unspecified").strip().title()] += 1
+        genders[(m.get("gender") or "?").strip().upper()[:1]] += 1
+        age = m.get("age")
+        if age is None:
+            continue
+        ages.append(age)
+        for label, ceiling in (("0-17", 17), ("18-30", 30), ("31-40", 40),
+                               ("41-50", 50), ("61+", 200)):
+            if age <= ceiling:
+                bands["51-60" if 50 < age <= 60 else label] += 1
+                break
+    employees = sum(v for k, v in relations.items() if k in ("Employee", "Principal", "Staff"))
+    dependants = len(members) - employees
+    return {
+        "member_count": len(members),
+        "average_age": round(sum(ages) / len(ages), 1) if ages else None,
+        "age_bands": [{"label": k, "count": v} for k, v in bands.items() if v],
+        "relations": [{"label": k, "count": v} for k, v in relations.most_common()],
+        "genders": [{"label": k, "count": v} for k, v in genders.most_common()],
+        # Dependants claim differently from employees, and a ratio above
+        # one is the single most reliable signal that next year costs
+        # more than headcount suggests.
+        "dependant_ratio": round(dependants / employees, 2) if employees else None,
+    }
+
+
+def _mode_of(values):
+    present = [v for v in values if v]
+    if not present:
+        return None
+    return Counter(present).most_common(1)[0][0]
+
+
+@router.get("/{case_id}/renewal-report.html", response_class=HTMLResponse,
+            include_in_schema=False)
+def get_renewal_report_html(case_id: int, db: Session = Depends(get_db)):
+    """The document itself, rendered server-side at a URL so the print
+    button is a plain window.open with nothing awaited.
+    """
+    from app.reports.renewal_report import render_renewal_report
+
+    return HTMLResponse(render_renewal_report(get_renewal_report(case_id, db)))
