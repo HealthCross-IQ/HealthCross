@@ -220,8 +220,18 @@ def _ladder(payload: dict) -> str:
         (f'+ Claims inflation {pct(L.get("inflation_pts"))}', pct(L.get("trended_loss_ratio")),
          "added in points, the house convention"),
         (f'&divide; (1 &minus; {pct(L.get("loading_pct"))} loading)',
-         pct(L.get("required_share_of_expiring")),
+         pct(L.get("experience_share_of_expiring")),
          "the loading is a share of the premium, so the part funding claims is premium &times; (1 &minus; loading)"),
+    ]
+    if L.get("floor_applied"):
+        rows.append((
+            f'House floor &mdash; {pct(L.get("minimum_increase_pct"))} minimum',
+            pct(L.get("required_share_of_expiring")),
+            f'this account&rsquo;s own experience asks '
+            f'{"+" if L.get("experience_increase_pct", 0) >= 0 else ""}'
+            f'{L.get("experience_increase_pct")}%, below the house minimum',
+        ))
+    rows += [
         ("Annualised expiring premium", aed(L.get("expiring_annual_premium")),
          "a full year at current rates for the renewing headcount"),
         ("<strong>Required premium</strong>",

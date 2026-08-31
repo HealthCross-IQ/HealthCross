@@ -469,8 +469,9 @@ def test_the_loading_is_a_gross_up_not_a_mark_up(client):
     out = renewal_from_loss_ratio(0.80, 100_000.0, inflation_pts=0.0, loading_pct=0.25)
     # Premium x (1 - loading) is what funds claims, so 80% / 0.75, not
     # 80% x 1.25 - the mark-up understates by the square of the loading.
-    assert out["required_share_of_expiring"] == round(0.80 / 0.75, 4)
-    assert out["required_premium"] != 100_000.0 * 0.80 * 1.25
+    # Read off the experience, since 6.7% is under the house floor.
+    assert out["experience_share_of_expiring"] == round(0.80 / 0.75, 4)
+    assert out["experience_required_premium"] != 100_000.0 * 0.80 * 1.25
 
 
 def test_both_methods_run_the_same_ladder_off_their_own_reserve(client):
@@ -496,3 +497,64 @@ def test_a_zero_expiring_premium_is_refused_rather_than_divided_by(client):
         renewal_from_loss_ratio(0.9, 0.0)
     with pytest.raises(ValueError):
         renewal_from_loss_ratio(0.9, 100_000.0, loading_pct=1.0)
+
+
+# --- the house floor -----------------------------------------------------
+
+def test_an_account_asking_for_less_than_nine_percent_renews_at_nine():
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.50, 100_000.0, inflation_pts=0.075, loading_pct=0.23)
+    assert out["experience_increase_pct"] < 9
+    assert out["renewal_increase_pct"] == 9.0
+    assert out["required_premium"] == 109_000.0
+    assert out["floor_applied"] is True
+
+
+def test_the_floor_never_pulls_a_bigger_ask_down():
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.836, 103_486.0, inflation_pts=0.075, loading_pct=0.23)
+    assert out["renewal_increase_pct"] == 18.31
+    assert out["floor_applied"] is False
+
+
+def test_the_experience_figure_survives_the_floor():
+    # "Needs 9%" and "needs -25% and the house floor is 9%" are different
+    # conversations; folding the floor into the experience would leave a
+    # single number that cannot tell them apart.
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.20, 100_000.0, inflation_pts=0.075, loading_pct=0.23)
+    assert out["experience_increase_pct"] == round((0.275 / 0.77 - 1) * 100, 2)
+    assert out["experience_required_premium"] < out["required_premium"]
+    assert out["renewal_increase_pct"] == 9.0
+
+
+def test_a_loss_making_account_is_unaffected_by_the_floor():
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(1.20, 100_000.0, inflation_pts=0.075, loading_pct=0.23)
+    assert out["floor_applied"] is False
+    assert out["renewal_increase_pct"] == out["experience_increase_pct"]
+
+
+def test_the_floor_can_be_turned_off_for_a_what_if():
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.50, 100_000.0, inflation_pts=0.075,
+                                  loading_pct=0.23, minimum_increase_pct=None)
+    assert out["floor_applied"] is False
+    assert out["renewal_increase_pct"] < 0
+
+
+def test_the_floor_reaches_the_card(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    for m in (body, body["method_b"]):
+        assert "floor_applied" in m
+        assert "experience_increase_pct" in m
+        assert m["minimum_increase_pct"] == 0.09

@@ -4779,10 +4779,21 @@ function _rbLadderHtml(m) {
     ['Loss ratio', p(m.actual_loss_ratio), 'incurred &divide; earned'],
     [`+ Inflation (${p(m.assumptions_used.inflation_pct)})`, p(m.trended_loss_ratio), 'points, not a multiplier'],
     [`&divide; (1 &minus; ${p(m.assumptions_used.loading_pct)} loading)`,
-      p(m.required_share_of_expiring), 'of the expiring premium'],
-    ['Expiring premium', 'AED ' + Math.round(m.renewal_base_premium).toLocaleString(), 'annualised at current rates'],
-    ['Required premium', 'AED ' + Math.round(m.required_premium).toLocaleString(), '', true],
+      p(m.experience_share_of_expiring), 'of the expiring premium, on experience'],
   ];
+  // The floor is a separate line, never folded into the one above it.
+  // "Needs 9%" and "needs 2%, floored to 9%" are different conversations
+  // and a single number cannot tell them apart.
+  if (m.floor_applied) {
+    rows.push([`House floor (${p(m.minimum_increase_pct)} minimum)`,
+      p(m.required_share_of_expiring),
+      `experience asked ${m.experience_increase_pct > 0 ? '+' : ''}${m.experience_increase_pct}%`]);
+  }
+  rows.push(
+    ['Expiring premium', 'AED ' + Math.round(m.renewal_base_premium).toLocaleString(), 'annualised at current rates'],
+    ['Required premium', 'AED ' + Math.round(m.required_premium).toLocaleString(),
+      m.floor_applied ? 'at the house floor' : '', true],
+  );
   return `<table class="rb-table" style="margin-top:4px;">${rows.map(
     ([l, v, note, strong]) => `<tr${strong ? ' class="total"' : ''}>
       <td>${strong ? '<strong>' + l + '</strong>' : l}</td>
@@ -4882,7 +4893,10 @@ function _renewalBenchScorecardHtml(r) {
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
             ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `incurred claims &divide; premium earned over the same days`)}
             ${_rbKpi('Required premium', `AED ${Math.round(r.required_premium).toLocaleString()}`, `${(r.required_share_of_expiring * 100).toFixed(1)}% of the annualised expiring premium`)}
-            ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${Math.round(r.renewal_base_premium).toLocaleString()} annualised expiring${expiringNote}`)}
+            ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`,
+                     r.floor_applied
+                       ? `house floor &mdash; this account&rsquo;s own experience asks ${r.experience_increase_pct > 0 ? '+' : ''}${r.experience_increase_pct}%`
+                       : `vs. AED ${Math.round(r.renewal_base_premium).toLocaleString()} annualised expiring${expiringNote}`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbLadderHtml(r)}
@@ -4897,7 +4911,9 @@ function _renewalBenchScorecardHtml(r) {
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
             ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${b.annualized_incurred_claims.toLocaleString()} incurred claims &divide; earned-basis premium`)}
             ${_rbKpi('Required premium', `AED ${Math.round(b.required_premium).toLocaleString()}`, `after ${(b.assumptions_used.credibility_pct * 100).toFixed(0)}% credibility`)}
-            ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${Math.round(b.renewal_base_premium).toLocaleString()} annualised expiring`)}
+            ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`,
+                     b.floor_applied ? `house floor &mdash; experience asks ${b.experience_increase_pct > 0 ? '+' : ''}${b.experience_increase_pct}%`
+                       : `vs. AED ${Math.round(b.renewal_base_premium).toLocaleString()} annualised expiring`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbLadderHtml(b)}

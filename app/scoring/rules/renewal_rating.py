@@ -68,6 +68,14 @@ DEFAULT_QIC_FEE_PCT = 0.05
 # just case-count instead of member-years.
 MIN_CREDIBLE_CASE_COUNT = 5
 
+#: The house floor on a renewal. An account whose own experience asks for
+#: less than this still renews at this, because a year of good experience
+#: on a small population is mostly luck and the book's costs rise anyway.
+#: Applied to the ASK, not to the experience: the figure the account's own
+#: claims produce is always reported beside it, so nobody mistakes the
+#: floor for a measurement.
+MINIMUM_RENEWAL_INCREASE_PCT = 0.09
+
 
 @dataclass
 class RenewalRatingAssumptions:
@@ -81,6 +89,7 @@ def renewal_from_loss_ratio(
     expiring_annual_premium: float,
     inflation_pts: float = DEFAULT_INFLATION_PCT,
     loading_pct: float = DEFAULT_LOADING_PCT,
+    minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> dict:
     """The renewal price from the account's own loss ratio.
 
@@ -108,22 +117,53 @@ def renewal_from_loss_ratio(
 
     The loading is a share OF THE PREMIUM, so the part funding claims is
     premium x (1 - loading) - hence dividing rather than marking up.
+
+    Finally the house floor (MINIMUM_RENEWAL_INCREASE_PCT): an account
+    asking for less than 9% renews at 9% anyway. It is applied to the ASK
+    and never folded back into the experience, because "this account
+    needs 9%" and "this account needs 2% and the house floor is 9%" are
+    different conversations and one number cannot tell them apart. Both
+    come back - experience_increase_pct and renewal_increase_pct - with
+    floor_applied saying which is being quoted. Pass None to switch the
+    floor off for a what-if; 0.0 is a different setting meaning "never
+    quote a decrease".
     """
     if expiring_annual_premium <= 0:
         raise ValueError("expiring_annual_premium must be positive.")
     if loading_pct >= 1:
         raise ValueError("loading_pct must be below 1.")
     trended = loss_ratio + inflation_pts
-    required_share = trended / (1 - loading_pct)
-    required = expiring_annual_premium * required_share
+    experience_share = trended / (1 - loading_pct)
+
+    # The floor is applied to the ask and never folded into the
+    # experience. An account renewed at the floor and an account whose
+    # own claims happen to need exactly the floor are different
+    # conversations, and a single number cannot tell them apart - so both
+    # figures come back and the caller can say which one it is quoting.
+    # None turns the floor off; 0.0 is a real setting meaning "never
+    # quote a decrease". Treating both as zero made a what-if with no
+    # floor still refuse to show a reduction.
+    if minimum_increase_pct is None:
+        floored, required_share = False, experience_share
+    else:
+        floor_share = 1 + minimum_increase_pct
+        floored = experience_share < floor_share
+        required_share = max(experience_share, floor_share)
     return {
         "loss_ratio": round(loss_ratio, 4),
         "inflation_pts": inflation_pts,
         "trended_loss_ratio": round(trended, 4),
         "loading_pct": loading_pct,
-        "required_share_of_expiring": round(required_share, 4),
         "expiring_annual_premium": round(expiring_annual_premium, 2),
-        "required_premium": round(required, 2),
+        # What the account's own experience asks for, before the floor.
+        "experience_share_of_expiring": round(experience_share, 4),
+        "experience_required_premium": round(expiring_annual_premium * experience_share, 2),
+        "experience_increase_pct": round((experience_share - 1) * 100, 2),
+        # The house floor, and whether it is what is being quoted.
+        "minimum_increase_pct": minimum_increase_pct,
+        "floor_applied": floored,
+        "required_share_of_expiring": round(required_share, 4),
+        "required_premium": round(expiring_annual_premium * required_share, 2),
         "renewal_increase_pct": round((required_share - 1) * 100, 2),
     }
 
