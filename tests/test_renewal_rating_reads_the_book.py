@@ -558,3 +558,62 @@ def test_the_floor_reaches_the_card(client):
         assert "floor_applied" in m
         assert "experience_increase_pct" in m
         assert m["minimum_increase_pct"] == 0.09
+
+
+# --- inputs are validated before anything is priced ----------------------
+
+def test_an_impossible_loading_blocks_the_price_instead_of_producing_one(client):
+    # 86.5% loading leaves 13.5% to fund claims, divides by 0.135, and
+    # turned an account running at 44% into an ask of +283%. A wrong
+    # input must be reported as one, not priced.
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    client.patch(f"/cases/{case_id}", json={
+        "tpa_fee_pct": 0.065, "commission_pct": 0.60, "hc_fee_pct": 0.15, "qic_fee_pct": 0.05})
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["pricing_blocked"] is True
+    assert "required_premium" not in body
+    assert any(p["field"] == "loading_pct" for p in body["pricing_problems"])
+    # The account's own experience is still reported - it is not the
+    # thing that is wrong.
+    assert body["from_book"]["gross_loss_ratio"] is not None
+
+
+def test_a_sane_case_is_not_blocked(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    client.patch(f"/cases/{case_id}", json={
+        "tpa_fee_pct": 0.055, "commission_pct": 0.10, "hc_fee_pct": 0.045, "qic_fee_pct": 0.03})
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert not body.get("pricing_blocked")
+    assert body["required_premium"] > 0
+
+
+def test_every_bad_input_is_reported_at_once():
+    from app.scoring.rules.renewal_rating import pricing_input_problems
+
+    problems = pricing_input_problems(
+        loss_ratio=-0.1, expiring_annual_premium=0.0,
+        inflation_pts=0.9, loading_pct=0.95, member_count=10)
+    fields = {p["field"] for p in problems}
+    # Four fixes should not need four submissions.
+    assert fields == {"loss_ratio", "expiring_annual_premium", "inflation_pts", "loading_pct"}
+
+
+def test_a_premium_that_looks_monthly_is_caught():
+    from app.scoring.rules.renewal_rating import pricing_input_problems
+
+    problems = pricing_input_problems(expiring_annual_premium=900.0, member_count=14)
+    assert any("too low to be an annual medical premium" in p["message"] for p in problems)
+
+
+def test_a_normal_case_reports_no_problems():
+    from app.scoring.rules.renewal_rating import pricing_input_problems
+
+    assert pricing_input_problems(
+        loss_ratio=0.836, expiring_annual_premium=103_486.0,
+        inflation_pts=0.075, loading_pct=0.23, member_count=14) == []

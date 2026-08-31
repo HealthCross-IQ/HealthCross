@@ -76,12 +76,83 @@ MIN_CREDIBLE_CASE_COUNT = 5
 #: floor for a measurement.
 MINIMUM_RENEWAL_INCREASE_PCT = 0.09
 
+#: Above this, a loading is a data-entry error rather than a fee split.
+#: The loading is the share of premium NOT funding claims, so 86.5% says
+#: 13.5% of the premium pays the claims - which no medical account has
+#: ever been written on. Left unchecked it divides by 0.135 and multiplies
+#: the ask by 7.4: one case reached +283% on an account running at 44%.
+MAX_PLAUSIBLE_LOADING_PCT = 0.60
+
 
 @dataclass
 class RenewalRatingAssumptions:
     inflation_pct: float = DEFAULT_INFLATION_PCT
     loading_pct: float = DEFAULT_LOADING_PCT
     credibility_pct: float = 1.0  # Method B (Burning Cost) only - 1.0 is a no-op, reproducing Method A exactly.
+
+
+def pricing_input_problems(
+    loss_ratio: Optional[float] = None,
+    expiring_annual_premium: Optional[float] = None,
+    inflation_pts: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+    member_count: Optional[int] = None,
+) -> List[dict]:
+    """Every input the renewal price depends on, checked in one place.
+
+    Wrong inputs here do not produce slightly wrong prices, they produce
+    prices several times the right one, and the page has no way to show
+    that a fee field rather than the account's experience is the cause:
+    a loading of 86.5% turned an account running at 44% into an ask of
+    +283%. Checking each figure as it is used means a new screen has to
+    remember to check again; checking them together, once, before
+    anything is computed, means a bad input is reported as a bad input
+    wherever it appears.
+
+    Returns a list rather than raising, so a caller can show every
+    problem at once instead of the first one - an underwriter fixing
+    four fee fields should not have to submit four times.
+    """
+    problems: List[dict] = []
+
+    def bad(field, value, message):
+        problems.append({"field": field, "value": value, "message": message})
+
+    if loading_pct is not None:
+        if loading_pct >= 1:
+            bad("loading_pct", loading_pct,
+                f"A loading of {loading_pct:.1%} is the whole premium or more, leaving nothing "
+                f"to fund claims.")
+        elif loading_pct > MAX_PLAUSIBLE_LOADING_PCT:
+            bad("loading_pct", loading_pct,
+                f"A loading of {loading_pct:.1%} leaves only {1 - loading_pct:.1%} of the premium "
+                f"to fund claims. Check the TPA, commission, HealthCross and carrier fee fields - "
+                f"a fee entered as 15 rather than 0.15 does this.")
+        elif loading_pct < 0:
+            bad("loading_pct", loading_pct, "A loading cannot be negative.")
+
+    if inflation_pts is not None and not (0 <= inflation_pts <= 0.5):
+        bad("inflation_pts", inflation_pts,
+            f"Claims inflation of {inflation_pts:.1%} is outside anything the house uses; "
+            f"the default is {DEFAULT_INFLATION_PCT:.1%}.")
+
+    if loss_ratio is not None and loss_ratio < 0:
+        bad("loss_ratio", loss_ratio, "A loss ratio cannot be negative.")
+
+    if expiring_annual_premium is not None and expiring_annual_premium <= 0:
+        bad("expiring_annual_premium", expiring_annual_premium,
+            "There is no expiring premium to price against - set the members' existing rates, "
+            "or the case's expiring premium.")
+    elif (expiring_annual_premium and member_count
+            and expiring_annual_premium / member_count < 100):
+        # A per-member rate under AED 100 a year is a unit error, most
+        # often a monthly figure or a premium entered in thousands.
+        bad("expiring_annual_premium", expiring_annual_premium,
+            f"That is {expiring_annual_premium / member_count:,.0f} per member per year across "
+            f"{member_count} members, which is too low to be an annual medical premium - check "
+            f"whether it is a monthly figure.")
+
+    return problems
 
 
 def renewal_from_loss_ratio(
@@ -132,6 +203,18 @@ def renewal_from_loss_ratio(
         raise ValueError("expiring_annual_premium must be positive.")
     if loading_pct >= 1:
         raise ValueError("loading_pct must be below 1.")
+    if loading_pct > MAX_PLAUSIBLE_LOADING_PCT:
+        # Refused rather than computed. A wrong loading does not produce
+        # a slightly wrong premium, it produces a premium several times
+        # the right one, and an underwriter reading "+283%" beside a 44%
+        # loss ratio has no way to see that a fee field is the cause.
+        raise ValueError(
+            f"A loading of {loading_pct:.1%} leaves only {1 - loading_pct:.1%} of the premium to "
+            f"fund claims, which is not a real fee split - check this case's TPA, commission, "
+            f"HealthCross and carrier fee fields. Above "
+            f"{MAX_PLAUSIBLE_LOADING_PCT:.0%} this is treated as a data-entry error rather than "
+            f"used to price a renewal."
+        )
     trended = loss_ratio + inflation_pts
     experience_share = trended / (1 - loading_pct)
 

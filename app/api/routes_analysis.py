@@ -53,6 +53,7 @@ from app.scoring.rules.renewal_rating import (
     benchmark_case_against_book,
     calculate_renewal_rating,
     calculate_renewal_rating_two_methods,
+    pricing_input_problems,
     renewal_from_loss_ratio,
     case_loading_pct,
     dynamic_ibnr_incurred_claims,
@@ -1109,6 +1110,34 @@ def _rating_from_book_figures(
     lr_a = (paid + outstanding + book["ibnr"]) / earned if earned else 0.0
     lr_b = (paid + outstanding) * (1 + effective_ibnr_pct) / earned if earned else 0.0
     base = expiring["total"] or book["gross_premium"]
+
+    # Every pricing input, checked before anything is priced. A bad fee
+    # field does not make the ask slightly wrong, it makes it several
+    # times wrong, and an underwriter reading the result has no way to
+    # see the input was the cause - so the price is withheld and the
+    # problem named instead.
+    problems = pricing_input_problems(
+        loss_ratio=lr_a, expiring_annual_premium=base,
+        inflation_pts=effective_inflation_pct, loading_pct=effective_loading_pct,
+        member_count=book.get("member_count"),
+    )
+    if problems:
+        return {
+            "rating_source": "book",
+            "from_book": book,
+            "expiring_premium": expiring,
+            "case_current_annual_premium": case.current_annual_premium,
+            "actual_loss_ratio": round(lr_a, 4),
+            "months_used": [],
+            "pricing_blocked": True,
+            "pricing_problems": problems,
+            "assumptions_used": {
+                "inflation_pct": effective_inflation_pct,
+                "loading_pct": effective_loading_pct,
+                "credibility_pct": credibility_pct
+                if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+            },
+        }
     ladder_a = renewal_from_loss_ratio(lr_a, base, effective_inflation_pct, effective_loading_pct)
     ladder_b = renewal_from_loss_ratio(lr_b, base, effective_inflation_pct, effective_loading_pct)
 
