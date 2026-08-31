@@ -2901,6 +2901,7 @@ function renderCaseWorkspace() {
         <input type="file" id="file-member-rate-card" accept=".xls,.xlsx">
         <button onclick="importMemberRateCard()">Import rates</button>
         <span id="status-member-rate-card" class="status-pending"></span>
+        <div id="member-rate-card-error"></div>
       </div>
       <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('member-rates', 'Existing vs. New Rates by Member')">Print / Save as PDF</button></div>
       <div id="member-rates-area"></div>
@@ -3410,6 +3411,8 @@ async function importMemberRateCard() {
   form.append('file', input.files[0]);
   statusEl.textContent = 'Importing...';
   statusEl.className = 'status-pending';
+  const errArea = document.getElementById('member-rate-card-error');
+  if (errArea) errArea.innerHTML = '';
   try {
     const data = await api(`/cases/${currentCase.id}/member-rates/import-rate-card`, { method: 'POST', body: form });
     statusEl.textContent = `${data.matched_count} matched, ${data.unmatched.length} unmatched`;
@@ -3426,8 +3429,17 @@ async function importMemberRateCard() {
 
     renderMemberRatesTable(data);
   } catch (err) {
+    // The reason, in the page and staying there. "Import failed" in a
+    // status pill with the cause in a toast that fades is a dead end -
+    // the message names which layout was expected and what the sheet
+    // actually contained.
     statusEl.textContent = 'Import failed';
     statusEl.className = 'status-err';
+    const area = document.getElementById('member-rate-card-error');
+    if (area) {
+      area.innerHTML = `<div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;
+        padding:9px 12px;margin-top:10px;color:#922b21;">${escapeHtml(err.message)}</div>`;
+    }
     toast(err.message, true);
   }
 }

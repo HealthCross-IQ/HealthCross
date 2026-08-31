@@ -103,12 +103,35 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
     "hc_fee_pct": float}} - fees is whatever subset the file's header
     actually states, never invented.
     """
-    df = pd.read_excel(file, header=None)
+    try:
+        df = pd.read_excel(file, header=None)
+    except Exception as e:  # noqa: BLE001 - pandas raises many shapes
+        # pandas raises ValueError for an unreadable file too, so an
+        # opaque "Excel file format cannot be determined" reached the
+        # page verbatim. Naming the file as the problem, rather than the
+        # engine, is what tells the reader to check what they attached.
+        raise ValueError(
+            f"Could not read that workbook - it does not open as an Excel file "
+            f"({type(e).__name__}: {e}). Check the attachment is the .xlsx the insurer sent."
+        )
 
     header = _find_rate_table_header(df)
     if header is None:
+        # Naming what WAS in the file turns "it did not work" into
+        # something an underwriter can act on - most often the sheet is
+        # a quote or a census rather than a Premium Summary, and the
+        # first few rows say so immediately.
+        seen = []
+        for row_idx in range(min(len(df), 12)):
+            cells = [str(c).strip() for c in df.iloc[row_idx].tolist()
+                     if not pd.isna(c) and str(c).strip()]
+            if cells:
+                seen.append(" | ".join(cells[:6]))
         raise ValueError(
-            "Could not find the rate table (looking for a row with Category/Age Band/Gross Premium columns)"
+            "Could not find the rate table. This importer looks for a header row carrying "
+            "Category, Age Band and Gross Premium columns (the insurer's Premium Summary "
+            "layout). The first rows of the sheet read: "
+            + (" // ".join(seen[:5]) if seen else "(the sheet is empty)")
         )
     header_row, category_col, age_band_col, premium_col = header
 
@@ -137,7 +160,11 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
         })
 
     if not rates:
-        raise ValueError("Rate table header found, but no rate rows parsed underneath it")
+        raise ValueError(
+            f"Found the rate table header on row {header_row + 1}, but no rate rows parsed "
+            f"underneath it. Rows need a Category cell naming a category and a gender "
+            f"(for example \"Category A - Male\"), an age band, and a numeric premium."
+        )
 
     return {"rates": rates, "fees": _extract_fee_pcts(df)}
 

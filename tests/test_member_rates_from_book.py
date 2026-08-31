@@ -120,3 +120,44 @@ def test_a_case_with_no_census_says_so(client):
     resp = client.post(f"/cases/{case_id}/member-rates/from-book")
     assert resp.status_code == 400
     assert "census" in resp.json()["detail"].lower()
+
+
+# --- when the import fails, say why --------------------------------------
+
+def _xlsx_of(rows):
+    import io
+
+    import pandas as pd
+
+    buf = io.BytesIO()
+    pd.DataFrame(rows).to_excel(buf, index=False)
+    buf.seek(0)
+    return buf
+
+
+def test_a_sheet_that_is_not_a_rate_card_names_what_it_found(client):
+    # "Import failed" with the cause in a toast that fades is a dead end.
+    # The message has to say which layout was expected and what the sheet
+    # actually contained.
+    case_id = client.post("/cases", json={
+        "broker_name": "B", "company_name": "C", "industry": "trading"}).json()["id"]
+    resp = client.post(
+        f"/cases/{case_id}/member-rates/import-rate-card",
+        files={"file": ("census.xlsx", _xlsx_of([{"Employee": "A", "DOB": "1990-01-01"}]),
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "Category, Age Band and Gross Premium" in detail
+    assert "Employee" in detail, "the message must quote what the sheet actually held"
+
+
+def test_a_file_pandas_cannot_open_is_a_400_not_a_500(client):
+    case_id = client.post("/cases", json={
+        "broker_name": "B", "company_name": "C", "industry": "trading"}).json()["id"]
+    resp = client.post(
+        f"/cases/{case_id}/member-rates/import-rate-card",
+        files={"file": ("broken.xlsx", b"this is not a workbook", "application/octet-stream")},
+    )
+    assert resp.status_code == 400
+    assert "Could not read that workbook" in resp.json()["detail"]

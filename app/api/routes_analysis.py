@@ -2119,6 +2119,20 @@ async def import_member_rate_card(case_id: int, file: UploadFile = File(...), db
         parsed = parse_premium_summary_rate_card(io.BytesIO(content))
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:  # noqa: BLE001 - pandas raises many shapes
+        # A workbook pandas cannot open at all used to surface as a 500,
+        # which the page rendered as a bare "Import failed" with nothing
+        # to act on. The reason is the whole value of the message.
+        raise HTTPException(
+            status_code=400,
+            detail=f"Could not read that workbook: {type(e).__name__}: {e}",
+        )
+    if not case.census_records:
+        raise HTTPException(
+            status_code=400,
+            detail=("The rate card read fine, but this case has no census - "
+                    "there are no members to match rates onto. Upload the census first."),
+        )
 
     matched_count = 0
     unmatched = []
