@@ -255,3 +255,28 @@ def test_no_book_uploaded_is_reported_as_that_rather_than_a_name_problem(client)
 
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert "No membership has been uploaded" in body["from_book_unavailable"]["reason"]
+
+
+# --- the headline KPI ----------------------------------------------------
+
+def test_the_bench_headline_loss_ratio_comes_from_the_book(client):
+    # The KPI strip is the number people read and quote. It showed
+    # Method A's 75.6% while the book had the account at 83.6%.
+    _nomada(client)
+    case_id = _case(client)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    summary = client.get(f"/cases/{case_id}/renewal-bench-summary").json()
+    book = client.get(f"/cases/{case_id}/renewal-rating").json()["from_book"]
+    assert summary["kpis"]["actual_loss_ratio"] == book["gross_loss_ratio"]
+    assert "from the book" in summary["kpis"]["loss_ratio_basis"]
+    assert summary["kpis"]["loss_ratio_net"] == book["net_loss_ratio"]
+
+
+def test_the_headline_says_when_it_is_falling_back_to_the_ledger(client):
+    case_id = _case(client, company="NOT ON THE BOOK")
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    kpis = client.get(f"/cases/{case_id}/renewal-bench-summary").json()["kpis"]
+    assert kpis["loss_ratio_basis"] == "Method A, from this case's claims ledger"
+    assert kpis.get("loss_ratio_net") is None

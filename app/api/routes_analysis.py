@@ -1380,7 +1380,20 @@ def get_renewal_bench_summary(
     kpis = case_claim_kpis(
         claims, census_member_count=census_member_count, census_ages=census_ages, months_count=len(renewal["months_used"])
     )
-    kpis["actual_loss_ratio"] = renewal["actual_loss_ratio"]
+    # The headline figure on the Renewal Bench. Where the account is on
+    # the book, this is the book's own gross earned loss ratio - the same
+    # number the Portfolio Loss Ratio screen reports - not Method A's,
+    # which annualises a case ledger and divides by whatever premium the
+    # case record happens to carry. NOMADA read 75.6% here against 83.6%
+    # there, and the headline is the number people quote.
+    book = renewal.get("from_book")
+    if book and book.get("gross_loss_ratio") is not None:
+        kpis["actual_loss_ratio"] = book["gross_loss_ratio"]
+        kpis["loss_ratio_basis"] = f"gross earned, from the book as of {book['as_of']}"
+        kpis["loss_ratio_net"] = book.get("net_loss_ratio")
+    else:
+        kpis["actual_loss_ratio"] = renewal["actual_loss_ratio"]
+        kpis["loss_ratio_basis"] = "Method A, from this case's claims ledger"
 
     claims_cost_breakdown = utilization_by_encounter_type(claims)
 

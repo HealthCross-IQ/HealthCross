@@ -4829,7 +4829,10 @@ function _rbKpiStripHtml(kpis) {
   return `
     <div class="rb-card">
       <div class="rb-kpi-strip">
-        ${_rbKpi('Loss ratio', `${(kpis.actual_loss_ratio * 100).toFixed(1)}%`, 'Method A, actual')}
+        ${_rbKpi('Loss ratio', `${(kpis.actual_loss_ratio * 100).toFixed(1)}%`,
+                 escapeHtml(kpis.loss_ratio_basis || 'Method A, actual'))}
+        ${kpis.loss_ratio_net != null
+          ? _rbKpi('Net loss ratio', `${(kpis.loss_ratio_net * 100).toFixed(1)}%`, 'after loading') : ''}
         ${kpis.claim_frequency != null ? _rbKpi('Claim frequency', kpis.claim_frequency.toFixed(2), 'claims / member / year') : ''}
         ${kpis.avg_claim_severity != null ? _rbKpi('Avg. claim severity', `AED ${Math.round(kpis.avg_claim_severity).toLocaleString()}`, 'per claim line') : ''}
         ${kpis.claimant_ratio != null ? _rbKpi('Claimant ratio', `${(kpis.claimant_ratio * 100).toFixed(1)}%`, 'of census with a claim on file') : ''}
