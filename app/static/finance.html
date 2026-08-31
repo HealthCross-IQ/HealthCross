@@ -1,0 +1,1721 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>HealthCross Finance Status</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #f9f9f7;
+    --surface: #fcfcfb;
+    --surface-2: #f0efec;
+    --border: rgba(11,11,11,0.10);
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --ink-muted: #898781;
+    --accent: #2a78d6;
+    --accent-ink: #ffffff;
+    --good: #0ca30c;
+    --good-bg: #0ca30c1a;
+    --warning: #fab219;
+    --warning-bg: #fab2191a;
+    --serious: #ec835a;
+    --serious-bg: #ec835a1a;
+    --critical: #d03b3b;
+    --critical-bg: #d03b3b1a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d0d0d;
+      --surface: #1a1a19;
+      --surface-2: #232320;
+      --border: rgba(255,255,255,0.10);
+      --ink: #ffffff;
+      --ink-2: #c3c2b7;
+      --ink-muted: #898781;
+      --accent: #3987e5;
+      --accent-ink: #0d0d0d;
+      --good-bg: #0ca30c26;
+      --warning-bg: #fab21926;
+      --serious-bg: #ec835a26;
+      --critical-bg: #d03b3b26;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    line-height: 1.45;
+  }
+  header {
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    position: sticky;
+    top: 0;
+    background: var(--bg);
+    z-index: 5;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 700; letter-spacing: -0.01em; }
+  header span { color: var(--ink-muted); font-size: 12.5px; }
+  header a { margin-left: auto; color: var(--accent); font-size: 13px; text-decoration: none; font-weight: 600; }
+  header a:hover { text-decoration: underline; }
+
+  main { padding: 22px 26px 60px; max-width: 1040px; margin: 0 auto; }
+
+  button, .btn {
+    font: inherit;
+    cursor: pointer;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    padding: 8px 14px;
+    font-size: 13.5px;
+  }
+  button:hover { background: var(--surface-2); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: transparent; font-weight: 600; }
+  button.primary:hover { filter: brightness(1.08); }
+  button.small { padding: 5px 10px; font-size: 12.5px; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px 22px;
+    margin-bottom: 16px;
+  }
+  .card h3 { margin: 0 0 4px; font-size: 15px; font-weight: 700; }
+  .card .hint { color: var(--ink-muted); font-size: 12.5px; margin-bottom: 14px; }
+
+  label { display: block; font-size: 12.5px; color: var(--ink-2); margin: 10px 0 4px; }
+  input[type=text], input[type=number], input[type=date], input[type=month], select {
+    width: 100%;
+    padding: 8px 10px;
+    border-radius: 7px;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 13.5px;
+  }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: flex-end; }
+  .row > div { flex: 1; min-width: 160px; }
+
+  .kpi-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 10px; margin-bottom: 8px; }
+  .kpi { background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .kpi .label { font-size: 11px; color: var(--ink-muted); display: block; margin-bottom: 2px; }
+  .kpi .value { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  table th, table td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--border); font-variant-numeric: tabular-nums; }
+  table th { color: var(--ink-muted); font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; font-variant-numeric: normal; }
+  .table-wrap { overflow-x: auto; }
+
+  .pill { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .pill-good { background: var(--good-bg); color: var(--good); }
+  .pill-warn { background: var(--warning-bg); color: var(--ink-2); }
+  .pill-bad { background: var(--critical-bg); color: var(--critical); }
+  .pill-neutral { background: var(--surface-2); color: var(--ink-2); }
+
+  .client-row { cursor: pointer; }
+  .client-row:hover td { background: var(--surface-2); }
+  .client-row .chevron { display: inline-block; width: 12px; margin-right: 6px; color: var(--ink-muted); transition: transform 0.15s; }
+  .client-row.expanded .chevron { transform: rotate(90deg); }
+  .detail-row td { background: var(--bg); padding: 0; border-bottom: 1px solid var(--border); }
+  .detail-row .detail-wrap { padding: 10px 10px 14px 30px; }
+  .detail-row table { margin-top: 0; font-size: 12.5px; }
+  .detail-row table th, .detail-row table td { padding: 5px 8px; }
+
+  .tab-bar { display: flex; gap: 4px; margin-bottom: 18px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+  .tab-btn {
+    background: none; border: none; border-radius: 0;
+    padding: 9px 14px; font-size: 13.5px; font-weight: 600;
+    color: var(--ink-muted); border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+  }
+  .tab-btn:hover { background: none; color: var(--ink); }
+  .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .tab-panel { display: none; }
+  .tab-panel.active { display: block; }
+
+  .upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+  .upload-row input[type=file] { flex: 1; min-width: 180px; font-size: 12.5px; }
+  .status-ok { color: var(--good); font-size: 12.5px; }
+  .status-err { color: var(--critical); font-size: 12.5px; }
+
+  .empty-state { color: var(--ink-muted); font-size: 13px; padding: 16px 0; text-align: center; }
+  #toast {
+    position: fixed; bottom: 20px; right: 20px;
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 10px 16px; font-size: 13px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.14);
+    display: none; max-width: 420px;
+  }
+
+  #printArea { display: none; }
+  @media print {
+    body > *:not(#printArea) { display: none !important; }
+    #printArea { display: block !important; }
+    #printArea h2 { font-size: 16px; margin: 0 0 2px; }
+    #printArea .hint { color: #555; font-size: 12px; margin-bottom: 14px; }
+    #printArea table { width: 100%; border-collapse: collapse; }
+    #printArea th, #printArea td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #ccc; font-size: 12.5px; }
+    #printArea tfoot td { font-weight: 700; border-top: 2px solid #000; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>HealthCross</h1>
+  <span>Finance Status</span>
+  <a href="/">&larr; Underwriting</a>
+</header>
+
+<main>
+  <div class="tab-bar" id="tabBar"></div>
+  <div id="panels"></div>
+</main>
+
+<div id="toast"></div>
+<div id="printArea"></div>
+
+<script>
+const money = (v, ccy) => (v === null || v === undefined) ? '—' : `${(ccy || 'AED')} ${Number(v).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+const esc = s => (s ?? '').toString().replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+function toast(message, isError) {
+  const el = document.getElementById('toast');
+  el.textContent = message;
+  el.style.borderColor = isError ? 'var(--critical)' : 'var(--border)';
+  el.style.display = 'block';
+  clearTimeout(el._t);
+  el._t = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+async function api(path, options) {
+  const res = await fetch(path, options);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail || (`Request failed (${res.status})`));
+  }
+  if (res.status === 204) return null;
+  return res.json();
+}
+
+const TABS = [
+  { id: 'summary', label: 'Summary' },
+  { id: 'tracker', label: 'Payment Tracker' },
+  { id: 'analysis', label: 'Analysis' },
+  { id: 'reconciliation', label: 'Reconciliation' },
+  { id: 'people', label: 'Employees & Expenses' },
+  { id: 'cashflow', label: 'Cash Flow & Forecast' },
+];
+
+function renderTabs() {
+  document.getElementById('tabBar').innerHTML = TABS.map(t =>
+    `<button class="tab-btn" id="tabbtn-${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`
+  ).join('');
+  document.getElementById('panels').innerHTML = TABS.map(t =>
+    `<div class="tab-panel" id="panel-${t.id}"></div>`
+  ).join('');
+}
+
+function switchTab(id) {
+  TABS.forEach(t => {
+    document.getElementById(`tabbtn-${t.id}`).classList.toggle('active', t.id === id);
+    document.getElementById(`panel-${t.id}`).classList.toggle('active', t.id === id);
+  });
+  const loaders = { summary: loadSummary, tracker: loadTracker, analysis: loadAnalysisPanel, reconciliation: loadReconciliationPanel, people: loadPeoplePanel, cashflow: loadCashflowPanel };
+  loaders[id] && loaders[id]();
+}
+
+/* ---------------- Summary ---------------- */
+
+async function loadSummary() {
+  const panel = document.getElementById('panel-summary');
+  panel.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const s = await api('/finance/summary');
+    panel.innerHTML = `
+      <div class="card">
+        <h3>At a glance</h3>
+        <div class="hint">As of ${new Date(s.as_of).toLocaleString()}</div>
+        <div class="kpi-grid">
+          <div class="kpi"><span class="label">HC Fees Invoiced</span><span class="value">${money(s.total_hc_fees_invoiced)}</span></div>
+          <div class="kpi"><span class="label">HC Fees Received</span><span class="value">${money(s.total_hc_fees_received)}</span></div>
+          <div class="kpi"><span class="label">Outstanding</span><span class="value">${money(s.total_outstanding)}</span></div>
+          <div class="kpi"><span class="label">YTD Expenses</span><span class="value">${money(s.ytd_expenses)}</span></div>
+          <div class="kpi"><span class="label">YTD Net</span><span class="value">${money(s.ytd_net)}</span></div>
+        </div>
+        <button onclick="loadSummary()">Refresh</button>
+      </div>
+    `;
+  } catch (e) {
+    panel.innerHTML = `<div class="card"><div class="status-err">${esc(e.message)}</div></div>`;
+  }
+}
+
+/* ---------------- Payment Tracker ---------------- */
+
+async function loadTracker() {
+  const panel = document.getElementById('panel-tracker');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Upload Payment Tracker</h3>
+      <div class="hint">Upload the working tracker spreadsheet (any of its "Payment Tracker" / "Ledgers" / "Eman" sheets).</div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="trackerFile" /></div>
+        <div><label>Sheet name</label><input type="text" id="trackerSheet" value="Payment Tracker" /></div>
+        <div><label>Mode</label>
+          <select id="trackerMode">
+            <option value="append">Append (add to existing)</option>
+            <option value="replace">Replace (wipe existing first)</option>
+          </select>
+        </div>
+        <div><button class="primary" onclick="uploadTracker()">Upload</button></div>
+      </div>
+      <div id="trackerUploadStatus"></div>
+    </div>
+    <div class="card">
+      <h3>Client-wise outstanding</h3>
+      <div class="hint">Per client: how much is still outstanding on the client-payment side (they haven't paid QIC yet), and how much HC fee is still outstanding (QIC hasn't paid HC yet) - sorted by HC outstanding fee, highest first. Click a client row to see every outstanding invoice (invoice no., policy no., due date, aging, flags).</div>
+      <div class="row">
+        <div><label>Search client</label><input type="text" id="clientOutstandingSearch" placeholder="Type a client name&hellip;" oninput="renderClientWiseOutstanding()" /></div>
+        <div><label>Min. Client Outstanding Amount</label><input type="number" id="clientOutstandingMinClient" placeholder="0" oninput="renderClientWiseOutstanding()" /></div>
+        <div><label>Min. HC Outstanding Fee</label><input type="number" id="clientOutstandingMinHc" placeholder="0" oninput="renderClientWiseOutstanding()" /></div>
+        <div><button onclick="loadClientWiseOutstanding()">Refresh</button></div>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <div><button class="small" onclick="downloadClientOutstandingCsv('client')">&#8595; Download client outstanding (CSV)</button></div>
+        <div><button class="small" onclick="downloadClientOutstandingCsv('hc')">&#8595; Download HC fee outstanding (CSV)</button></div>
+      </div>
+      <div class="table-wrap" id="clientOutstandingTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+    <div class="card">
+      <h3>Tracker entries</h3>
+      <div class="row">
+        <div><label>Search (doc no. or client)</label><input type="text" id="trackerSearch" placeholder="Type to search&hellip;" oninput="renderTrackerTable()" /></div>
+        <div><label>Filter: HC Payment Status</label>
+          <select id="trackerFilterStatus" onchange="loadTrackerTable()">
+            <option value="">All</option>
+            <option value="Received">Received</option>
+            <option value="Outstanding">Outstanding</option>
+          </select>
+        </div>
+        <div><button onclick="loadTrackerTable()">Refresh</button></div>
+      </div>
+      <div class="hint">Click a column header to sort.</div>
+      <div class="table-wrap" id="trackerTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  loadClientWiseOutstanding();
+  loadTrackerTable();
+}
+
+let clientOutstandingRows = [];
+let clientOutstandingExpanded = new Set();
+
+async function loadClientWiseOutstanding() {
+  const el = document.getElementById('clientOutstandingTable');
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    clientOutstandingRows = await api('/finance/payment-tracker');
+    renderClientWiseOutstanding();
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function daysBetween(a, b) { return Math.round((a - b) / 86400000); }
+
+function agingBadge(dueDate) {
+  if (!dueDate) return `<span class="pill pill-neutral">No due date</span>`;
+  const daysOverdue = daysBetween(new Date(), new Date(dueDate));
+  if (daysOverdue > 60) return `<span class="pill pill-bad">Overdue ${daysOverdue}d</span>`;
+  if (daysOverdue > 0) return `<span class="pill pill-warn">Overdue ${daysOverdue}d</span>`;
+  if (daysOverdue > -14) return `<span class="pill pill-warn">Due in ${-daysOverdue}d</span>`;
+  return `<span class="pill pill-good">Due in ${-daysOverdue}d</span>`;
+}
+
+// Groups the raw tracker rows by client, tracking both the outstanding
+// counts/amounts and the underlying rows so the UI can drill into invoice
+// level detail and CSV export can reuse the exact same filtering.
+function buildClientOutstandingGroups() {
+  const byClient = {};
+  for (const r of clientOutstandingRows) {
+    const name = r.main_policy_holder || '(unknown)';
+    if (!byClient[name]) byClient[name] = { clientCount: 0, clientAmount: 0, hcCount: 0, hcAmount: 0, rows: [] };
+    const bucket = byClient[name];
+    const clientOutstanding = (r.client_payment_status || '') !== 'Settled';
+    const hcOutstanding = !(r.hc_payment_status || '').toLowerCase().startsWith('received');
+    if (clientOutstanding) { bucket.clientCount += 1; bucket.clientAmount += r.invoice_amount || 0; }
+    if (hcOutstanding) { bucket.hcCount += 1; bucket.hcAmount += r.total_value || 0; }
+    if (clientOutstanding || hcOutstanding) bucket.rows.push({ ...r, clientOutstanding, hcOutstanding });
+  }
+  return byClient;
+}
+
+function filteredClientOutstandingEntries() {
+  const search = (document.getElementById('clientOutstandingSearch').value || '').trim().toLowerCase();
+  const minClient = parseFloat(document.getElementById('clientOutstandingMinClient').value) || 0;
+  const minHc = parseFloat(document.getElementById('clientOutstandingMinHc').value) || 0;
+  const byClient = buildClientOutstandingGroups();
+  return Object.entries(byClient)
+    .filter(([, b]) => b.clientCount > 0 || b.hcCount > 0)
+    .filter(([name]) => !search || name.toLowerCase().includes(search))
+    .filter(([, b]) => b.clientAmount >= minClient && b.hcAmount >= minHc);
+}
+
+function toggleClientOutstandingDetail(name) {
+  if (clientOutstandingExpanded.has(name)) clientOutstandingExpanded.delete(name);
+  else clientOutstandingExpanded.add(name);
+  renderClientWiseOutstanding();
+}
+
+function clientOutstandingDetailRowHtml(r) {
+  const clientBadge = r.clientOutstanding
+    ? `<span class="pill pill-warn">${esc(r.client_payment_status || 'Outstanding')}</span>`
+    : `<span class="pill pill-good">${esc(r.client_payment_status || 'Settled')}</span>`;
+  const hcBadge = r.hcOutstanding
+    ? `<span class="pill pill-warn">${esc(r.hc_payment_status || 'Outstanding')}</span>`
+    : `<span class="pill pill-good">${esc(r.hc_payment_status || 'Received')}</span>`;
+  let flag = '';
+  if (!r.clientOutstanding && r.hcOutstanding) {
+    flag = `<span class="pill pill-bad">Client paid - HC fee not yet collected</span>`;
+  } else if (r.clientOutstanding && r.due_date && daysBetween(new Date(), new Date(r.due_date)) > 60) {
+    flag = `<span class="pill pill-bad">Long overdue</span>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.doc_no || r.doc_no_raw || '—')}</td>
+      <td>${esc(r.policy_no || '—')}</td>
+      <td>${esc(r.product || '—')}</td>
+      <td>${esc(r.due_date || '—')}</td>
+      <td>${agingBadge(r.due_date)}</td>
+      <td>${clientBadge}</td>
+      <td>${money(r.invoice_amount)}</td>
+      <td>${hcBadge}</td>
+      <td>${money(r.total_value)}</td>
+      <td>${flag}</td>
+    </tr>
+  `;
+}
+
+function renderClientWiseOutstanding() {
+  const el = document.getElementById('clientOutstandingTable');
+  if (!clientOutstandingRows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet.</div>`; return; }
+
+  const clients = filteredClientOutstandingEntries()
+    .sort((a, b) => b[1].hcAmount - a[1].hcAmount);
+
+  if (!clients.length) { el.innerHTML = `<div class="empty-state">No clients match the current search/filter.</div>`; return; }
+
+  const totalClientAmount = clients.reduce((s, [, b]) => s + b.clientAmount, 0);
+  const totalHcAmount = clients.reduce((s, [, b]) => s + b.hcAmount, 0);
+  const search = (document.getElementById('clientOutstandingSearch').value || '').trim();
+  const minClient = parseFloat(document.getElementById('clientOutstandingMinClient').value) || 0;
+  const minHc = parseFloat(document.getElementById('clientOutstandingMinHc').value) || 0;
+  const isFiltered = !!search || minClient > 0 || minHc > 0;
+
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Client</th><th>Outstanding Invoices (Client)</th><th>Client Outstanding Amount</th>
+        <th>Outstanding Invoices (HC)</th><th>HC Outstanding Fee</th>
+      </tr></thead>
+      <tbody>
+        ${clients.map(([name, b]) => {
+          const expanded = clientOutstandingExpanded.has(name);
+          const detailRows = b.rows.slice().sort((x, y) => {
+            const dx = x.due_date ? new Date(x.due_date).getTime() : Infinity;
+            const dy = y.due_date ? new Date(y.due_date).getTime() : Infinity;
+            return dx - dy;
+          });
+          return `
+            <tr class="client-row${expanded ? ' expanded' : ''}" data-name="${esc(name)}" onclick="toggleClientOutstandingDetail(this.dataset.name)">
+              <td><span class="chevron">&#9656;</span>${esc(name)}</td>
+              <td>${b.clientCount}</td>
+              <td>${money(b.clientAmount)}</td>
+              <td>${b.hcCount}</td>
+              <td>${money(b.hcAmount)}</td>
+            </tr>
+            <tr class="detail-row" style="display:${expanded ? 'table-row' : 'none'};">
+              <td colspan="5"><div class="detail-wrap"><table>
+                <thead><tr>
+                  <th>Doc No.</th><th>Policy No.</th><th>Product</th><th>Due Date</th><th>Aging</th>
+                  <th>Client Status</th><th>Client Amount</th><th>HC Status</th><th>HC Fee</th><th>Flag</th>
+                </tr></thead>
+                <tbody>${detailRows.map(clientOutstandingDetailRowHtml).join('')}</tbody>
+              </table></div></td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+      <tfoot>
+        <tr style="font-weight:700;">
+          <td>TOTAL${isFiltered ? ' (filtered)' : ''}</td><td></td><td>${money(totalClientAmount)}</td><td></td><td>${money(totalHcAmount)}</td>
+        </tr>
+      </tfoot>
+    </table>
+  `;
+}
+
+function csvCell(v) {
+  const s = (v === null || v === undefined) ? '' : String(v);
+  return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+
+function downloadClientOutstandingCsv(kind) {
+  if (!clientOutstandingRows.length) { toast('Nothing to export yet', true); return; }
+  const clients = filteredClientOutstandingEntries();
+  const headers = kind === 'client'
+    ? ['Client', 'Doc No.', 'Policy No.', 'Product', 'Due Date', 'Client Payment Status', 'Client Outstanding Amount']
+    : ['Client', 'Doc No.', 'Policy No.', 'Product', 'Due Date', 'HC Payment Status', 'HC Outstanding Fee'];
+
+  const lines = [headers.join(',')];
+  for (const [name, b] of clients) {
+    for (const r of b.rows) {
+      if (kind === 'client' && !r.clientOutstanding) continue;
+      if (kind === 'hc' && !r.hcOutstanding) continue;
+      const amount = kind === 'client' ? (r.invoice_amount || 0) : (r.total_value || 0);
+      const status = kind === 'client' ? (r.client_payment_status || '') : (r.hc_payment_status || '');
+      const cells = [name, r.doc_no || r.doc_no_raw || '', r.policy_no || '', r.product || '', r.due_date || '', status, amount];
+      lines.push(cells.map(csvCell).join(','));
+    }
+  }
+  if (lines.length === 1) { toast('Nothing to export for the current search/filter', true); return; }
+
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const suffix = kind === 'client' ? 'client_outstanding' : 'hc_fee_outstanding';
+  a.href = url;
+  a.download = `${suffix}_${new Date().toISOString().slice(0, 10)}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function uploadTracker() {
+  const fileInput = document.getElementById('trackerFile');
+  const statusEl = document.getElementById('trackerUploadStatus');
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  const sheet = document.getElementById('trackerSheet').value.trim();
+  const mode = document.getElementById('trackerMode').value;
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    let url = `/finance/payment-tracker/upload?mode=${encodeURIComponent(mode)}`;
+    if (sheet) url += `&sheet_name=${encodeURIComponent(sheet)}`;
+    const rows = await api(url, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows.</span>`;
+    toast(`Uploaded ${rows.length} payment tracker rows`);
+    loadTrackerTable();
+    loadClientWiseOutstanding();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+let trackerTableRows = [];
+let trackerSort = { key: null, dir: 1 };
+
+const TRACKER_COLUMNS = [
+  { key: 'doc_no', label: 'Doc No' },
+  { key: 'main_policy_holder', label: 'Client' },
+  { key: 'channel', label: 'Channel' },
+  { key: 'product', label: 'Product' },
+  { key: 'total_value', label: 'Total Value' },
+  { key: 'client_payment_status', label: 'Client Status' },
+  { key: 'hc_payment_status', label: 'HC Status' },
+  { key: 'payment_receive_date', label: 'Received' },
+];
+
+async function loadTrackerTable() {
+  const el = document.getElementById('trackerTable');
+  const status = document.getElementById('trackerFilterStatus').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    let url = '/finance/payment-tracker';
+    if (status) url += `?hc_payment_status=${encodeURIComponent(status)}`;
+    trackerTableRows = await api(url);
+    renderTrackerTable();
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function sortTrackerTable(key) {
+  if (trackerSort.key === key) trackerSort.dir *= -1;
+  else trackerSort = { key, dir: 1 };
+  renderTrackerTable();
+}
+
+function renderTrackerTable() {
+  const el = document.getElementById('trackerTable');
+  if (!trackerTableRows.length) { el.innerHTML = `<div class="empty-state">No payment tracker rows yet - upload a file above.</div>`; return; }
+
+  const search = (document.getElementById('trackerSearch').value || '').trim().toLowerCase();
+  let rows = trackerTableRows;
+  if (search) {
+    rows = rows.filter(r =>
+      (r.doc_no || '').toLowerCase().includes(search) ||
+      (r.main_policy_holder || '').toLowerCase().includes(search)
+    );
+  }
+
+  if (trackerSort.key) {
+    const key = trackerSort.key;
+    const dir = trackerSort.dir;
+    rows = rows.slice().sort((a, b) => {
+      let av = a[key], bv = b[key];
+      if (typeof av === 'string' || typeof bv === 'string') {
+        av = (av || '').toString().toLowerCase();
+        bv = (bv || '').toString().toLowerCase();
+        return av < bv ? -dir : av > bv ? dir : 0;
+      }
+      av = av ?? -Infinity; bv = bv ?? -Infinity;
+      return (av - bv) * dir;
+    });
+  }
+
+  if (!rows.length) { el.innerHTML = `<div class="empty-state">No rows match your search.</div>`; return; }
+
+  const shown = rows.slice(0, 100);
+  const arrow = key => trackerSort.key === key ? (trackerSort.dir === 1 ? ' &#9650;' : ' &#9660;') : '';
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        ${TRACKER_COLUMNS.map(c => `<th style="cursor:pointer;" onclick="sortTrackerTable('${c.key}')">${c.label}${arrow(c.key)}</th>`).join('')}
+        <th></th>
+      </tr></thead>
+      <tbody>
+        ${shown.map(r => `
+          <tr>
+            <td>${esc(r.doc_no)}</td>
+            <td>${esc(r.main_policy_holder)}</td>
+            <td>${esc(r.channel)}</td>
+            <td>${esc(r.product)}</td>
+            <td>${money(r.total_value)}</td>
+            <td>${statusPill(r.client_payment_status)}</td>
+            <td>${statusPill(r.hc_payment_status)}</td>
+            <td>${esc(r.payment_receive_date || r.payment_receive_note || '—')}</td>
+            <td>${(r.hc_payment_status || '').toLowerCase().startsWith('received') ? '' :
+              `<button class="small" onclick="markReceived(${r.id})">Mark Received</button>`}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    ${rows.length > 100 ? `<div class="hint">Showing first 100 of ${rows.length} matching rows.</div>` : ''}
+  `;
+}
+
+function statusPill(status) {
+  if (!status) return `<span class="pill pill-neutral">&mdash;</span>`;
+  const s = status.toLowerCase();
+  if (s.startsWith('received') || s === 'settled') return `<span class="pill pill-good">${esc(status)}</span>`;
+  if (s.includes('outstanding') || s.includes('due')) return `<span class="pill pill-warn">${esc(status)}</span>`;
+  return `<span class="pill pill-neutral">${esc(status)}</span>`;
+}
+
+async function markReceived(id) {
+  const today = new Date().toISOString().slice(0, 10);
+  try {
+    await api(`/finance/payment-tracker/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hc_payment_status: 'Received', payment_receive_date: today }),
+    });
+    toast('Marked as received');
+    loadTrackerTable();
+    loadClientWiseOutstanding();
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+/* ---------------- Analysis ---------------- */
+
+function loadAnalysisPanel() {
+  const panel = document.getElementById('panel-analysis');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Payment Tracker Analysis</h3>
+      <div class="hint">
+        A single view over the Payment Tracker alone: HC fee received grouped by Payment Receive Date
+        (matched against the bank statement), amounts still due for collection and outstanding, HC fee %
+        checked against the active rate card, and totals across every tracker row.
+      </div>
+      <button class="primary" onclick="runAnalysis()">Refresh</button>
+      <div id="analysisContent"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  runAnalysis();
+}
+
+async function runAnalysis() {
+  const el = document.getElementById('analysisContent');
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api('/finance/payment-tracker-analysis');
+    const avgPct = r.average_fee_pct_of_premium !== null && r.average_fee_pct_of_premium !== undefined
+      ? `${(r.average_fee_pct_of_premium * 100).toFixed(2)}%` : '—';
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total Fee</span><span class="value">${money(r.total_fee)}</span></div>
+        <div class="kpi"><span class="label">Total Received</span><span class="value">${money(r.total_received)}</span></div>
+        <div class="kpi"><span class="label">Total Premium</span><span class="value">${money(r.total_premium)}</span></div>
+        <div class="kpi"><span class="label">Avg. Fee % of Premium</span><span class="value">${avgPct}</span></div>
+        <div class="kpi"><span class="label">Due for Collection (Client)</span><span class="value">${money(r.total_due_for_collection)}</span></div>
+        <div class="kpi"><span class="label">Outstanding (HC Fee)</span><span class="value">${money(r.total_outstanding_hc_fee)}</span></div>
+      </div>
+
+      <h3 style="margin-top:22px;">HC Fee Received by Date, vs. Bank</h3>
+      <div class="hint">Every date HC marked fee(s) as Received, summed and matched against the nearest bank credit within a tolerance window.</div>
+      ${receivedByDateTableHtml(r.received_by_date)}
+
+      <h3 style="margin-top:22px;">Client Settled, HC Fee Not Yet Received <span class="hint" style="margin:0;">(${r.client_settled_hc_outstanding_count}, ${money(r.client_settled_hc_outstanding_amount)})</span></h3>
+      <div class="hint">The client has already paid QIC, but HC hasn't yet collected its own fee on the same document - the collection gap most worth chasing.</div>
+      ${clientSettledHcOutstandingTableHtml(r.client_settled_hc_outstanding)}
+
+      <h3 style="margin-top:22px;">Fee Rate Mismatches <span class="hint" style="margin:0;">(${r.fee_rate_mismatch_count})</span></h3>
+      <div class="hint">Rate-carded rows whose own recorded HC Fee % doesn't match the active FeeRateCard for their channel &amp; tier band. Manual/negotiated rows are never checked here.</div>
+      ${feeRateMismatchTableHtml(r.fee_rate_mismatches)}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function receivedByDateTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No "Received" tracker rows with a Payment Receive Date yet.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Receive Date</th><th>Count</th><th>Amount Received</th><th>Bank Credit</th><th>Bank Txn Date</th><th>Variance</th><th>Status</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.receive_date)}</td>
+              <td>${row.count}</td>
+              <td>${money(row.amount_received)}</td>
+              <td>${row.bank_credit_amount !== null && row.bank_credit_amount !== undefined ? money(row.bank_credit_amount) : '—'}</td>
+              <td>${esc(row.bank_txn_date || '—')}</td>
+              <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
+              <td>${row.status === 'matched' ? `<span class="pill pill-good">Matched</span>` : `<span class="pill pill-bad">No Bank Match</span>`}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function clientSettledHcOutstandingTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No rows - every Settled client invoice already has its HC fee collected.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Doc No.</th><th>Policy No.</th><th>Client</th><th>HC Fee</th><th>HC Status</th><th>Due Date</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.doc_no || '—')}</td>
+              <td>${esc(row.policy_no || '—')}</td>
+              <td>${esc(row.client_name || '—')}</td>
+              <td>${money(row.total_value)}</td>
+              <td><span class="pill pill-bad">${esc(row.hc_payment_status || 'Outstanding')}</span></td>
+              <td>${esc(row.due_date || '—')}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+function feeRateMismatchTableHtml(rows) {
+  if (!rows.length) return `<div class="empty-state">No mismatches - every rate-carded row matches the active rate card.</div>`;
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Doc No.</th><th>Policy No.</th><th>Client</th><th>Channel</th><th>Product</th><th>Recorded %</th><th>Expected %</th>
+        </tr></thead>
+        <tbody>
+          ${rows.map(row => `
+            <tr>
+              <td>${esc(row.doc_no || '—')}</td>
+              <td>${esc(row.policy_no || '—')}</td>
+              <td>${esc(row.client_name || '—')}</td>
+              <td>${esc(row.channel)}</td>
+              <td>${esc(row.product || '—')}</td>
+              <td>${row.recorded_fee_pct !== null && row.recorded_fee_pct !== undefined ? (row.recorded_fee_pct * 100).toFixed(2) + '%' : '—'}</td>
+              <td>${(row.expected_fee_pct * 100).toFixed(2)}%</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+/* ---------------- Reconciliation ---------------- */
+
+function loadReconciliationPanel() {
+  const panel = document.getElementById('panel-reconciliation');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Upload QIC Statement of Account</h3>
+      <div class="hint">Give each upload a period label (e.g. "2026-06") - re-uploading the same label replaces that period's rows.</div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="soaFile" /></div>
+        <div><label>Statement period label</label><input type="text" id="soaPeriod" placeholder="2026-06" /></div>
+        <div><button class="primary" onclick="uploadSoa()">Upload</button></div>
+      </div>
+      <div id="soaUploadStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Upload Bank Statement</h3>
+      <div class="row">
+        <div><label>File</label><input type="file" id="bankFile" /></div>
+        <div><label>Statement period label (optional)</label><input type="text" id="bankPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="uploadBank()">Upload</button></div>
+      </div>
+      <div id="bankUploadStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Upload HealthCross Fee Statement</h3>
+      <div class="hint">
+        Upload the Dubai and Abu Dhabi files separately under the same period label - each upload only replaces
+        its own branch's rows for that period (read from the file itself), so uploading one never wipes the other.
+      </div>
+      <div class="row">
+        <div><label>File</label><input type="file" id="feeStatementFile" /></div>
+        <div><label>Statement period label</label><input type="text" id="feeStatementPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="uploadFeeStatement()">Upload</button></div>
+      </div>
+      <div id="feeStatementUploadStatus"></div>
+    </div>
+
+    <div class="card">
+      <h3>Payment Tracker vs. Client Statement of Account</h3>
+      <div class="hint">
+        Grouped by <strong>Policy No.</strong> (column G on both sheets) rather than Doc No., since one policy is
+        often billed in several installments sharing a Doc No. - the two systems should agree on the total
+        outstanding per policy. The client side of the tracker is filtered to what's still outstanding first
+        (Client Payment Status, column W, &ne; "Settled") before summing, since QIC's Client Statement only ever
+        lists what it hasn't closed out yet.
+      </div>
+      <div class="row">
+        <div><label>Statement period (optional - leave blank to check against ALL uploaded periods)</label>
+          <input type="text" id="reconPeriod" placeholder="2026-06" /></div>
+        <div><button class="primary" onclick="clientSoaRecon.run()">Run</button></div>
+      </div>
+      <div id="reconTrackerVsClientSoa"></div>
+    </div>
+
+    <div class="card">
+      <h3>Payment Tracker vs. HealthCross Fee Statement</h3>
+      <div class="hint">
+        Same idea, for HC's own fee/commission side: grouped by <strong>Policy No.</strong>, tracker filtered to
+        what's still outstanding on the HC-fee side (HC Payment Status, column AI, is blank - not "Received" or
+        "Done") before summing Total Value, compared against the fee statement's Credit LC minus Debit LC per
+        policy (every row counts, regardless of QIC's own Transaction Type label - validated against the file's
+        own printed "Net Due to You" total).
+      </div>
+      <div class="row">
+        <div><label>Statement period (optional - leave blank to check against ALL uploaded periods)</label>
+          <input type="text" id="feeReconPeriod" placeholder="2026-07" /></div>
+        <div><button class="primary" onclick="feeStatementRecon.run()">Run</button></div>
+      </div>
+      <div id="reconTrackerVsFeeStatement"></div>
+    </div>
+
+    <div class="card">
+      <h3>Compare two QIC SOA periods</h3>
+      <div class="hint">e.g. this month's export vs. a later "recon" re-export - shows what changed between them.</div>
+      <div class="row">
+        <div><label>Period A</label><input type="text" id="periodA" placeholder="2026-06" /></div>
+        <div><label>Period B</label><input type="text" id="periodB" placeholder="2026-07-recon" /></div>
+        <div><button onclick="runQicPeriods()">Compare</button></div>
+      </div>
+      <div id="reconQicPeriods"></div>
+    </div>
+
+    <div class="card">
+      <h3>Tracker "Received" rows vs. bank credits</h3>
+      <div class="hint">Every tracker row marked Received should be backed by a real inbound bank credit.</div>
+      <button onclick="runTrackerVsBank()">Run</button>
+      <div id="reconTrackerVsBank"></div>
+    </div>
+  `;
+}
+
+async function uploadSoa() {
+  const fileInput = document.getElementById('soaFile');
+  const statusEl = document.getElementById('soaUploadStatus');
+  const period = document.getElementById('soaPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  if (!period) { toast('Enter a statement period label', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    const rows = await api(`/finance/qic-soa/upload?statement_period=${encodeURIComponent(period)}`, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows for period "${esc(period)}".</span>`;
+    toast(`Uploaded ${rows.length} QIC SOA rows`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function uploadFeeStatement() {
+  const fileInput = document.getElementById('feeStatementFile');
+  const statusEl = document.getElementById('feeStatementUploadStatus');
+  const period = document.getElementById('feeStatementPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  if (!period) { toast('Enter a statement period label', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    const rows = await api(`/finance/health-cross-fee-statement/upload?statement_period=${encodeURIComponent(period)}`, { method: 'POST', body: fd });
+    const division = rows[0]?.division || 'file';
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} rows (${esc(division)}) for period "${esc(period)}".</span>`;
+    toast(`Uploaded ${rows.length} fee statement rows`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+async function uploadBank() {
+  const fileInput = document.getElementById('bankFile');
+  const statusEl = document.getElementById('bankUploadStatus');
+  const period = document.getElementById('bankPeriod').value.trim();
+  if (!fileInput.files.length) { toast('Choose a file first', true); return; }
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+  statusEl.innerHTML = `<span class="status-ok">Uploading&hellip;</span>`;
+  try {
+    let url = '/finance/bank-statement/upload';
+    if (period) url += `?statement_period=${encodeURIComponent(period)}`;
+    const rows = await api(url, { method: 'POST', body: fd });
+    statusEl.innerHTML = `<span class="status-ok">Uploaded ${rows.length} transactions.</span>`;
+    toast(`Uploaded ${rows.length} bank transactions`);
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+// Shared controller for the two policy-level reconciliation reports (Tracker
+// vs Client SOA, Tracker vs HealthCross Fee Statement) - same shape (KPI
+// grid, search/status filter, table, CSV export), just pointed at a
+// different endpoint/amount-field/status set per instance.
+function createPolicyReconciliation(config) {
+  let data = null;
+
+  function statusPill(status) {
+    const meta = config.statusMeta[status] || { label: status, pill: 'pill-neutral' };
+    return `<span class="pill ${meta.pill}">${esc(meta.label)}</span>`;
+  }
+
+  function filteredRows() {
+    if (!data) return [];
+    const search = (document.getElementById(config.searchInputId)?.value || '').trim().toLowerCase();
+    const statusFilter = document.getElementById(config.statusSelectId)?.value || '';
+    let rows = statusFilter ? data.rows.filter(r => r.status === statusFilter) : data.rows.filter(r => r.status !== 'matched');
+    if (search) {
+      rows = rows.filter(r =>
+        r.policy_no.toLowerCase().includes(search) ||
+        (r.client_name || '').toLowerCase().includes(search)
+      );
+    }
+    return rows;
+  }
+
+  function renderTable() {
+    const el = document.getElementById(config.resultsTableId);
+    const rows = filteredRows();
+    if (!rows.length) { el.innerHTML = `<div class="empty-state">No rows match.</div>`; return; }
+    const shown = rows.slice(0, 300);
+    el.innerHTML = `
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Policy No.</th><th>Client</th>
+            <th>Tracker Outstanding</th><th>${esc(config.amountColumnLabel)}</th><th>Variance</th><th>Status</th>
+          </tr></thead>
+          <tbody>
+            ${shown.map(row => `
+              <tr>
+                <td>${esc(row.policy_no)}</td>
+                <td>${esc(row.client_name || '—')}</td>
+                <td>${row.tracker_outstanding_amount !== null ? `${money(row.tracker_outstanding_amount)} <span class="hint" style="margin:0;">(${row.tracker_outstanding_count})</span>` : '—'}</td>
+                <td>${row[config.amountField] !== null ? `${money(row[config.amountField])} <span class="hint" style="margin:0;">(${row[config.countField]})</span>` : '—'}</td>
+                <td>${row.variance !== null && row.variance !== undefined ? money(row.variance) : '—'}</td>
+                <td>${statusPill(row.status)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+        ${rows.length > 300 ? `<div class="hint">Showing first 300 of ${rows.length} matching rows.</div>` : ''}
+      </div>
+    `;
+  }
+
+  async function run() {
+    const el = document.getElementById(config.containerId);
+    const period = (document.getElementById(config.periodInputId).value || '').trim();
+    el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
+    try {
+      let url = config.endpoint;
+      if (period) url += `?statement_period=${encodeURIComponent(period)}`;
+      data = await api(url);
+    } catch (e) {
+      el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+      return;
+    }
+    // KPI grid + filter controls are built once per Run - only the table
+    // placeholder below is rebuilt per keystroke, so the search input never
+    // loses focus while typing.
+    el.innerHTML = `
+      <div class="kpi-grid">
+        ${config.kpis.map(k => `<div class="kpi"><span class="label">${esc(k.label)}</span><span class="value">${data[k.key]}</span></div>`).join('')}
+      </div>
+      <div class="row" style="margin-top:10px;">
+        <div><label>Search (policy no., client name)</label><input type="text" id="${config.searchInputId}" placeholder="Type to search&hellip;" oninput="${config.varName}.renderTable()" /></div>
+        <div><label>Status</label>
+          <select id="${config.statusSelectId}" onchange="${config.varName}.renderTable()">
+            <option value="">All except Matched</option>
+            ${Object.entries(config.statusMeta).filter(([k]) => k !== 'matched').map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('')}
+            <option value="matched">Matched</option>
+          </select>
+        </div>
+        <div><button class="small" onclick="${config.varName}.downloadCsv()">&#8595; Download CSV</button></div>
+      </div>
+      <div id="${config.resultsTableId}"></div>
+    `;
+    renderTable();
+  }
+
+  function downloadCsv() {
+    const rows = filteredRows();
+    if (!rows.length) { toast('Nothing to export for the current search/filter', true); return; }
+    const headers = [
+      'Policy No', 'Client', 'Tracker Outstanding Amount', 'Tracker Outstanding Count',
+      `${config.amountColumnLabel} Amount`, `${config.amountColumnLabel} Count`, 'Variance', 'Status',
+    ];
+    const lines = [headers.join(',')];
+    for (const row of rows) {
+      const cells = [
+        row.policy_no, row.client_name || '',
+        row.tracker_outstanding_amount ?? '', row.tracker_outstanding_count,
+        row[config.amountField] ?? '', row[config.countField],
+        row.variance ?? '', config.statusMeta[row.status]?.label || row.status,
+      ];
+      lines.push(cells.map(csvCell).join(','));
+    }
+    const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${config.csvPrefix}_${new Date().toISOString().slice(0, 10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  return { run, renderTable, downloadCsv };
+}
+
+const clientSoaRecon = createPolicyReconciliation({
+  varName: 'clientSoaRecon',
+  endpoint: '/finance/reconciliation/tracker-vs-client-soa',
+  periodInputId: 'reconPeriod',
+  containerId: 'reconTrackerVsClientSoa',
+  resultsTableId: 'reconClientSoaResultsTable',
+  searchInputId: 'reconClientSoaSearch',
+  statusSelectId: 'reconClientSoaStatusFilter',
+  amountField: 'client_soa_amount',
+  countField: 'client_soa_count',
+  amountColumnLabel: 'Client SOA',
+  csvPrefix: 'tracker_vs_client_soa',
+  kpis: [
+    { key: 'matched_count', label: 'Matched' },
+    { key: 'mismatched_count', label: 'Amount Mismatch' },
+    { key: 'missing_in_client_soa_count', label: 'Missing in Client SOA' },
+    { key: 'settled_in_tracker_but_open_in_client_soa_count', label: 'Settled in Tracker, Open in SOA' },
+    { key: 'missing_in_tracker_count', label: 'Missing in Tracker' },
+  ],
+  statusMeta: {
+    matched: { label: 'Matched', pill: 'pill-good' },
+    amount_mismatch: { label: 'Amount Mismatch', pill: 'pill-bad' },
+    missing_in_client_soa: { label: 'Missing in Client SOA', pill: 'pill-warn' },
+    settled_in_tracker_but_open_in_client_soa: { label: 'Settled in Tracker, Open in SOA', pill: 'pill-bad' },
+    missing_in_tracker: { label: 'Missing in Tracker', pill: 'pill-bad' },
+  },
+});
+
+const feeStatementRecon = createPolicyReconciliation({
+  varName: 'feeStatementRecon',
+  endpoint: '/finance/reconciliation/tracker-vs-fee-statement',
+  periodInputId: 'feeReconPeriod',
+  containerId: 'reconTrackerVsFeeStatement',
+  resultsTableId: 'reconFeeStatementResultsTable',
+  searchInputId: 'reconFeeStatementSearch',
+  statusSelectId: 'reconFeeStatementStatusFilter',
+  amountField: 'fee_statement_amount',
+  countField: 'fee_statement_count',
+  amountColumnLabel: 'Fee Statement',
+  csvPrefix: 'tracker_vs_fee_statement',
+  kpis: [
+    { key: 'matched_count', label: 'Matched' },
+    { key: 'mismatched_count', label: 'Amount Mismatch' },
+    { key: 'missing_in_fee_statement_count', label: 'Missing in Fee Statement' },
+    { key: 'received_in_tracker_but_open_in_fee_statement_count', label: 'Received in Tracker, Open in Statement' },
+    { key: 'missing_in_tracker_count', label: 'Missing in Tracker' },
+  ],
+  statusMeta: {
+    matched: { label: 'Matched', pill: 'pill-good' },
+    amount_mismatch: { label: 'Amount Mismatch', pill: 'pill-bad' },
+    missing_in_fee_statement: { label: 'Missing in Fee Statement', pill: 'pill-warn' },
+    received_in_tracker_but_open_in_fee_statement: { label: 'Received in Tracker, Open in Statement', pill: 'pill-bad' },
+    missing_in_tracker: { label: 'Missing in Tracker', pill: 'pill-bad' },
+  },
+});
+
+async function runQicPeriods() {
+  const el = document.getElementById('reconQicPeriods');
+  const a = document.getElementById('periodA').value.trim();
+  const b = document.getElementById('periodB').value.trim();
+  if (!a || !b) { toast('Enter both period labels', true); return; }
+  el.innerHTML = `<div class="empty-state">Comparing&hellip;</div>`;
+  try {
+    const r = await api(`/finance/reconciliation/qic-periods?period_a=${encodeURIComponent(a)}&period_b=${encodeURIComponent(b)}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Changed</span><span class="value">${r.changed_count}</span></div>
+        <div class="kpi"><span class="label">Only in ${esc(a)}</span><span class="value">${r.only_in_a_count}</span></div>
+        <div class="kpi"><span class="label">Only in ${esc(b)}</span><span class="value">${r.only_in_b_count}</span></div>
+      </div>
+      ${reconTable(r.rows, ['doc_no', 'period_a_amount', 'period_b_amount', 'variance', 'status'])}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+async function runTrackerVsBank() {
+  const el = document.getElementById('reconTrackerVsBank');
+  el.innerHTML = `<div class="empty-state">Running&hellip;</div>`;
+  try {
+    const r = await api('/finance/reconciliation/tracker-vs-bank');
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Matched</span><span class="value">${r.matched_count}</span></div>
+        <div class="kpi"><span class="label">No Bank Match</span><span class="value">${r.unmatched_tracker_count}</span></div>
+        <div class="kpi"><span class="label">Unmatched Bank Credits</span><span class="value">${r.unmatched_bank_count}</span></div>
+      </div>
+      ${reconTable(r.rows.filter(row => row.status !== 'matched'), ['doc_no', 'client_name', 'total_value', 'payment_receive_date', 'bank_credit_amount', 'bank_txn_date', 'status'])}
+    `;
+  } catch (e) {
+    el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`;
+  }
+}
+
+function reconTable(rows, columns) {
+  if (!rows.length) return `<div class="empty-state">No differences to show.</div>`;
+  const shown = rows.slice(0, 200);
+  return `
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${columns.map(c => `<th>${c.replace(/_/g, ' ')}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${shown.map(row => `<tr>${columns.map(c => `<td>${esc(row[c])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      </table>
+      ${rows.length > 200 ? `<div class="hint">Showing first 200 of ${rows.length}.</div>` : ''}
+    </div>
+  `;
+}
+
+/* ---------------- Employees & Expenses ---------------- */
+
+function loadPeoplePanel() {
+  const panel = document.getElementById('panel-people');
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Add employee</h3>
+      <div class="row">
+        <div><label>Full name</label><input type="text" id="empName" /></div>
+        <div><label>Role</label><input type="text" id="empRole" /></div>
+        <div><label>Monthly salary</label><input type="number" id="empSalary" /></div>
+        <div><label>Basic salary (optional)</label><input type="number" id="empBasicSalary" placeholder="Defaults to monthly salary" /></div>
+        <div><label>Currency</label><input type="text" id="empCurrency" value="AED" /></div>
+        <div><label>Joining date</label><input type="date" id="empStartDate" /></div>
+        <div><button class="primary" onclick="addEmployee()">Add</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Employees</h3>
+      <div class="hint">"End of Service (est.)" is UAE gratuity per Federal Decree-Law No. 33 of 2021: 21 days' basic salary/year for the first 5 years, 30 days/year after that, pro-rated for a partial final year and capped at 2 years' salary - calculated on Basic Salary when set (legally the correct figure if Monthly Salary includes allowances), otherwise on Monthly Salary. For an active employee it's a running accrual estimate as of today; once an End date is set (Edit), it's the final figure as of that date.</div>
+      <div class="table-wrap" id="employeeTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Salary Release List</h3>
+      <div class="hint">Active employees only, for finance to sign off and release this month's salary payments.</div>
+      <div class="row">
+        <div><label>Period label (shown on the printout)</label><input type="text" id="salaryReleasePeriod" placeholder="e.g. August 2026" /></div>
+        <div><button class="primary" onclick="printSalaryReleaseList()">&#128424; Print</button></div>
+        <div><button class="small" onclick="downloadSalaryReleaseCsv()">&#8595; Download CSV</button></div>
+      </div>
+      <div class="table-wrap" id="salaryReleaseTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Add recurring expense</h3>
+      <div class="hint">A "variable" item (e.g. Etisalat) has no default amount - its real cost is entered fresh each month instead.</div>
+      <div class="row">
+        <div><label>Name</label><input type="text" id="recName" /></div>
+        <div><label>Category</label><input type="text" id="recCategory" placeholder="software / telecom / outsourced_services / rent" /></div>
+        <div><label>Type</label>
+          <select id="recType"><option value="fixed">Fixed</option><option value="variable">Variable</option></select>
+        </div>
+        <div><label>Default amount (fixed only)</label><input type="number" id="recAmount" /></div>
+        <div><label>Currency</label><input type="text" id="recCurrency" value="AED" /></div>
+        <div><button class="primary" onclick="addRecurring()">Add</button></div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>Recurring expense templates</h3>
+      <div class="table-wrap" id="recurringTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+
+    <div class="card">
+      <h3>Monthly expenses</h3>
+      <div class="row">
+        <div><label>Generate this month's salary + fixed recurring expenses for</label><input type="month" id="genPeriod" /></div>
+        <div><button onclick="generateExpenses()">Generate</button></div>
+      </div>
+      <div id="generateStatus"></div>
+      <div class="row">
+        <div><label>Show expenses for year</label><input type="number" id="expenseYear" value="${new Date().getFullYear()}" /></div>
+        <div><button onclick="loadExpenseTable()">Refresh</button></div>
+        <div><button class="small" onclick="printExpenseTable()">&#128424; Print</button></div>
+      </div>
+      <div class="table-wrap" id="expenseTable"><div class="empty-state">Loading&hellip;</div></div>
+    </div>
+  `;
+  loadEmployeeTable();
+  loadRecurringTable();
+  loadExpenseTable();
+}
+
+async function addEmployee() {
+  const full_name = document.getElementById('empName').value.trim();
+  const role_title = document.getElementById('empRole').value.trim();
+  const monthly_salary = parseFloat(document.getElementById('empSalary').value);
+  const basicSalaryRaw = document.getElementById('empBasicSalary').value;
+  const basic_salary = basicSalaryRaw ? parseFloat(basicSalaryRaw) : null;
+  const currency = document.getElementById('empCurrency').value.trim() || 'AED';
+  const start_date = document.getElementById('empStartDate').value || null;
+  if (!full_name || !monthly_salary) { toast('Name and monthly salary are required', true); return; }
+  try {
+    await api('/finance/employees', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, role_title, monthly_salary, basic_salary, currency, start_date }),
+    });
+    toast(`Added ${full_name}`);
+    document.getElementById('empName').value = '';
+    document.getElementById('empRole').value = '';
+    document.getElementById('empSalary').value = '';
+    document.getElementById('empBasicSalary').value = '';
+    document.getElementById('empStartDate').value = '';
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+let employeeRows = [];
+let editingEmployeeId = null;
+
+async function loadEmployeeTable() {
+  const el = document.getElementById('employeeTable');
+  try {
+    employeeRows = await api('/finance/employees');
+    renderEmployeeTable();
+    renderSalaryReleaseList();
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function activeSalaryRows() {
+  return employeeRows.filter(r => r.is_active).slice().sort((a, b) => a.full_name.localeCompare(b.full_name));
+}
+
+function renderSalaryReleaseList() {
+  const el = document.getElementById('salaryReleaseTable');
+  const rows = activeSalaryRows();
+  if (!rows.length) { el.innerHTML = `<div class="empty-state">No active employees.</div>`; return; }
+  const total = rows.reduce((s, r) => s + r.monthly_salary, 0);
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Employee</th><th>Role</th><th>Monthly Salary</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title || '—')}</td><td>${money(r.monthly_salary, r.currency)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr style="font-weight:700;"><td colspan="2">TOTAL (${rows.length} employees)</td><td>${money(total)}</td></tr></tfoot>
+    </table>
+  `;
+}
+
+function printSalaryReleaseList() {
+  const rows = activeSalaryRows();
+  if (!rows.length) { toast('No active employees to print', true); return; }
+  const period = (document.getElementById('salaryReleasePeriod').value || '').trim();
+  const total = rows.reduce((s, r) => s + r.monthly_salary, 0);
+  document.getElementById('printArea').innerHTML = `
+    <h2>HealthCross - Salary Release List${period ? ' - ' + esc(period) : ''}</h2>
+    <div class="hint">Generated ${new Date().toLocaleDateString()} &middot; ${rows.length} active employee(s)</div>
+    <table>
+      <thead><tr><th>Employee</th><th>Role</th><th>Monthly Salary</th></tr></thead>
+      <tbody>${rows.map(r => `
+        <tr><td>${esc(r.full_name)}</td><td>${esc(r.role_title || '—')}</td><td>${money(r.monthly_salary, r.currency)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr><td colspan="2">TOTAL</td><td>${money(total)}</td></tr></tfoot>
+    </table>
+  `;
+  window.print();
+}
+
+function downloadSalaryReleaseCsv() {
+  const rows = activeSalaryRows();
+  if (!rows.length) { toast('No active employees to export', true); return; }
+  const period = (document.getElementById('salaryReleasePeriod').value || '').trim();
+  const lines = [['Employee', 'Role', 'Currency', 'Monthly Salary'].map(csvCell).join(',')];
+  for (const r of rows) {
+    lines.push([r.full_name, r.role_title || '', r.currency || 'AED', r.monthly_salary].map(csvCell).join(','));
+  }
+  const blob = new Blob([lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const suffix = period ? period.replace(/\s+/g, '_').toLowerCase() : new Date().toISOString().slice(0, 10);
+  a.href = url;
+  a.download = `salary_release_${suffix}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+function renderEmployeeTable() {
+  const el = document.getElementById('employeeTable');
+  if (!employeeRows.length) { el.innerHTML = `<div class="empty-state">No employees added yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr>
+        <th>Name</th><th>Role</th><th>Monthly Salary</th><th>Basic Salary</th><th>Joined</th><th>End Date</th>
+        <th>Years of Service</th><th>End of Service (est.)</th><th>Active</th><th></th>
+      </tr></thead>
+      <tbody>${employeeRows.map(employeeRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function employeeRowHtml(r) {
+  if (editingEmployeeId === r.id) {
+    return `
+      <tr>
+        <td><input type="text" id="editEmpName" value="${esc(r.full_name)}" /></td>
+        <td><input type="text" id="editEmpRole" value="${esc(r.role_title || '')}" /></td>
+        <td><input type="number" id="editEmpSalary" value="${r.monthly_salary}" /></td>
+        <td><input type="number" id="editEmpBasicSalary" value="${r.basic_salary !== null && r.basic_salary !== undefined ? r.basic_salary : ''}" placeholder="Defaults to monthly" /></td>
+        <td><input type="date" id="editEmpStartDate" value="${r.start_date || ''}" /></td>
+        <td><input type="date" id="editEmpEndDate" value="${r.end_date || ''}" /></td>
+        <td colspan="2" class="hint" style="margin:0;">Recalculated on save</td>
+        <td>
+          <select id="editEmpActive">
+            <option value="true" ${r.is_active ? 'selected' : ''}>Active</option>
+            <option value="false" ${!r.is_active ? 'selected' : ''}>Inactive</option>
+          </select>
+        </td>
+        <td>
+          <button class="small primary" onclick="saveEmployee(${r.id})">Save</button>
+          <button class="small" onclick="editingEmployeeId = null; renderEmployeeTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.full_name)}</td>
+      <td>${esc(r.role_title)}</td>
+      <td>${money(r.monthly_salary, r.currency)}</td>
+      <td>${r.basic_salary !== null && r.basic_salary !== undefined ? money(r.basic_salary, r.currency) : '—'}</td>
+      <td>${esc(r.start_date || '—')}</td>
+      <td>${esc(r.end_date || '—')}</td>
+      <td>${r.years_of_service !== null && r.years_of_service !== undefined ? r.years_of_service.toFixed(2) : '—'}</td>
+      <td>${r.end_of_service_gratuity !== null && r.end_of_service_gratuity !== undefined ? money(r.end_of_service_gratuity, r.currency) : '—'}</td>
+      <td>${r.is_active ? `<span class="pill pill-good">Active</span>` : `<span class="pill pill-neutral">Inactive</span>`}</td>
+      <td>
+        <button class="small" onclick="editingEmployeeId = ${r.id}; renderEmployeeTable();">Edit</button>
+        <button class="small" onclick="deleteEmployee(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+async function saveEmployee(id) {
+  const full_name = document.getElementById('editEmpName').value.trim();
+  const role_title = document.getElementById('editEmpRole').value.trim();
+  const monthly_salary = parseFloat(document.getElementById('editEmpSalary').value);
+  const basicSalaryRaw = document.getElementById('editEmpBasicSalary').value;
+  const basic_salary = basicSalaryRaw ? parseFloat(basicSalaryRaw) : null;
+  const start_date = document.getElementById('editEmpStartDate').value || null;
+  const end_date = document.getElementById('editEmpEndDate').value || null;
+  const is_active = document.getElementById('editEmpActive').value === 'true';
+  if (!full_name || isNaN(monthly_salary)) { toast('Name and monthly salary are required', true); return; }
+  try {
+    await api(`/finance/employees/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ full_name, role_title, monthly_salary, basic_salary, start_date, end_date, is_active }),
+    });
+    toast('Employee updated');
+    editingEmployeeId = null;
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteEmployee(id) {
+  if (!confirm('Delete this employee? Past generated expense rows are kept, just unlinked.')) return;
+  try {
+    await api(`/finance/employees/${id}`, { method: 'DELETE' });
+    toast('Employee deleted');
+    loadEmployeeTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function addRecurring() {
+  const name = document.getElementById('recName').value.trim();
+  const category = document.getElementById('recCategory').value.trim();
+  const expense_type = document.getElementById('recType').value;
+  const amountRaw = document.getElementById('recAmount').value;
+  const currency = document.getElementById('recCurrency').value.trim() || 'AED';
+  if (!name || !category) { toast('Name and category are required', true); return; }
+  const payload = { name, category, expense_type, currency };
+  if (amountRaw) payload.default_amount = parseFloat(amountRaw);
+  try {
+    await api('/finance/recurring-expenses', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    toast(`Added ${name}`);
+    document.getElementById('recName').value = '';
+    document.getElementById('recCategory').value = '';
+    document.getElementById('recAmount').value = '';
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+let recurringRows = [];
+let editingRecurringId = null;
+
+async function loadRecurringTable() {
+  const el = document.getElementById('recurringTable');
+  try {
+    recurringRows = await api('/finance/recurring-expenses');
+    renderRecurringTable();
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function renderRecurringTable() {
+  const el = document.getElementById('recurringTable');
+  if (!recurringRows.length) { el.innerHTML = `<div class="empty-state">No recurring expenses added yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Name</th><th>Category</th><th>Type</th><th>Default Amount</th><th></th></tr></thead>
+      <tbody>${recurringRows.map(recurringRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function recurringRowHtml(r) {
+  if (editingRecurringId === r.id) {
+    return `
+      <tr>
+        <td><input type="text" id="editRecName" value="${esc(r.name)}" /></td>
+        <td><input type="text" id="editRecCategory" value="${esc(r.category)}" /></td>
+        <td>
+          <select id="editRecType">
+            <option value="fixed" ${r.expense_type === 'fixed' ? 'selected' : ''}>Fixed</option>
+            <option value="variable" ${r.expense_type === 'variable' ? 'selected' : ''}>Variable</option>
+          </select>
+        </td>
+        <td><input type="number" id="editRecAmount" value="${r.default_amount !== null ? r.default_amount : ''}" /></td>
+        <td>
+          <button class="small primary" onclick="saveRecurring(${r.id})">Save</button>
+          <button class="small" onclick="editingRecurringId = null; renderRecurringTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  return `
+    <tr>
+      <td>${esc(r.name)}</td><td>${esc(r.category)}</td><td>${esc(r.expense_type)}</td>
+      <td>${r.default_amount !== null ? money(r.default_amount, r.currency) : '— (variable, entered monthly)'}</td>
+      <td>
+        <button class="small" onclick="editingRecurringId = ${r.id}; renderRecurringTable();">Edit</button>
+        <button class="small" onclick="deleteRecurring(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+async function saveRecurring(id) {
+  const name = document.getElementById('editRecName').value.trim();
+  const category = document.getElementById('editRecCategory').value.trim();
+  const expense_type = document.getElementById('editRecType').value;
+  const amountRaw = document.getElementById('editRecAmount').value;
+  if (!name || !category) { toast('Name and category are required', true); return; }
+  const payload = { name, category, expense_type, default_amount: amountRaw ? parseFloat(amountRaw) : null };
+  try {
+    await api(`/finance/recurring-expenses/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    toast('Recurring expense updated');
+    editingRecurringId = null;
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function deleteRecurring(id) {
+  if (!confirm('Delete this recurring expense template? Past generated expense rows are kept, just unlinked.')) return;
+  try {
+    await api(`/finance/recurring-expenses/${id}`, { method: 'DELETE' });
+    toast('Recurring expense deleted');
+    loadRecurringTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+async function generateExpenses() {
+  const period = document.getElementById('genPeriod').value;
+  const statusEl = document.getElementById('generateStatus');
+  if (!period) { toast('Pick a month first', true); return; }
+  try {
+    const rows = await api(`/finance/expenses/generate?period=${period}-01`, { method: 'POST' });
+    statusEl.innerHTML = `<span class="status-ok">Generated ${rows.length} new expense rows.</span>`;
+    toast(`Generated ${rows.length} expense rows`);
+    // Sync the year filter to whatever period was just generated, so the
+    // new rows are visible even if a different year was showing before.
+    document.getElementById('expenseYear').value = period.split('-')[0];
+    loadExpenseTable();
+  } catch (e) {
+    statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
+    toast(e.message, true);
+  }
+}
+
+let expenseTableRows = [];
+let editingExpenseId = null;
+
+async function loadExpenseTable() {
+  const el = document.getElementById('expenseTable');
+  const year = document.getElementById('expenseYear').value;
+  try {
+    let url = '/finance/expenses';
+    if (year) url += `?year=${year}`;
+    expenseTableRows = await api(url);
+    renderExpenseTable();
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function renderExpenseTable() {
+  const el = document.getElementById('expenseTable');
+  if (!expenseTableRows.length) { el.innerHTML = `<div class="empty-state">No expenses recorded yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th><th></th></tr></thead>
+      <tbody>${expenseTableRows.map(expenseRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function expenseBaseAmount(r) {
+  return (r.amount || 0) - (r.adjustment || 0);
+}
+
+function expenseRowHtml(r) {
+  if (editingExpenseId === r.id) {
+    return `
+      <tr>
+        <td>${esc(r.period)}</td>
+        <td><input type="text" id="editExpDescription" value="${esc(r.description || '')}" /></td>
+        <td>${esc(r.category)}</td>
+        <td>${esc(r.expense_type)}</td>
+        <td>
+          <input type="number" id="editExpAmount" value="${expenseBaseAmount(r)}" oninput="recalcExpenseAdjustedAmount(${r.id})" />
+          <label style="margin:6px 0 2px;">Adjustment (+/-)</label>
+          <input type="number" id="editExpAdjustment" value="${r.adjustment || 0}" oninput="recalcExpenseAdjustedAmount(${r.id})" />
+          <div class="hint" style="margin:4px 0 0;">Total: <span id="editExpTotal">${money(r.amount, r.currency)}</span></div>
+        </td>
+        <td>${esc(r.source)}</td>
+        <td>
+          <button class="small primary" onclick="saveExpenseEntry(${r.id})">Save</button>
+          <button class="small" onclick="editingExpenseId = null; renderExpenseTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  const adjHint = r.adjustment ? ` <span class="hint" style="margin:0;">(${r.adjustment > 0 ? '+' : ''}${money(r.adjustment, r.currency)} adj.${r.adjustment_note ? ': ' + esc(r.adjustment_note) : ''})</span>` : '';
+  return `
+    <tr>
+      <td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
+      <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}${adjHint}</td><td>${esc(r.source)}</td>
+      <td>
+        <button class="small" onclick="editingExpenseId = ${r.id}; renderExpenseTable();">Edit</button>
+        <button class="small" onclick="deleteExpenseEntry(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+function recalcExpenseAdjustedAmount(id) {
+  const r = expenseTableRows.find(x => x.id === id);
+  const base = parseFloat(document.getElementById('editExpAmount').value) || 0;
+  const adjustment = parseFloat(document.getElementById('editExpAdjustment').value) || 0;
+  document.getElementById('editExpTotal').textContent = money(base + adjustment, r ? r.currency : 'AED');
+}
+
+async function saveExpenseEntry(id) {
+  const description = document.getElementById('editExpDescription').value.trim();
+  const base = parseFloat(document.getElementById('editExpAmount').value);
+  const adjustment = parseFloat(document.getElementById('editExpAdjustment').value) || 0;
+  if (isNaN(base)) { toast('Amount is required', true); return; }
+  const amount = base + adjustment;
+  try {
+    await api(`/finance/expenses/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, amount, adjustment: adjustment || null }),
+    });
+    toast('Expense entry updated');
+    editingExpenseId = null;
+    loadExpenseTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+function printExpenseTable() {
+  if (!expenseTableRows.length) { toast('Nothing to print', true); return; }
+  const year = document.getElementById('expenseYear').value.trim();
+  const total = expenseTableRows.reduce((s, r) => s + (r.amount || 0), 0);
+  document.getElementById('printArea').innerHTML = `
+    <h2>HealthCross - Monthly Expenses${year ? ' - ' + esc(year) : ''}</h2>
+    <div class="hint">Generated ${new Date().toLocaleDateString()} &middot; ${expenseTableRows.length} entries</div>
+    <table>
+      <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th></tr></thead>
+      <tbody>${expenseTableRows.map(r => `
+        <tr><td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
+        <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr><td colspan="4">TOTAL</td><td>${money(total)}</td><td></td></tr></tfoot>
+    </table>
+  `;
+  window.print();
+}
+
+async function deleteExpenseEntry(id) {
+  if (!confirm('Delete this expense entry?')) return;
+  try {
+    await api(`/finance/expenses/${id}`, { method: 'DELETE' });
+    toast('Expense entry deleted');
+    loadExpenseTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------------- Cash Flow & Forecast ---------------- */
+
+function loadCashflowPanel() {
+  const panel = document.getElementById('panel-cashflow');
+  const thisYear = new Date().getFullYear();
+  panel.innerHTML = `
+    <div class="card">
+      <h3>Monthly cash flow</h3>
+      <div class="row">
+        <div><label>Year</label><input type="number" id="cfYear" value="${thisYear}" /></div>
+        <div><button class="primary" onclick="runCashFlow()">Run</button></div>
+      </div>
+      <div id="cashflowResult"></div>
+    </div>
+    <div class="card">
+      <h3>Expense forecast</h3>
+      <div class="hint">A month with real recorded expenses shows its actual; a month with none is projected from your active payroll/recurring-expense run-rate plus a trailing average of recent variable spend.</div>
+      <div class="row">
+        <div><label>Year</label><input type="number" id="fcYear" value="${thisYear}" /></div>
+        <div><button class="primary" onclick="runForecast()">Run</button></div>
+      </div>
+      <div id="forecastResult"></div>
+    </div>
+  `;
+}
+
+async function runCashFlow() {
+  const el = document.getElementById('cashflowResult');
+  const year = document.getElementById('cfYear').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api(`/finance/cash-flow?year=${year}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Total Inflow</span><span class="value">${money(r.total_inflow)}</span></div>
+        <div class="kpi"><span class="label">Total Outflow</span><span class="value">${money(r.total_outflow)}</span></div>
+        <div class="kpi"><span class="label">Net</span><span class="value">${money(r.total_net)}</span></div>
+      </div>
+      <table>
+        <thead><tr><th>Month</th><th>Inflow</th><th>Outflow</th><th>Net</th><th>Cumulative</th></tr></thead>
+        <tbody>${r.months.map(m => `
+          <tr><td>${esc(m.period)}</td><td>${money(m.inflow)}</td><td>${money(m.outflow)}</td><td>${money(m.net)}</td><td>${money(m.cumulative)}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+async function runForecast() {
+  const el = document.getElementById('forecastResult');
+  const year = document.getElementById('fcYear').value;
+  el.innerHTML = `<div class="empty-state">Loading&hellip;</div>`;
+  try {
+    const r = await api(`/finance/expense-forecast?year=${year}`);
+    el.innerHTML = `
+      <div class="kpi-grid">
+        <div class="kpi"><span class="label">Actual (recorded months)</span><span class="value">${money(r.total_actual)}</span></div>
+        <div class="kpi"><span class="label">Forecast (remaining months)</span><span class="value">${money(r.total_forecast)}</span></div>
+      </div>
+      <div class="hint">Fixed run-rate: ${money(r.assumptions.fixed_monthly_run_rate)}/mo &middot; trailing variable avg: ${money(r.assumptions.trailing_variable_monthly_avg)}/mo (from ${r.assumptions.trailing_months_used} recent month(s))</div>
+      <table>
+        <thead><tr><th>Month</th><th>Fixed</th><th>Variable</th><th>Total</th><th>Basis</th></tr></thead>
+        <tbody>${r.months.map(m => `
+          <tr><td>${esc(m.period)}</td><td>${money(m.fixed)}</td><td>${money(m.variable)}</td><td>${money(m.total)}</td>
+          <td>${m.is_actual ? '<span class="pill pill-good">Actual</span>' : '<span class="pill pill-neutral">Forecast</span>'}</td></tr>
+        `).join('')}</tbody>
+      </table>
+    `;
+  } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+/* ---------------- Init ---------------- */
+
+renderTabs();
+switchTab('summary');
+</script>
+</body>
+</html>

@@ -532,6 +532,210 @@ uploads accept drag-and-drop onto their row in addition to the file picker.
 - `GET /admin/weights` - full version history of scoring weight sets
 - `POST /admin/recalibrate` - trigger recalibration from recorded outcomes
 
+## HC Finance Status module
+
+Separate from the underwriting/scoring system above - this tracks the
+commission HealthCross itself earns as a marketing/distribution company,
+not a case's risk. HC earns a % of premium (excl. VAT) on every medical
+insurance policy sold through the platform via Qatar Insurance Co. (QIC),
+tracks collection of that fee, reconciles its own records against QIC's
+and the bank's, and tracks HC's own operating expenses. Company-wide, not
+tied to any Case - a Case is a submission being risk-scored; a
+`PaymentTrackerEntry` is a bound policy/endorsement already earning a fee.
+
+**The fee rate card** (`app/finance/fee_engine.py`, seeded on startup by
+`app/main.py`) bands HC's commission by sales channel x plan tier:
+
+| Channel | Bronze/Silver | Gold/Platinum |
+|---|---|---|
+| Broker-introduced | 6.5% | 5% |
+| Direct | 11.5% | 10% |
+| Group (case-to-case) | negotiated - never rate-carded | |
+
+A `Product` value naming a single tier (e.g. "Silver") bands automatically;
+one naming tiers from both bands at once (e.g. "Gold/Bronze", a real value
+seen on mixed-tier groups) can't be banded, and - like every Group/
+case-to-case row - requires an explicit manual rate instead of a rate-card
+lookup, mirroring the "manual calc" convention already used in the working
+payment tracker this module replaces. `compute_hc_fee()` returns the fee,
+5% VAT on the fee, and a `details` sub-dict recording exactly how the rate
+was chosen, the same transparency principle as the scorecard's own
+`details`.
+
+**Payment tracker** (`app/models/db_models.py`'s `PaymentTrackerEntry`,
+`app/ingestion/payment_tracker.py`) - one row per QIC document (a premium
+invoice or a credit/cancellation endorsement): a client-facing leg (what
+QIC invoiced, and whether the client has paid) and an HC-facing leg (HC's
+fee on that premium, and whether HC has collected it).
+`POST /finance/payment-tracker/upload` bulk-imports the existing working
+tracker spreadsheet (any of its "Payment Tracker"/"Ledgers"/"Eman"-shaped
+sheets - `?sheet_name=`) preserving each row's already-computed fee figures
+exactly as issued, rather than recalculating them through the fee engine -
+a bootstrap import should reproduce historical invoices verbatim, including
+any manual roundings. `POST /finance/payment-tracker` creates a new entry
+going forward instead, computing the fee live via `compute_hc_fee()`.
+`doc_no` is normalized (`app/finance/common.py`) so "128-93727" and
+"128 - 93727" - the tracker's and QIC's own differing formats for the same
+document - join as the same key.
+
+**QIC Statement of Account** (`QicSoaLine`, `app/ingestion/qic_soa.py`,
+`POST /finance/qic-soa/upload?statement_period=`) - the ground truth
+HealthCross reconciles against. QIC's own export shape has varied across
+real samples (separate Debit LC/Credit LC columns vs. a single signed
+AMOUNT + Dr/Cr flag); both normalize onto the same debit/credit fields.
+`statement_period` labels which export a line came from and re-uploading
+the same label replaces that period's rows.
+
+**Bank statement** (`BankTransaction`, `app/ingestion/bank_statement.py`,
+`POST /finance/bank-statement/upload`) - an account-details block (Account
+Holder/Number/Currency/period) sits above the real transaction table on a
+real export, so the parser scans for the `Date/Value Date/Reference
+Number/Description` header row rather than assuming row 1.
+
+**HealthCross Fee Statement** (`HealthCrossFeeStatementLine`,
+`app/ingestion/health_cross_fee_statement.py`,
+`POST /finance/health-cross-fee-statement/upload`) - QIC's "Statement of
+Outstanding" addressed to HealthCross itself (one export per branch -
+Customer Code 216331 = Dubai, 293276 = Abu Dhabi), what QIC owes HC for
+policy-linked fees/commission. Like the bank statement, a details block
+sits above the real table, so the parser scans for the header row. There's
+no single amount column - `credit_amount` minus `debit_amount` is the real
+net-owed-to-HC figure per line, summed **regardless of QIC's own
+Transaction Type label** ("Others"/"TPA Fee"/"Other Fee" all turned out to
+represent real fee amounts when validated against the file's own printed
+"Net Due to You" total). A row's `division` is a per-*policy* attribute
+(which office administers that policy) and is *not* reliable for telling
+which of the two branch statements a row came from - the Abu Dhabi
+statement's own rows can themselves read Division "Dubai Branch". Each
+upload is scoped for replacement by `statement_period` **and** the
+statement's own Customer Code (`statement_customer_code`, read from the
+file's own header block), so uploading Dubai then Abu Dhabi under the same
+period label never wipes the other branch's rows.
+
+**Four reconciliation reports** (`app/finance/reconciliation.py`, pure
+functions over plain dicts, unit-testable without a database):
+- `GET /finance/reconciliation/tracker-vs-client-soa?statement_period=` -
+  compares the Payment Tracker against QIC's Client Statement of Account,
+  grouped by **Policy No.** (column G on both sheets) rather than Doc No.,
+  since one policy is often billed across several installments sharing a
+  Doc No. The tracker side is filtered to what's still outstanding first
+  (`Client Payment Status` != "Settled", column W) before summing, since
+  QIC's Client SOA only ever lists what it hasn't closed out - comparing
+  against the full, unfiltered tracker would misreport already-settled
+  policies as missing. Five outcomes per policy: `matched` /
+  `amount_mismatch` / `missing_in_client_soa` (tracker shows it
+  outstanding, SOA has no record of it) /
+  `settled_in_tracker_but_open_in_client_soa` (HC's tracker marks it
+  Settled, but QIC's SOA still shows it open - a status HC likely got
+  wrong, not a policy HC never logged) / `missing_in_tracker` (on the SOA,
+  never logged in the tracker at all under any status).
+- `GET /finance/reconciliation/tracker-vs-fee-statement?statement_period=`
+  - the same idea for HC's own fee/commission side: tracker filtered to
+  what's still outstanding on the HC-fee side (`HC Payment Status`, column
+  AI, isn't "Received" or "Done") summed on `Total Value`, compared
+  against the fee statement's net Credit-minus-Debit per policy. Same five
+  outcomes, relabeled for this side: `matched` / `amount_mismatch` /
+  `missing_in_fee_statement` / `received_in_tracker_but_open_in_fee_statement`
+  / `missing_in_tracker`.
+- `GET /finance/reconciliation/qic-periods?period_a=&period_b=` - two QIC
+  SOA exports (e.g. a month's export vs. a later "recon" re-export) should
+  describe the same documents; reports only what `changed` / is
+  `only_in_a` / `only_in_b` between them, not the full matching set.
+- `GET /finance/reconciliation/tracker-vs-bank` - every tracker row HC
+  marked "Received" should be backed by a real inbound QIC credit. QIC
+  settles HC's fee in periodic batched remittances rather than one wire per
+  invoice, so this sums every "Received" row sharing a `payment_receive_date`
+  and matches that total against the nearest bank credit within a date
+  window, rather than attempting a one-to-one match.
+
+**Payment Tracker Analysis** (`app/finance/tracker_analysis.py`,
+`GET /finance/payment-tracker-analysis`) - a standalone dashboard over the
+tracker alone, not a reconciliation against another system:
+- HC fee received, grouped by `payment_receive_date` and matched against
+  the bank statement - reuses `reconcile_tracker_received_vs_bank`'s own
+  date/amount matching, just rolled up to one row per date.
+- Total still due for collection (client hasn't paid QIC yet, i.e.
+  `client_payment_status` != "Settled", summed on `invoice_amount`) and
+  total still outstanding on the HC-fee side (summed on `total_value`) -
+  the same two legs used throughout this module.
+- Fee-rate compliance: every rate-carded (non-manual) row's own recorded
+  HC Fee % checked against the active `FeeRateCard` for its channel x tier
+  band, flagging mismatches. Manual/negotiated rows, and Products that
+  don't band to a single tier, aren't checkable and are skipped rather
+  than flagged.
+- Client-settled-but-HC-fee-outstanding: rows where the client has already
+  paid QIC but HC hasn't yet collected its own fee on the same document -
+  the collection gap most worth chasing, since nothing on the client side
+  still blocks it.
+- Total fee, total received, total premium, and the average fee % of
+  premium across every tracker row.
+
+**Expenses** (`Employee`, `RecurringExpense`, `ExpenseEntry`) - a payroll
+roster (`POST /finance/employees`), templates for recurring non-salary
+costs like a portal-support fee or a usage-based telecom bill
+(`POST /finance/recurring-expenses`, `expense_type` "fixed" or "variable" -
+a variable template has no `default_amount`, since its real cost is only
+known once billed), and the actual monthly expense ledger itself
+(`POST /finance/expenses`, or `POST /finance/expenses/generate?period=` to
+auto-create this month's salary + fixed-recurring rows from the roster/
+templates, skipping anyone who already has one so it's safe to re-run).
+
+Each `Employee` carries a `start_date` (joining date), optional `end_date`,
+and optional `basic_salary` (distinct from `monthly_salary` - UAE
+end-of-service gratuity is legally basic-salary-only, which can be lower
+than the total monthly package once housing/transport/other allowances are
+added; when not set, calculations fall back to `monthly_salary`).
+`GET /finance/employees` (and create/update) attach two computed-on-read
+fields, `years_of_service` and `end_of_service_gratuity`, via
+`app/finance/end_of_service.py` - UAE end-of-service gratuity per Federal
+Decree-Law No. 33 of 2021: 21 days' basic salary per year of service for
+the first 5 years, 30 days/year after that, pro-rated for a partial final
+year, capped at two years' total salary. These fields are never stored -
+they're computed fresh on every read, as of `end_date` for an employee who
+has left, or "today" (a running accrual estimate) for one still active.
+
+`POST /finance/expenses/generate?period=` pro-rates a mid-month joiner or
+leaver via `app/finance/payroll.py`'s `prorated_monthly_salary()` -
+`(monthly_salary / days_in_that_month) * days_actually_worked` - rather
+than generating a full month's salary regardless of when they joined/left,
+and skips generating an entry at all for a month entirely outside their
+employment (e.g. before their `start_date`). The generated `ExpenseEntry`'s
+`description` notes the pro-ration (e.g. "pro-rated, 8/31 days") so it's
+clear on the expense ledger why the amount differs from a full month.
+
+The **Salary Release List** (Employees & Expenses tab) is a printable
+sign-off sheet for finance: every active employee's `monthly_salary`, with
+a Print button (opens the browser's print dialog showing only this table,
+via a dedicated print-only region so nothing else on the page prints) and
+a CSV download. The **Monthly expenses** table has its own Print button the
+same way, printing whatever year is currently filtered.
+
+Any `ExpenseEntry` (generated or manual) can be edited in place - the
+"Show expenses for year" input now has a real default (the current year,
+not just a placeholder) so it always filters on load, and generating a
+period auto-syncs it to that period's year so the just-generated rows are
+never hidden behind an unrelated year filter. Editing an entry exposes a
+one-off **Adjustment** (+/-) field alongside the base amount, e.g. add 300
+to a generated salary line for a one-time bonus - the total (base +
+adjustment) is what's actually saved as `amount` (the figure cash-flow/
+forecast/summary all sum, unchanged), while `adjustment` and
+`adjustment_note` are kept as a purely informational record of *why* it
+differs from the generated figure, shown as a small annotation on the row.
+
+**Cash flow and expense forecast** (`app/finance/cash_flow.py`):
+- `GET /finance/cash-flow?year=` - actual monthly HC-fee inflow (tracker
+  rows HC has collected, grouped by `payment_receive_date`) vs. actual
+  monthly outflow (`ExpenseEntry` rows), with a running cumulative balance.
+- `GET /finance/expense-forecast?year=&as_of=` - a month with real
+  `ExpenseEntry` rows reports its actuals; a month with none projects fixed
+  costs from the active employee/recurring-expense run-rate and variable
+  costs from a trailing average of recent actuals - a documented,
+  explainable method (returned in the response's `assumptions`), the same
+  philosophy as `claims_projection.py`'s burning-cost method, not a
+  black-box number.
+- `GET /finance/summary` - fees invoiced/received/outstanding and
+  year-to-date expenses/net, for a single at-a-glance dashboard figure.
+
 ## Running it
 
 ```bash
@@ -572,6 +776,10 @@ parsing (including the broker's real "Member List" / "CLIENT & PLAN
 details" template layout), every demographic rule above in isolation, the
 combined scoring engine, the recalibration logistic regressions, and a full
 create-case → upload → score → record-outcome → recalibrate flow through
+the API. For the finance module: the fee engine's rate-card/manual-override
+logic, the payment tracker/QIC SOA/bank statement parsers (against both
+real QIC export shapes), all three reconciliation reports, cash flow, the
+expense forecast, and a full upload → reconcile → cash-flow flow through
 the API.
 
 ## Known limitations / next steps
@@ -589,3 +797,13 @@ the API.
 - **No authentication/authorization layer** - this is a scoring engine
   service, meant to sit behind the existing portal's auth, not to be
   internet-facing on its own.
+- **HC Finance Status has no web UI tab yet** - it's API/`/docs`-only for
+  now, deliberately built and verified as a backend layer first (data
+  model, ingestion, fee engine, reconciliation, cash flow/forecast) before
+  extending `app/static/index.html`'s tab system to it.
+- **Bank reconciliation matching is date/amount-window based, not
+  reference-number based** - QIC's inward remittance doesn't carry a
+  reference back to individual tracker rows, so `tracker-vs-bank` groups by
+  `payment_receive_date` and matches the nearest bank credit within a
+  tolerance rather than a hard 1:1 link. Works well when payment dates are
+  recorded accurately; a mis-dated tracker row won't match.
