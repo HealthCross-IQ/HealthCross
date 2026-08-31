@@ -1222,8 +1222,9 @@ function loadPeoplePanel() {
       </div>
       <div id="generateStatus"></div>
       <div class="row">
-        <div><label>Show expenses for year</label><input type="number" id="expenseYear" placeholder="2026" /></div>
+        <div><label>Show expenses for year</label><input type="number" id="expenseYear" value="${new Date().getFullYear()}" /></div>
         <div><button onclick="loadExpenseTable()">Refresh</button></div>
+        <div><button class="small" onclick="printExpenseTable()">&#128424; Print</button></div>
       </div>
       <div class="table-wrap" id="expenseTable"><div class="empty-state">Loading&hellip;</div></div>
     </div>
@@ -1516,6 +1517,9 @@ async function generateExpenses() {
     const rows = await api(`/finance/expenses/generate?period=${period}-01`, { method: 'POST' });
     statusEl.innerHTML = `<span class="status-ok">Generated ${rows.length} new expense rows.</span>`;
     toast(`Generated ${rows.length} expense rows`);
+    // Sync the year filter to whatever period was just generated, so the
+    // new rows are visible even if a different year was showing before.
+    document.getElementById('expenseYear').value = period.split('-')[0];
     loadExpenseTable();
   } catch (e) {
     statusEl.innerHTML = `<span class="status-err">${esc(e.message)}</span>`;
@@ -1523,25 +1527,109 @@ async function generateExpenses() {
   }
 }
 
+let expenseTableRows = [];
+let editingExpenseId = null;
+
 async function loadExpenseTable() {
   const el = document.getElementById('expenseTable');
   const year = document.getElementById('expenseYear').value;
   try {
     let url = '/finance/expenses';
     if (year) url += `?year=${year}`;
-    const rows = await api(url);
-    if (!rows.length) { el.innerHTML = `<div class="empty-state">No expenses recorded yet.</div>`; return; }
-    el.innerHTML = `
-      <table>
-        <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th><th></th></tr></thead>
-        <tbody>${rows.map(r => `
-          <tr><td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
-          <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td>
-          <td><button class="small" onclick="deleteExpenseEntry(${r.id})">Delete</button></td></tr>
-        `).join('')}</tbody>
-      </table>
-    `;
+    expenseTableRows = await api(url);
+    renderExpenseTable();
   } catch (e) { el.innerHTML = `<div class="status-err">${esc(e.message)}</div>`; }
+}
+
+function renderExpenseTable() {
+  const el = document.getElementById('expenseTable');
+  if (!expenseTableRows.length) { el.innerHTML = `<div class="empty-state">No expenses recorded yet.</div>`; return; }
+  el.innerHTML = `
+    <table>
+      <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th><th></th></tr></thead>
+      <tbody>${expenseTableRows.map(expenseRowHtml).join('')}</tbody>
+    </table>
+  `;
+}
+
+function expenseBaseAmount(r) {
+  return (r.amount || 0) - (r.adjustment || 0);
+}
+
+function expenseRowHtml(r) {
+  if (editingExpenseId === r.id) {
+    return `
+      <tr>
+        <td>${esc(r.period)}</td>
+        <td><input type="text" id="editExpDescription" value="${esc(r.description || '')}" /></td>
+        <td>${esc(r.category)}</td>
+        <td>${esc(r.expense_type)}</td>
+        <td>
+          <input type="number" id="editExpAmount" value="${expenseBaseAmount(r)}" oninput="recalcExpenseAdjustedAmount(${r.id})" />
+          <label style="margin:6px 0 2px;">Adjustment (+/-)</label>
+          <input type="number" id="editExpAdjustment" value="${r.adjustment || 0}" oninput="recalcExpenseAdjustedAmount(${r.id})" />
+          <div class="hint" style="margin:4px 0 0;">Total: <span id="editExpTotal">${money(r.amount, r.currency)}</span></div>
+        </td>
+        <td>${esc(r.source)}</td>
+        <td>
+          <button class="small primary" onclick="saveExpenseEntry(${r.id})">Save</button>
+          <button class="small" onclick="editingExpenseId = null; renderExpenseTable();">Cancel</button>
+        </td>
+      </tr>`;
+  }
+  const adjHint = r.adjustment ? ` <span class="hint" style="margin:0;">(${r.adjustment > 0 ? '+' : ''}${money(r.adjustment, r.currency)} adj.${r.adjustment_note ? ': ' + esc(r.adjustment_note) : ''})</span>` : '';
+  return `
+    <tr>
+      <td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
+      <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}${adjHint}</td><td>${esc(r.source)}</td>
+      <td>
+        <button class="small" onclick="editingExpenseId = ${r.id}; renderExpenseTable();">Edit</button>
+        <button class="small" onclick="deleteExpenseEntry(${r.id})">Delete</button>
+      </td>
+    </tr>`;
+}
+
+function recalcExpenseAdjustedAmount(id) {
+  const r = expenseTableRows.find(x => x.id === id);
+  const base = parseFloat(document.getElementById('editExpAmount').value) || 0;
+  const adjustment = parseFloat(document.getElementById('editExpAdjustment').value) || 0;
+  document.getElementById('editExpTotal').textContent = money(base + adjustment, r ? r.currency : 'AED');
+}
+
+async function saveExpenseEntry(id) {
+  const description = document.getElementById('editExpDescription').value.trim();
+  const base = parseFloat(document.getElementById('editExpAmount').value);
+  const adjustment = parseFloat(document.getElementById('editExpAdjustment').value) || 0;
+  if (isNaN(base)) { toast('Amount is required', true); return; }
+  const amount = base + adjustment;
+  try {
+    await api(`/finance/expenses/${id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, amount, adjustment: adjustment || null }),
+    });
+    toast('Expense entry updated');
+    editingExpenseId = null;
+    loadExpenseTable();
+  } catch (e) { toast(e.message, true); }
+}
+
+function printExpenseTable() {
+  if (!expenseTableRows.length) { toast('Nothing to print', true); return; }
+  const year = document.getElementById('expenseYear').value.trim();
+  const total = expenseTableRows.reduce((s, r) => s + (r.amount || 0), 0);
+  document.getElementById('printArea').innerHTML = `
+    <h2>HealthCross - Monthly Expenses${year ? ' - ' + esc(year) : ''}</h2>
+    <div class="hint">Generated ${new Date().toLocaleDateString()} &middot; ${expenseTableRows.length} entries</div>
+    <table>
+      <thead><tr><th>Period</th><th>Description</th><th>Category</th><th>Type</th><th>Amount</th><th>Source</th></tr></thead>
+      <tbody>${expenseTableRows.map(r => `
+        <tr><td>${esc(r.period)}</td><td>${esc(r.description)}</td><td>${esc(r.category)}</td>
+        <td>${esc(r.expense_type)}</td><td>${money(r.amount, r.currency)}</td><td>${esc(r.source)}</td></tr>
+      `).join('')}</tbody>
+      <tfoot><tr><td colspan="4">TOTAL</td><td>${money(total)}</td><td></td></tr></tfoot>
+    </table>
+  `;
+  window.print();
 }
 
 async function deleteExpenseEntry(id) {

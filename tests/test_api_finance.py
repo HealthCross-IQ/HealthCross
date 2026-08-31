@@ -358,6 +358,23 @@ def test_expense_entry_delete(client):
     assert all(e["id"] != expense_id for e in resp.json())
 
 
+def test_expense_entry_adjustment_updates_amount_and_is_recorded(client):
+    resp = client.post("/finance/expenses", json={"period": "2026-08-01", "category": "salary", "expense_type": "fixed", "amount": 30000, "description": "Sheetal - Salary"})
+    expense_id = resp.json()["id"]
+
+    resp = client.patch(f"/finance/expenses/{expense_id}", json={"amount": 30300, "adjustment": 300, "adjustment_note": "August bonus"})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["amount"] == 30300
+    assert body["adjustment"] == 300
+    assert body["adjustment_note"] == "August bonus"
+
+    resp = client.get("/finance/expenses", params={"year": 2026})
+    matching = [e for e in resp.json() if e["id"] == expense_id]
+    assert matching[0]["amount"] == 30300
+    assert matching[0]["adjustment"] == 300
+
+
 def test_cash_flow_and_summary_endpoints(client):
     tracker_df = pd.DataFrame(
         [

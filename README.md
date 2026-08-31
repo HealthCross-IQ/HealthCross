@@ -707,7 +707,20 @@ The **Salary Release List** (Employees & Expenses tab) is a printable
 sign-off sheet for finance: every active employee's `monthly_salary`, with
 a Print button (opens the browser's print dialog showing only this table,
 via a dedicated print-only region so nothing else on the page prints) and
-a CSV download.
+a CSV download. The **Monthly expenses** table has its own Print button the
+same way, printing whatever year is currently filtered.
+
+Any `ExpenseEntry` (generated or manual) can be edited in place - the
+"Show expenses for year" input now has a real default (the current year,
+not just a placeholder) so it always filters on load, and generating a
+period auto-syncs it to that period's year so the just-generated rows are
+never hidden behind an unrelated year filter. Editing an entry exposes a
+one-off **Adjustment** (+/-) field alongside the base amount, e.g. add 300
+to a generated salary line for a one-time bonus - the total (base +
+adjustment) is what's actually saved as `amount` (the figure cash-flow/
+forecast/summary all sum, unchanged), while `adjustment` and
+`adjustment_note` are kept as a purely informational record of *why* it
+differs from the generated figure, shown as a small annotation on the row.
 
 **Cash flow and expense forecast** (`app/finance/cash_flow.py`):
 - `GET /finance/cash-flow?year=` - actual monthly HC-fee inflow (tracker

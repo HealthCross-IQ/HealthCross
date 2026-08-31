@@ -595,6 +595,13 @@ class ExpenseEntry(Base):
     Employee), recurring non-salary costs (linked to RecurringExpense), and
     genuinely one-off expenses (neither link set) all live in this single
     table so cash-flow and forecasting only need to sum one place.
+
+    `amount` is always the real total (what cash-flow/forecast/summary all
+    sum) - `adjustment` is a purely informational record of the last manual
+    +/- applied on top of the entry's own base figure (e.g. a mid-month
+    bonus or deduction added to a generated salary line), kept alongside an
+    optional `adjustment_note` so the total is auditable later rather than
+    just silently different from what was originally generated.
     """
 
     __tablename__ = "expense_entries"
@@ -605,6 +612,8 @@ class ExpenseEntry(Base):
     expense_type = Column(String, nullable=False)  # "fixed" / "variable"
     description = Column(String, nullable=True)
     amount = Column(Float, nullable=False)
+    adjustment = Column(Float, nullable=True)
+    adjustment_note = Column(String, nullable=True)
     currency = Column(String, default="AED")
 
     employee_id = Column(Integer, ForeignKey("employees.id"), nullable=True)

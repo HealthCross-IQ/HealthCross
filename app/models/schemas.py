@@ -574,6 +574,8 @@ class ExpenseEntryUpdate(BaseModel):
     expense_type: Optional[str] = None
     description: Optional[str] = None
     amount: Optional[float] = None
+    adjustment: Optional[float] = None
+    adjustment_note: Optional[str] = None
     payment_date: Optional[date] = None
     notes: Optional[str] = None
 
@@ -587,6 +589,8 @@ class ExpenseEntryOut(BaseModel):
     expense_type: str
     description: Optional[str] = None
     amount: float
+    adjustment: Optional[float] = None
+    adjustment_note: Optional[str] = None
     currency: str
     employee_id: Optional[int] = None
     recurring_expense_id: Optional[int] = None
