@@ -161,3 +161,85 @@ def test_a_file_pandas_cannot_open_is_a_400_not_a_500(client):
     )
     assert resp.status_code == 400
     assert "Could not read that workbook" in resp.json()["detail"]
+
+
+# --- the layouts an insurer's rate card actually arrives in --------------
+
+def _premium_summary_sheet(rows):
+    return [["Category", "Age Band", "Gross Premium"]] + rows
+
+
+def test_the_rate_grid_is_found_on_a_later_sheet(client):
+    # A quote workbook puts the benefits on the front tab and the premium
+    # grid behind it. Reading only sheet one reported "no rate table" on
+    # a file that plainly contains one.
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf) as writer:
+        pd.DataFrame([{"Category": "A", "Emirates": "AUH", "TPA": "MSH MENA"}]).to_excel(
+            writer, sheet_name="Benefits", index=False)
+        pd.DataFrame(_premium_summary_sheet([
+            ["Category A - Male", "0-17", 7933],
+            ["Category A - Female", "18-40", 11865],
+        ])).to_excel(writer, sheet_name="Premium Summary", index=False, header=False)
+    buf.seek(0)
+
+    rates = parse_premium_summary_rate_card(buf)["rates"]
+    assert len(rates) == 2
+    assert rates[0] == {"category": "A", "gender": "M", "age_low": 0, "age_high": 17,
+                        "premium": 7933.0}
+
+
+def test_category_and_gender_are_read_however_the_insurer_spells_them():
+    # "Category A Male" was the only accepted spelling, so the commoner
+    # "Category A - Male" parsed as nothing and the grid came back empty.
+    from app.ingestion.premium_summary_rate_card import _CATEGORY_GENDER_RE
+
+    for text, category, gender in [
+        ("Category A Male", "A", "male"),
+        ("Category A - Male", "A", "male"),
+        ("Cat A - Female", "A", "female"),
+        ("CATEGORY B – MALE", "B", "male"),
+        ("Category C (Female)", "C", "female"),
+        ("Category D: Female", "D", "female"),
+        ("A - Male", "A", "male"),
+    ]:
+        match = _CATEGORY_GENDER_RE.search(text)
+        assert match, f"{text!r} should parse"
+        assert match.group(1).upper() == category
+        assert match.group(2).lower() == gender
+
+
+def test_a_row_naming_no_gender_is_not_treated_as_a_rate():
+    from app.ingestion.premium_summary_rate_card import _CATEGORY_GENDER_RE
+
+    assert _CATEGORY_GENDER_RE.search("Category A") is None
+    assert _CATEGORY_GENDER_RE.search("Total") is None
+
+
+def test_the_failure_names_every_sheet_it_looked_at(client):
+    import io
+
+    import pandas as pd
+
+    case_id = client.post("/cases", json={
+        "broker_name": "B", "company_name": "C", "industry": "trading"}).json()["id"]
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf) as writer:
+        pd.DataFrame([{"Category": "A", "Network": "MSH Platinum"}]).to_excel(
+            writer, sheet_name="Benefits", index=False)
+        pd.DataFrame([{"Member": "X"}]).to_excel(writer, sheet_name="Census", index=False)
+    buf.seek(0)
+    resp = client.post(
+        f"/cases/{case_id}/member-rates/import-rate-card",
+        files={"file": ("quote.xlsx", buf,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+    )
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert "Benefits" in detail and "Census" in detail, "name the sheets that were searched"

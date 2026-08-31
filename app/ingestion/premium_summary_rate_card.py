@@ -16,7 +16,15 @@ from typing import BinaryIO, Dict, List, Optional, Tuple
 
 import pandas as pd
 
-_CATEGORY_GENDER_RE = re.compile(r"category\s+(\S+)\s+(male|female)", re.IGNORECASE)
+# "Category A Male" was the only spelling accepted, so "Category A -
+# Male" - the one MPH's card uses, and the commoner of the two - parsed
+# as nothing and the grid came back empty. Insurers write this at least
+# five ways, and the separator is never the meaningful part: the
+# category token and the gender word are.
+_CATEGORY_GENDER_RE = re.compile(
+    r"(?:categor(?:y|ies)|cat)?\s*[:\-]?\s*([A-Za-z0-9]+)\s*[-\u2013\u2014(/,:]?\s*(male|female)\b",
+    re.IGNORECASE,
+)
 _AGE_RANGE_RE = re.compile(r"^\s*(\d+)\s*-\s*(\d+)\s*$")
 _AGE_PLUS_RE = re.compile(r"^\s*(\d+)\s*\+\s*$")
 
@@ -104,7 +112,13 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
     actually states, never invented.
     """
     try:
-        df = pd.read_excel(file, header=None)
+        # Every sheet, not just the first. An insurer's quote workbook
+        # puts the benefits table on the front tab and the premium grid
+        # on another, so reading sheet one and giving up reported "no
+        # rate table" on a file that plainly contains one. Sheets are
+        # tried in order and the first with a readable grid wins, so a
+        # single-sheet card behaves exactly as before.
+        sheets = pd.read_excel(file, header=None, sheet_name=None)
     except Exception as e:  # noqa: BLE001 - pandas raises many shapes
         # pandas raises ValueError for an unreadable file too, so an
         # opaque "Excel file format cannot be determined" reached the
@@ -115,12 +129,23 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
             f"({type(e).__name__}: {e}). Check the attachment is the .xlsx the insurer sent."
         )
 
-    header = _find_rate_table_header(df)
+    df = None
+    header = None
+    for frame in sheets.values():
+        found = _find_rate_table_header(frame)
+        if found is not None:
+            df, header = frame, found
+            break
     if header is None:
+        df = next(iter(sheets.values())) if sheets else pd.DataFrame()
         # Naming what WAS in the file turns "it did not work" into
         # something an underwriter can act on - most often the sheet is
         # a quote or a census rather than a Premium Summary, and the
         # first few rows say so immediately.
+        # Which sheets were looked at, and what the most likely one
+        # actually held. A workbook whose premium grid is on a tab this
+        # importer cannot read is a different problem from a file that
+        # is not a rate card at all, and the sheet names separate them.
         seen = []
         for row_idx in range(min(len(df), 12)):
             cells = [str(c).strip() for c in df.iloc[row_idx].tolist()
@@ -128,10 +153,11 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
             if cells:
                 seen.append(" | ".join(cells[:6]))
         raise ValueError(
-            "Could not find the rate table. This importer looks for a header row carrying "
-            "Category, Age Band and Gross Premium columns (the insurer's Premium Summary "
-            "layout). The first rows of the sheet read: "
-            + (" // ".join(seen[:5]) if seen else "(the sheet is empty)")
+            "Could not find the rate table on any sheet. This importer looks for a header row "
+            "carrying Category, Age Band and Gross Premium columns (the insurer's Premium "
+            f"Summary layout). Sheets read: {', '.join(map(str, sheets)) or '(none)'}. "
+            f"The first sheet reads: "
+            + (" // ".join(seen[:5]) if seen else "(empty)")
         )
     header_row, category_col, age_band_col, premium_col = header
 
