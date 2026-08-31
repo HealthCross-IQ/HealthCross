@@ -432,3 +432,67 @@ def test_without_member_rates_it_falls_back_to_the_books_active_members(client):
     # 16 lives at their own annual rate, not the pro-rata gross.
     assert body["renewal_base_premium"] == 16 * 6_000.0
     assert body["renewal_base_premium"] != body["from_book"]["gross_premium"]
+
+
+# --- the house ladder ----------------------------------------------------
+
+def test_the_renewal_carries_the_loss_ratio_not_the_absolute_claims(client):
+    # The failure this replaces: annualising claims over elapsed days and
+    # dividing by the expiring premium puts the numerator on the pro-rata
+    # basis and the denominator on the annualised one. On NOMADA the
+    # expiring premium is 14.5% larger than the premium the claims were
+    # earned against, so 83.6% read as 73.0% and +18.3% became +1.9%.
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    ladder = body["ladder"]
+    assert ladder["loss_ratio"] == body["from_book"]["gross_loss_ratio"]
+    assert body["actual_loss_ratio"] == body["from_book"]["gross_loss_ratio"]
+
+
+def test_inflation_is_added_in_points_not_multiplied(client):
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.836, 103_486.0, inflation_pts=0.075, loading_pct=0.23)
+    # 83.6 + 7.5 = 91.1, the house convention - not 83.6 x 1.075 = 89.9.
+    assert out["trended_loss_ratio"] == 0.911
+    assert out["required_share_of_expiring"] == round(0.911 / 0.77, 4)
+    assert out["renewal_increase_pct"] == 18.31
+    assert out["required_premium"] == 122_436.03
+
+
+def test_the_loading_is_a_gross_up_not_a_mark_up(client):
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    out = renewal_from_loss_ratio(0.80, 100_000.0, inflation_pts=0.0, loading_pct=0.25)
+    # Premium x (1 - loading) is what funds claims, so 80% / 0.75, not
+    # 80% x 1.25 - the mark-up understates by the square of the loading.
+    assert out["required_share_of_expiring"] == round(0.80 / 0.75, 4)
+    assert out["required_premium"] != 100_000.0 * 0.80 * 1.25
+
+
+def test_both_methods_run_the_same_ladder_off_their_own_reserve(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    a, b = body, body["method_b"]
+    assert a["renewal_base_premium"] == b["renewal_base_premium"]
+    # Method B reserves with a flat load, so its ratio and therefore its
+    # ask are higher; nothing else about the two differs.
+    assert b["actual_loss_ratio"] > a["actual_loss_ratio"]
+    assert b["renewal_increase_pct"] > a["renewal_increase_pct"]
+
+
+def test_a_zero_expiring_premium_is_refused_rather_than_divided_by(client):
+    import pytest
+
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    with pytest.raises(ValueError):
+        renewal_from_loss_ratio(0.9, 0.0)
+    with pytest.raises(ValueError):
+        renewal_from_loss_ratio(0.9, 100_000.0, loading_pct=1.0)

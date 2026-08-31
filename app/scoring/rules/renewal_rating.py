@@ -76,6 +76,58 @@ class RenewalRatingAssumptions:
     credibility_pct: float = 1.0  # Method B (Burning Cost) only - 1.0 is a no-op, reproducing Method A exactly.
 
 
+def renewal_from_loss_ratio(
+    loss_ratio: float,
+    expiring_annual_premium: float,
+    inflation_pts: float = DEFAULT_INFLATION_PCT,
+    loading_pct: float = DEFAULT_LOADING_PCT,
+) -> dict:
+    """The renewal price from the account's own loss ratio.
+
+        trended loss ratio = loss ratio + inflation
+        required premium   = expiring premium x trended / (1 - loading)
+
+    NOMADA: 83.6% + 7.5 = 91.1%, over (1 - 23%) = 118.3% of the expiring
+    premium, so 103,486 becomes 122,436 and the ask is +18.3%.
+
+    A RATIO carried forward, not an absolute claims figure. That is the
+    whole point, and getting it wrong cost a day: pricing off absolute
+    claims means annualising them over elapsed days and then dividing by
+    the expiring premium - but the claims were earned against the
+    PRO-RATA premium, which is smaller. On NOMADA that denominator was
+    14.5% larger than the one the claims actually ran against, and the
+    account's 83.6% quietly became 73.0%, turning an increase of 18.3%
+    into 1.9%. Carrying the ratio keeps both halves on one basis, because
+    next year's claims will be measured against next year's premium in
+    exactly the same proportion.
+
+    Inflation is added in POINTS, the house convention: 83.6 + 7.5 =
+    91.1, not 83.6 x 1.075 = 89.9. The two differ by more the higher the
+    ratio, and on a loss-making account the points version is the
+    prudent one.
+
+    The loading is a share OF THE PREMIUM, so the part funding claims is
+    premium x (1 - loading) - hence dividing rather than marking up.
+    """
+    if expiring_annual_premium <= 0:
+        raise ValueError("expiring_annual_premium must be positive.")
+    if loading_pct >= 1:
+        raise ValueError("loading_pct must be below 1.")
+    trended = loss_ratio + inflation_pts
+    required_share = trended / (1 - loading_pct)
+    required = expiring_annual_premium * required_share
+    return {
+        "loss_ratio": round(loss_ratio, 4),
+        "inflation_pts": inflation_pts,
+        "trended_loss_ratio": round(trended, 4),
+        "loading_pct": loading_pct,
+        "required_share_of_expiring": round(required_share, 4),
+        "expiring_annual_premium": round(expiring_annual_premium, 2),
+        "required_premium": round(required, 2),
+        "renewal_increase_pct": round((required_share - 1) * 100, 2),
+    }
+
+
 def calculate_renewal_rating(
     annualized_incurred_claims: float,
     current_annual_premium: float,

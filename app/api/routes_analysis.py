@@ -53,6 +53,7 @@ from app.scoring.rules.renewal_rating import (
     benchmark_case_against_book,
     calculate_renewal_rating,
     calculate_renewal_rating_two_methods,
+    renewal_from_loss_ratio,
     case_loading_pct,
     dynamic_ibnr_incurred_claims,
     premium_component_breakdown,
@@ -1093,12 +1094,38 @@ def _rating_from_book_figures(
     # the ask on any account with mid-term joiners. NOMADA earned 90,347
     # against an annualised expiring premium of 103,486.
     expiring = _annualised_expiring_premium(case)
+
+    # The house ladder, carried as a RATIO rather than as absolute
+    # claims. Both methods measure their own loss ratio against the
+    # earned premium the claims actually ran against, then that ratio is
+    # trended and grossed up onto the expiring premium.
+    #
+    # Pricing off absolute claims instead put the numerator on one basis
+    # and the denominator on another: annualised claims over the expiring
+    # premium read 73.0% where the account runs at 83.6%, because the
+    # expiring premium is 14.5% larger than the pro-rata one the claims
+    # were earned against. That turned an increase of 18.3% into 1.9%.
+    earned = book["earned_premium"]
+    lr_a = (paid + outstanding + book["ibnr"]) / earned if earned else 0.0
+    lr_b = (paid + outstanding) * (1 + effective_ibnr_pct) / earned if earned else 0.0
+    base = expiring["total"] or book["gross_premium"]
+    ladder_a = renewal_from_loss_ratio(lr_a, base, effective_inflation_pct, effective_loading_pct)
+    ladder_b = renewal_from_loss_ratio(lr_b, base, effective_inflation_pct, effective_loading_pct)
+
     two_methods = calculate_renewal_rating_two_methods(
         incurred_a, incurred_b, book["gross_premium"],
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
         credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
-        renewal_base=expiring["total"],
+        renewal_base=base,
     )
+    for method, ladder in ((two_methods["method_a"], ladder_a),
+                           (two_methods["method_b"], ladder_b)):
+        method["actual_loss_ratio"] = ladder["loss_ratio"]
+        method["trended_loss_ratio"] = ladder["trended_loss_ratio"]
+        method["required_share_of_expiring"] = ladder["required_share_of_expiring"]
+        method["required_premium"] = ladder["required_premium"]
+        method["renewal_increase_pct"] = ladder["renewal_increase_pct"]
+        method["renewal_base_premium"] = ladder["expiring_annual_premium"]
 
     # The calendar months the exposure actually spans, so anything
     # reading len(months_used) for a credibility or frequency
@@ -1131,8 +1158,12 @@ def _rating_from_book_figures(
     result["method_b"]["annualized_paid_and_outstanding"] = result["annualized_paid_and_outstanding"]
     result["method_b"]["ibnr_pct"] = effective_ibnr_pct
     result["method_b"]["months_used"] = months_used
-    result["method_gap"] = two_methods["gap"]
-    result["method_gap_pct"] = two_methods["gap_pct"]
+    result["method_gap"] = round(
+        ladder_b["required_premium"] - ladder_a["required_premium"], 2)
+    result["method_gap_pct"] = round(
+        (ladder_b["required_premium"] / ladder_a["required_premium"] - 1) * 100, 2
+    ) if ladder_a["required_premium"] else None
+    result["ladder"] = ladder_a
     result["from_book"] = book
     result["rating_source"] = "book"
     result["expiring_premium"] = expiring
@@ -2196,8 +2227,10 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
             "renewal_date": case.renewal_date,
         },
         "book": book,
+        "ladder": rating.get("ladder"),
         "rating": {
             "required_premium": rating.get("required_premium"),
+            "required_share_of_expiring": rating.get("required_share_of_expiring"),
             "renewal_increase_pct": rating.get("renewal_increase_pct"),
             "renewal_base_premium": rating.get("renewal_base_premium"),
             "expiring_premium": rating.get("expiring_premium"),

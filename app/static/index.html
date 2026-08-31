@@ -4742,6 +4742,30 @@ function openRenewalReport() {
   window.open(`/cases/${currentCase.id}/renewal-report.html`, '_blank');
 }
 
+// The renewal ladder, written as the arithmetic it is. A RATIO carried
+// forward, not absolute claims: the claims were earned against the
+// pro-rata premium, so annualising them and dividing by the (larger)
+// expiring premium mixes two bases and quietly improves the loss ratio.
+// On NOMADA that read 73.0% against an actual 83.6%, and turned +18.3%
+// into +1.9%.
+function _rbLadderHtml(m) {
+  if (m.trended_loss_ratio == null) return '';
+  const p = v => `${(v * 100).toFixed(1)}%`;
+  const rows = [
+    ['Loss ratio', p(m.actual_loss_ratio), 'incurred &divide; earned'],
+    [`+ Inflation (${p(m.assumptions_used.inflation_pct)})`, p(m.trended_loss_ratio), 'points, not a multiplier'],
+    [`&divide; (1 &minus; ${p(m.assumptions_used.loading_pct)} loading)`,
+      p(m.required_share_of_expiring), 'of the expiring premium'],
+    ['Expiring premium', 'AED ' + Math.round(m.renewal_base_premium).toLocaleString(), 'annualised at current rates'],
+    ['Required premium', 'AED ' + Math.round(m.required_premium).toLocaleString(), '', true],
+  ];
+  return `<table class="rb-table" style="margin-top:4px;">${rows.map(
+    ([l, v, note, strong]) => `<tr${strong ? ' class="total"' : ''}>
+      <td>${strong ? '<strong>' + l + '</strong>' : l}</td>
+      <td class="num">${strong ? '<strong>' + v + '</strong>' : v}</td>
+      <td style="color:var(--muted); font-size:11px;">${note}</td></tr>`).join('')}</table>`;
+}
+
 function _renewalBookPanelHtml(r) {
   const f = r.from_book;
   if (!f) {
@@ -4832,17 +4856,12 @@ function _renewalBenchScorecardHtml(r) {
           </div>
           <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()} to date, which annualises &times;${ibnr.annualization_factor} to <b>AED ${ibnr.annualized_ibnr.toLocaleString()}</b> - and that is the figure the build-up below adds, so the column reconciles.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} incurred claims &divide; AED ${r.current_annual_premium.toLocaleString()} earned-basis premium`)}
-            ${_rbKpi('Required premium', `AED ${Math.round(r.required_premium).toLocaleString()}`, `${r.annualized_incurred_claims.toLocaleString()} claims +${(r.assumptions_used.inflation_pct * 100).toFixed(1)}% trend, grossed up by ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% loading`)}
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `incurred claims &divide; premium earned over the same days`)}
+            ${_rbKpi('Required premium', `AED ${Math.round(r.required_premium).toLocaleString()}`, `${(r.required_share_of_expiring * 100).toFixed(1)}% of the annualised expiring premium`)}
             ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${Math.round(r.renewal_base_premium).toLocaleString()} annualised expiring${expiringNote}`)}
           </div>
           <div style="margin-top:12px;">
-            ${_rbBuildupHtml([
-              { label: 'Paid + Outstanding (annualised)', value: r.annualized_paid_and_outstanding },
-              { label: `+ IBNR ${ibnr.annualized_ibnr.toLocaleString()} (dynamic, annualised)`, value: r.annualized_incurred_claims },
-              { label: `+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: r.trended_claims },
-              { label: `Required premium`, value: r.required_premium, final: true },
-            ])}
+            ${_rbLadderHtml(r)}
           </div>
         </div>
         <div class="rb-method-card">
@@ -4857,13 +4876,7 @@ function _renewalBenchScorecardHtml(r) {
             ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${Math.round(b.renewal_base_premium).toLocaleString()} annualised expiring`)}
           </div>
           <div style="margin-top:12px;">
-            ${_rbBuildupHtml([
-              { label: 'Paid + Outstanding (annualised)', value: b.annualized_paid_and_outstanding },
-              { label: `+ IBNR (${(b.ibnr_pct * 100).toFixed(0)}% flat)`, value: b.annualized_incurred_claims },
-              { label: `+ Inflation (${(b.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: b.trended_claims },
-              { label: `× Credibility (${(b.assumptions_used.credibility_pct * 100).toFixed(0)}%)`, value: b.credible_claims },
-              { label: `Required premium`, value: b.required_premium, final: true },
-            ])}
+            ${_rbLadderHtml(b)}
           </div>
         </div>
       </div>

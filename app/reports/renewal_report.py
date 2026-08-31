@@ -119,8 +119,7 @@ def _headline(payload: dict) -> str:
                f'net of the {pct(book.get("loading_pct"))} book expense allowance',
                _ratio_tone(book.get("net_loss_ratio")))
         + _kpi("Required premium", aed(rating.get("required_premium")),
-               f'claims +{pct(rating.get("assumptions_used", {}).get("inflation_pct"))} trend, '
-               f'grossed up by this case&rsquo;s {pct(rating.get("assumptions_used", {}).get("loading_pct"))} loading')
+               f'{pct(rating.get("required_share_of_expiring"))} of the annualised expiring premium')
         + _kpi("Renewal increase", ("+" if (inc or 0) >= 0 else "") + f'{inc}%' if inc is not None else "&mdash;",
                f'vs {aed(rating.get("renewal_base_premium"))} annualised expiring',
                "bad" if (inc or 0) >= 15 else ("warn" if (inc or 0) > 0 else "good"))
@@ -144,12 +143,15 @@ def _the_ask(payload: dict) -> str:
         if (book.get("net_loss_ratio") or 0) >= 1.0
         else "The account is running to plan."
     )
+    ladder = payload.get("ladder") or {}
     return (
-        f'<div class="callout"><strong>{verdict}</strong> Twelve months of experience at '
-        f'{pct(gross)} gross costs {aed(book.get("incurred_claims"))} incurred against '
-        f'{aed(book.get("earned_premium"))} earned. Renewing the expiring population needs '
-        f'<strong>{aed(rating.get("required_premium"))}</strong> &mdash; {direction} '
-        f'<strong>{abs(inc)}%</strong> on the {aed(base)} annualised expiring premium.</div>'
+        f'<div class="callout"><strong>{verdict}</strong> The account runs at {pct(gross)}; '
+        f'carried forward with {pct(ladder.get("inflation_pts"))} of claims inflation that is '
+        f'<strong>{pct(ladder.get("trended_loss_ratio"))}</strong>, and grossed up for a '
+        f'{pct(ladder.get("loading_pct"))} loading it needs '
+        f'{pct(ladder.get("required_share_of_expiring"))} of the expiring premium. '
+        f'On {aed(base)} annualised that is <strong>{aed(rating.get("required_premium"))}</strong> '
+        f'&mdash; {direction} <strong>{abs(inc)}%</strong>.</div>'
     )
 
 
@@ -200,6 +202,38 @@ def _buildup_bars(book: dict) -> str:
          "value_class": "key" if fill == "solid" else ""}
         for label, value, fill in steps
     ], label_width=150)
+
+
+def _ladder(payload: dict) -> str:
+    """The renewal arithmetic, step by step.
+
+    A ratio carried forward, not absolute claims: the claims were earned
+    against the pro-rata premium, so annualising them and dividing by the
+    larger expiring premium mixes two bases and silently improves the
+    loss ratio.
+    """
+    L = payload.get("ladder") or {}
+    if not L.get("required_premium"):
+        return ""
+    rows = [
+        ("Loss ratio", pct(L.get("loss_ratio")), "incurred claims &divide; premium earned over the same days"),
+        (f'+ Claims inflation {pct(L.get("inflation_pts"))}', pct(L.get("trended_loss_ratio")),
+         "added in points, the house convention"),
+        (f'&divide; (1 &minus; {pct(L.get("loading_pct"))} loading)',
+         pct(L.get("required_share_of_expiring")),
+         "the loading is a share of the premium, so the part funding claims is premium &times; (1 &minus; loading)"),
+        ("Annualised expiring premium", aed(L.get("expiring_annual_premium")),
+         "a full year at current rates for the renewing headcount"),
+        ("<strong>Required premium</strong>",
+         f'<strong>{aed(L.get("required_premium"))}</strong>',
+         f'<strong>{("+" if L.get("renewal_increase_pct", 0) >= 0 else "")}'
+         f'{L.get("renewal_increase_pct")}%</strong> on expiring'),
+    ]
+    return ('<section><h2 class="sec">The renewal ask</h2>'
+            '<p class="desc">The account&rsquo;s own loss ratio carried forward, not its absolute '
+            'claims. Claims are earned against the pro-rata premium; annualising them and dividing '
+            'by the larger expiring premium would mix two bases and understate the ask.</p>'
+            + _rows(rows) + "</section>")
 
 
 def _claims_buildup(payload: dict) -> str:
@@ -403,6 +437,7 @@ def render_renewal_report(payload: dict, today: Optional[date] = None) -> str:
         + _headline(payload)
         + '<div class="pad">'
         + _the_ask(payload)
+        + _ladder(payload)
         + _premiums(payload)
         + _claims_buildup(payload)
         + _monthly(payload)
