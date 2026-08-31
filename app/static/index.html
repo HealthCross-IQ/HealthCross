@@ -3913,17 +3913,40 @@ function _benefitSummaryCardHtml(p, editing) {
     `;
   }).join('');
 
+  // Delete sits on every card, not only inside Edit. A category created
+  // by an extraction that split one table into four is a category
+  // nobody wants to edit first - they want it gone, and hiding the only
+  // way to remove it behind "Edit" made a wrong extraction look
+  // permanent.
   const actions = editing
     ? `
       <button class="primary" onclick="saveBenefitSummaryEdit(${p.id})">Save</button>
       <button onclick="cancelBenefitSummaryEdit(${p.id})">Cancel</button>
       <button onclick="deleteBenefitPlan(${p.id})" style="float:right;">Delete category</button>
     `
-    : `<button onclick="editBenefitSummary(${p.id})">Edit</button> <button onclick="duplicateBenefitPlan(${p.id})">Duplicate</button>`;
+    : `<button onclick="editBenefitSummary(${p.id})">Edit</button>
+       <button onclick="duplicateBenefitPlan(${p.id})">Duplicate</button>
+       <button onclick="deleteBenefitPlan(${p.id})" style="float:right;">Delete category</button>`;
+
+  // A category where the extractor resolved nothing is not a category -
+  // it is a header it found and could not read under. Saying so is the
+  // difference between an underwriter deleting it and an underwriter
+  // believing the plan genuinely has no limits.
+  const resolved = Object.values(p.summary || {})
+    .filter(v => v && v !== unresolvedText && v !== NOT_SPECIFIED_TEXT).length;
+  const total = Object.keys(p.summary || {}).length;
+  const emptyFlag = (!editing && total && resolved === 0)
+    ? `<div class="hint" style="background:#fbf3e6;border-left:3px solid #c98a2b;padding:9px 12px;
+         margin:8px 0;color:#8a5f1e;">Nothing was extracted for this category &mdash; all ${total}
+         fields are unresolved. The document may use a layout the parser does not read, or this may
+         be a header the extractor split out in error. Delete it, or Edit to enter the terms by
+         hand.</div>`
+    : '';
 
   const title = editing
     ? `<input type="text" id="plan-name-input-${p.id}" value="${escapeHtml(p.plan_name || '')}" placeholder="e.g. Category A" style="font-size:1.1em;font-weight:600;width:100%;box-sizing:border-box;margin-bottom:8px;" />`
-    : `<h3>${escapeHtml(p.plan_name || 'Plan')}${p.category ? ` <span style="color:var(--ink-muted); font-weight:400;">(Cat ${escapeHtml(p.category)})</span>` : ''}</h3>`;
+    : `<h3>${escapeHtml(p.plan_name || 'Plan')}${p.category ? ` <span style="color:var(--ink-muted); font-weight:400;">(Cat ${escapeHtml(p.category)})</span>` : ''}${
+        (!editing && total) ? `<span style="font-size:11px;font-weight:400;color:var(--muted);margin-left:8px;">${resolved} of ${total} fields extracted</span>` : ''}</h3>`;
 
   const nbSummaryLine = !editing && (p.nb_product || p.nb_network)
     ? `<div class="hint">New Business: ${escapeHtml(p.nb_product || '-')} / ${escapeHtml(p.nb_network || '-')}${p.nb_tpa ? ' (' + escapeHtml(p.nb_tpa) + ')' : ''}</div>`
@@ -3932,6 +3955,7 @@ function _benefitSummaryCardHtml(p, editing) {
   return `
     <div class="card" data-plan-id="${p.id}">
       ${title}
+      ${emptyFlag}
       ${nbSummaryLine}
       ${editing ? _benefitNbPickerHtml(p) : ''}
       <table>${rows}</table>
