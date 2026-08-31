@@ -3194,10 +3194,40 @@ function _groupMembersForRateGrid(members) {
   return tree;
 }
 
+// A rate is a per-member figure; what an account is quoted is a total.
+// Reading a grid of rates and multiplying by headcount in your head is
+// where a renewal gets mis-stated, so each cell carries its own premium
+// and each region and the account carry their own totals.
+function _cellTotals(members) {
+  let existing = 0, hasExisting = false;
+  let next = 0, hasNext = false;
+  members.forEach(m => {
+    if (m.existing_annual_rate != null) { existing += m.existing_annual_rate; hasExisting = true; }
+    if (m.effective_new_rate != null) { next += m.effective_new_rate; hasNext = true; }
+  });
+  return {
+    count: members.length,
+    existing: hasExisting ? existing : null,
+    next: hasNext ? next : null,
+    // Only meaningful when every member in the cell is rated on both
+    // sides; a part-rated cell would report a change against a total
+    // that is missing members.
+    complete: hasExisting && hasNext
+      && members.every(m => m.existing_annual_rate != null && m.effective_new_rate != null),
+  };
+}
+
+function _aedCell(value) {
+  return value == null ? '<td class="num">&mdash;</td>'
+    : `<td class="num">${Math.round(value).toLocaleString()}</td>`;
+}
+
 function _rateGridHtml(regionTree, caseRenewalIncreasePct) {
-  return Object.keys(regionTree).sort(_regionSort).map(region => {
+  const book = { count: 0, existing: 0, next: 0, anyExisting: false, anyNext: false };
+  const html = Object.keys(regionTree).sort(_regionSort).map(region => {
     const catTree = regionTree[region];
     const rows = [];
+    const regionTotal = { count: 0, existing: 0, next: 0, anyExisting: false, anyNext: false };
     Object.keys(catTree).sort((a, b) => (a === 'Uncategorized') - (b === 'Uncategorized') || a.localeCompare(b)).forEach(category => {
       RATE_GENDER_ORDER.forEach(gender => {
         const ageTree = catTree[category][gender];
@@ -3212,27 +3242,65 @@ function _rateGridHtml(regionTree, caseRenewalIncreasePct) {
             ? Math.round(uniform * (1 + caseRenewalIncreasePct / 100) * 100) / 100
             : null;
           const gridKey = `${region}||${category}||${gender}||${ageBand}`;
+          const t = _cellTotals(members);
+          regionTotal.count += t.count;
+          if (t.existing != null) { regionTotal.existing += t.existing; regionTotal.anyExisting = true; }
+          if (t.next != null) { regionTotal.next += t.next; regionTotal.anyNext = true; }
+          const cellChange = (t.complete && t.existing)
+            ? ((t.next / t.existing - 1) * 100) : null;
           rows.push(`
             <tr>
               <td>${escapeHtml(category)}</td>
               <td>${escapeHtml(gender)}</td>
               <td>${escapeHtml(ageBand)}</td>
-              <td>${members.length}</td>
+              <td class="num">${members.length}</td>
               <td><input type="number" step="0.01" data-grid-key="${escapeHtml(gridKey)}" value="${uniform ?? ''}" placeholder="${mixed ? 'mixed' : 'e.g. 3,500'}" style="width:110px;"></td>
-              <td>${computedNewRate != null ? 'AED ' + computedNewRate.toLocaleString() : (mixed ? 'mixed' : '-')}</td>
+              <td class="num">${computedNewRate != null ? computedNewRate.toLocaleString() : (mixed ? 'mixed' : '&mdash;')}</td>
+              ${_aedCell(t.existing)}
+              ${_aedCell(t.next)}
+              <td class="num">${cellChange != null ? (cellChange > 0 ? '+' : '') + cellChange.toFixed(1) + '%' : '&mdash;'}</td>
             </tr>
           `);
         });
       });
     });
+    book.count += regionTotal.count;
+    if (regionTotal.anyExisting) { book.existing += regionTotal.existing; book.anyExisting = true; }
+    if (regionTotal.anyNext) { book.next += regionTotal.next; book.anyNext = true; }
+    const regionChange = (regionTotal.anyExisting && regionTotal.anyNext && regionTotal.existing)
+      ? ((regionTotal.next / regionTotal.existing - 1) * 100) : null;
     return `
       <h4>${escapeHtml(region)}</h4>
-      <table>
-        <tr><th>Category</th><th>Gender</th><th>Age Band</th><th>Members</th><th>Existing rate (AED)</th><th>Effective new rate</th></tr>
+      <div class="scroll"><table>
+        <tr><th>Category</th><th>Gender</th><th>Age Band</th><th class="num">Members</th>
+            <th>Existing rate (AED)</th><th class="num">New rate</th>
+            <th class="num">Existing premium</th><th class="num">New premium</th><th class="num">Change</th></tr>
         ${rows.join('')}
-      </table>
+        <tr class="total"><th colspan="3">${escapeHtml(region)} total</th>
+          <td class="num"><strong>${regionTotal.count}</strong></td>
+          <td></td><td></td>
+          <td class="num"><strong>${regionTotal.anyExisting ? Math.round(regionTotal.existing).toLocaleString() : '&mdash;'}</strong></td>
+          <td class="num"><strong>${regionTotal.anyNext ? Math.round(regionTotal.next).toLocaleString() : '&mdash;'}</strong></td>
+          <td class="num"><strong>${regionChange != null ? (regionChange > 0 ? '+' : '') + regionChange.toFixed(1) + '%' : '&mdash;'}</strong></td></tr>
+      </table></div>
     `;
   }).join('');
+
+  const bookChange = (book.anyExisting && book.anyNext && book.existing)
+    ? ((book.next / book.existing - 1) * 100) : null;
+  const grand = `
+    <table style="margin-top:14px;">
+      <tr class="total"><th>Account total</th>
+        <td class="num"><strong>${book.count}</strong> members</td>
+        <td class="num">Existing <strong>AED ${book.anyExisting ? Math.round(book.existing).toLocaleString() : '&mdash;'}</strong></td>
+        <td class="num">New <strong>AED ${book.anyNext ? Math.round(book.next).toLocaleString() : '&mdash;'}</strong></td>
+        <td class="num"><strong>${bookChange != null ? (bookChange > 0 ? '+' : '') + bookChange.toFixed(1) + '%' : '&mdash;'}</strong></td></tr>
+    </table>
+    <div class="hint" style="margin-top:6px;">Totals count only members whose rate is set on that side,
+      so a part-rated grid shows a total for what is rated rather than a change against a missing
+      denominator. This is the annualised premium at these rates &mdash; the figure a renewal is
+      quoted against.</div>`;
+  return html + grand;
 }
 
 async function saveCategoryRates() {
