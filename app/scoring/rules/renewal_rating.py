@@ -80,6 +80,7 @@ def calculate_renewal_rating(
     annualized_incurred_claims: float,
     current_annual_premium: float,
     assumptions: Optional[RenewalRatingAssumptions] = None,
+    renewal_base: Optional[float] = None,
 ) -> dict:
     """annualized_incurred_claims is the ALREADY-incurred figure (Paid +
     Outstanding + IBNR) - IBNR is computed upstream by the caller (see
@@ -95,6 +96,24 @@ def calculate_renewal_rating(
     renewal loading. credibility_pct=1.0 (the default) is a no-op, so a
     caller not passing it gets the full, un-shaded experience-based
     figure.
+
+    Two premiums, because the two questions have different denominators
+    and conflating them was wrong in both directions.
+
+    current_annual_premium is what the loss ratio is MEASURED against -
+    the account's earned exposure, prorated for members who joined or
+    left mid-year.
+
+    renewal_base is what the increase is QUOTED against: the annualised
+    expiring premium, a full year at current rates for the headcount
+    that is actually renewing. A renewal covers a whole year, so pricing
+    it off a prorated part-year figure understates the increase on any
+    account that had mid-term joiners. NOMADA earned 90,347 against an
+    annualised expiring premium of 103,486, and quoting the increase off
+    the first prices a year nobody is buying.
+
+    Defaults to current_annual_premium, so a caller that has only one
+    premium is unchanged.
     """
     if annualized_incurred_claims < 0:
         raise ValueError("annualized_incurred_claims must not be negative.")
@@ -103,15 +122,18 @@ def calculate_renewal_rating(
 
     a = assumptions or RenewalRatingAssumptions()
 
+    base = renewal_base if renewal_base and renewal_base > 0 else current_annual_premium
+
     actual_loss_ratio = annualized_incurred_claims / current_annual_premium
     trended_claims = annualized_incurred_claims * (1 + a.inflation_pct)
     credible_claims = trended_claims * a.credibility_pct
     required_premium = credible_claims / (1 - a.loading_pct)
-    renewal_increase_pct = (required_premium / current_annual_premium - 1) * 100
+    renewal_increase_pct = (required_premium / base - 1) * 100
 
     return {
         "annualized_incurred_claims": round(annualized_incurred_claims, 2),
         "current_annual_premium": round(current_annual_premium, 2),
+        "renewal_base_premium": round(base, 2),
         "actual_loss_ratio": round(actual_loss_ratio, 4),
         "trended_claims": round(trended_claims, 2),
         "credible_claims": round(credible_claims, 2),
@@ -132,6 +154,7 @@ def calculate_renewal_rating_two_methods(
     inflation_pct: float = DEFAULT_INFLATION_PCT,
     loading_pct: float = DEFAULT_LOADING_PCT,
     credibility_pct: float = DEFAULT_CREDIBILITY_PCT,
+    renewal_base: Optional[float] = None,
 ) -> dict:
     """Both renewal scorecard methods side by side, each from ITS OWN
     already-incurred claims base (see calculate_renewal_rating's
@@ -148,10 +171,12 @@ def calculate_renewal_rating_two_methods(
     method_a = calculate_renewal_rating(
         incurred_claims_method_a, current_annual_premium,
         RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=1.0),
+        renewal_base=renewal_base,
     )
     method_b = calculate_renewal_rating(
         incurred_claims_method_b, current_annual_premium,
         RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=credibility_pct),
+        renewal_base=renewal_base,
     )
     return {
         "method_a": method_a,

@@ -4719,6 +4719,12 @@ function _renewalBenchScorecardHtml(r) {
   const ibnr = r.ibnr_detail;
   const gapPositive = r.method_gap >= 0;
   const fromBook = r.rating_source === 'book';
+  // The premium the increase is quoted against, and where it came from.
+  // A renewal covers a full year, so it is priced off the annualised
+  // expiring premium - not the book's gross, which is prorated for
+  // mid-term joiners and leavers and would understate the ask.
+  const expiringNote = (r.expiring_premium && r.expiring_premium.source)
+    ? ` (${escapeHtml(r.expiring_premium.source)}, ${r.expiring_premium.member_count} members)` : '';
   const dropped = (r.excluded_months || []).length ? `
       <div class="rb-card-sub" style="margin-top:8px;">Excluded as part months:
         ${escapeHtml(r.excluded_months.join(', '))} &mdash; holding
@@ -4746,8 +4752,9 @@ function _renewalBenchScorecardHtml(r) {
           </div>
           <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()} to date, which annualises &times;${ibnr.annualization_factor} to <b>AED ${ibnr.annualized_ibnr.toLocaleString()}</b> - and that is the figure the build-up below adds, so the column reconciles.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} incurred claims &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
-            ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
+            ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} incurred claims &divide; AED ${r.current_annual_premium.toLocaleString()} earned-basis premium`)}
+            ${_rbKpi('Required premium', `AED ${Math.round(r.required_premium).toLocaleString()}`, `${r.annualized_incurred_claims.toLocaleString()} claims +${(r.assumptions_used.inflation_pct * 100).toFixed(1)}% trend, grossed up by ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% loading`)}
+            ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${Math.round(r.renewal_base_premium).toLocaleString()} annualised expiring${expiringNote}`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
@@ -4765,8 +4772,9 @@ function _renewalBenchScorecardHtml(r) {
           </div>
           <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is a flat load on the same Paid+Outstanding base: AED ${b.annualized_paid_and_outstanding.toLocaleString()} &times; ${(b.ibnr_pct * 100).toFixed(0)}% = AED ${(b.annualized_incurred_claims - b.annualized_paid_and_outstanding).toLocaleString()}.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
-            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${b.annualized_incurred_claims.toLocaleString()} incurred claims &divide; current premium`)}
-            ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${b.current_annual_premium.toLocaleString()} current`)}
+            ${_rbKpi('Actual loss ratio', `${(b.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${b.annualized_incurred_claims.toLocaleString()} incurred claims &divide; earned-basis premium`)}
+            ${_rbKpi('Required premium', `AED ${Math.round(b.required_premium).toLocaleString()}`, `after ${(b.assumptions_used.credibility_pct * 100).toFixed(0)}% credibility`)}
+            ${_rbKpi('Renewal increase', `${b.renewal_increase_pct > 0 ? '+' : ''}${b.renewal_increase_pct}%`, `vs. AED ${Math.round(b.renewal_base_premium).toLocaleString()} annualised expiring`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([

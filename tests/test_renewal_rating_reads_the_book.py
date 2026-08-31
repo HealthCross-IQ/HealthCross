@@ -382,3 +382,53 @@ def test_the_stored_extract_date_still_wins_over_the_last_claim(client):
 
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert body["from_book"]["as_of"] == "2026-08-20"
+
+
+# --- the two premiums are different questions ----------------------------
+
+def _rate_the_census(client, case_id, rates):
+    db = client.db_session_local()
+    for i, rate in enumerate(rates):
+        db.add(models.CensusRecord(case_id=case_id, employee_ref=f"E{i}", category="A",
+                                   age=35, relation="employee", existing_annual_rate=rate))
+    db.commit()
+    db.close()
+
+
+def test_the_loss_ratio_and_the_renewal_increase_use_different_premiums(client):
+    # The book's gross premium is pro-rata for additions and deletions.
+    # That is the right denominator for a loss ratio - it is what the
+    # account actually earned - and the wrong base for a renewal, which
+    # covers a whole year at current rates for the headcount renewing.
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)   # NOMADA's own: 103,486
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["current_annual_premium"] == body["from_book"]["gross_premium"]
+    assert body["renewal_base_premium"] == 103_487.0
+    assert body["expiring_premium"]["source"] == "each renewing member's own existing annual rate"
+    # The ratio still ties to the book; only the increase moved.
+    assert body["actual_loss_ratio"] == body["from_book"]["gross_loss_ratio"]
+
+
+def test_the_increase_is_quoted_against_the_annualised_expiring_premium(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    expected = round((body["required_premium"] / 103_487.0 - 1) * 100, 2)
+    assert body["renewal_increase_pct"] == expected
+    assert body["method_b"]["renewal_base_premium"] == 103_487.0
+
+
+def test_without_member_rates_it_falls_back_to_the_books_active_members(client):
+    _nomada(client)
+    case_id = _case(client)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["expiring_premium"]["source"] == "the book's active members at their annual rates"
+    # 16 lives at their own annual rate, not the pro-rata gross.
+    assert body["renewal_base_premium"] == 16 * 6_000.0
+    assert body["renewal_base_premium"] != body["from_book"]["gross_premium"]

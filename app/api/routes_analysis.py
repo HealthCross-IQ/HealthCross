@@ -991,6 +991,57 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     }
 
 
+def _annualised_expiring_premium(case: models.Case) -> dict:
+    """A full year at current rates for the headcount that is renewing.
+
+    The premium a renewal is actually quoted against. Three figures are
+    in play on a renewal case and they are not interchangeable:
+
+      - the book's GROSS premium, prorated for members who joined or
+        left mid-term (NOMADA: 90,347). Right for measuring a loss
+        ratio, wrong for quoting a year nobody bought a fraction of.
+      - the case record's current_annual_premium, typed or seeded once
+        and then left (114,488).
+      - this: each renewing member's own existing annual rate, summed
+        (103,486).
+
+    Preference is the member-rate table where an underwriter has built
+    it, then the book's own active members at their annual rates. Both
+    are returned with the source named, because an increase quoted off
+    the wrong one is wrong by exactly the ratio between them.
+    """
+    from sqlalchemy.orm import object_session
+
+    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
+    from app.scoring.rules.renewal_intake import (
+        account_members,
+        continuing_and_leaving,
+        member_annual_rate,
+    )
+
+    rated = [c.existing_annual_rate for c in case.census_records if c.existing_annual_rate]
+    if rated:
+        return {
+            "total": round(sum(rated), 2),
+            "member_count": len(rated),
+            "source": "each renewing member's own existing annual rate",
+        }
+
+    db = object_session(case)
+    if db is not None and case.company_name:
+        account = account_members(_member_dicts(db), case.company_name, _subgroup_master_by_name(db))
+        if account:
+            active, _ = continuing_and_leaving(account)
+            rates = [member_annual_rate(m) or 0.0 for m in active]
+            if any(rates):
+                return {
+                    "total": round(sum(rates), 2),
+                    "member_count": len(active),
+                    "source": "the book's active members at their annual rates",
+                }
+    return {"total": None, "member_count": 0, "source": None}
+
+
 def _rating_from_book_figures(
     case: models.Case,
     book: dict,
@@ -1032,10 +1083,19 @@ def _rating_from_book_figures(
         else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
     )
     effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
+
+    # What the increase is quoted against: a full year at current rates
+    # for the headcount that is actually renewing. The book's gross
+    # premium is prorated for members who joined or left mid-term, and a
+    # renewal does not cover a prorated year - quoting off it understates
+    # the ask on any account with mid-term joiners. NOMADA earned 90,347
+    # against an annualised expiring premium of 103,486.
+    expiring = _annualised_expiring_premium(case)
     two_methods = calculate_renewal_rating_two_methods(
         incurred_a, incurred_b, book["gross_premium"],
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
         credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+        renewal_base=expiring["total"],
     )
 
     # The calendar months the exposure actually spans, so anything
@@ -1073,6 +1133,7 @@ def _rating_from_book_figures(
     result["method_gap_pct"] = two_methods["gap_pct"]
     result["from_book"] = book
     result["rating_source"] = "book"
+    result["expiring_premium"] = expiring
     # No month is discarded when reading the book, so there is nothing
     # unaccounted for - said explicitly because the ledger path's own
     # exclusions are what lost NOMADA's August outstanding.
