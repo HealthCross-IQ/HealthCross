@@ -4503,10 +4503,28 @@ async function loadRenewalRating(inflationOverride, loadingOverride) {
       { label: 'Current premium', value: r.current_annual_premium },
       { label: 'Required premium', value: r.required_premium },
     ];
+    // Same defect as the Bench scorecard had, on a second screen: this
+    // card divides by the case's current_annual_premium, and on NOMADA
+    // that was 114,488 against a booked 90,347 - which is how it showed
+    // a renewal DECREASE on an account running over 100%.
+    const bk = r.from_book;
+    const bookPanel = !bk ? '' : `
+        <div class="hint" style="margin-bottom:12px;">On the book as of
+          ${escapeHtml(String(bk.as_of))} this account is
+          <strong>${(bk.gross_loss_ratio * 100).toFixed(1)}% gross</strong> /
+          <strong>${(bk.net_loss_ratio * 100).toFixed(1)}% net</strong> &mdash;
+          AED ${Math.round(bk.incurred_claims).toLocaleString()} incurred over
+          AED ${Math.round(bk.earned_premium).toLocaleString()} earned across ${bk.days} days.
+          ${r.premium_disagrees_with_book ? `This case carries
+            AED ${Math.round(r.current_annual_premium).toLocaleString()} as its expiring premium
+            where the book has AED ${Math.round(bk.gross_premium).toLocaleString()}; the figures
+            below divide by the case figure and are measured against a premium the account was not
+            charged.` : ''}</div>`;
     area.innerHTML = `
       <div class="card">
         <h3>Renewal rating</h3>
         <div class="hint">Months used: ${r.months_used.join(', ')}</div>
+        ${bookPanel}
         <div class="row" style="flex-wrap:wrap; gap:12px; margin-bottom:16px;">
           ${_statTileHtml('Actual loss ratio', `${(r.actual_loss_ratio*100).toFixed(1)}%`, 'annualized claims &divide; current premium')}
           ${_statTileHtml('Required premium', `AED ${r.required_premium.toLocaleString()}`, `+${(r.assumptions_used.inflation_pct*100).toFixed(1)}% inflation, &divide; ${(100-r.assumptions_used.loading_pct*100).toFixed(1)}% (${(r.assumptions_used.loading_pct*100).toFixed(1)}% loading)`)}
@@ -4639,13 +4657,65 @@ function _rbBuildupHtml(steps) {
   `).join('');
 }
 
+// The account as the Portfolio Loss Ratio screen reports it - the same
+// function, not a second computation. This leads the scorecard because
+// it reads the latest uploaded book, where the two methods below read a
+// claims ledger attached to the case that goes stale the moment the book
+// is refreshed. NOMADA showed 75.6% here against 83.6% there.
+function _renewalBookPanelHtml(r) {
+  const f = r.from_book;
+  if (!f) return '';
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const mismatch = r.premium_disagrees_with_book ? `
+    <div class="rb-reconcile" style="margin-top:12px;">
+      <div class="txt">This case carries <b>AED ${aed(r.current_annual_premium)}</b> as its expiring
+        premium; the book has this account's actual gross premium at
+        <b>AED ${aed(f.gross_premium)}</b>. Method A and B below divide by the case figure, so their
+        loss ratio and renewal increase are both measured against a premium the account was not
+        charged. The figures above use the book.</div>
+    </div>` : '';
+  return `
+    <div class="rb-card" style="margin-bottom:14px;">
+      <div class="rb-card-title">Loss ratio &mdash; from the book</div>
+      <div class="rb-card-sub">${escapeHtml(f.source)}, as of ${escapeHtml(String(f.as_of))}.
+        Paid + Outstanding + IBNR over premium earned across ${f.days} days on risk, for
+        ${f.member_count} lives. Identical to the Portfolio Loss Ratio screen by construction &mdash;
+        the same function produces both, so they cannot disagree.</div>
+      <div class="rb-kpi-strip">
+        ${_rbKpi('Gross earned loss ratio', pct(f.gross_loss_ratio),
+                 `AED ${aed(f.incurred_claims)} incurred &divide; AED ${aed(f.earned_premium)} earned`)}
+        ${_rbKpi('Net earned loss ratio', pct(f.net_loss_ratio),
+                 `&divide; AED ${aed(f.net_premium)} net of ${pct(f.loading_pct)} loading`)}
+      </div>
+      <div class="scroll"><table class="rb-table" style="margin-top:12px;">
+        <tr><th>Paid</th><th>Outstanding</th><th>IBNR</th><th>Incurred</th>
+            <th>Annual gross</th><th>Earned</th><th>Net</th></tr>
+        <tr><td>${aed(f.paid)}</td><td>${aed(f.outstanding)}</td><td>${aed(f.ibnr)}</td>
+            <td><strong>${aed(f.incurred_claims)}</strong></td>
+            <td>${aed(f.gross_premium)}</td><td>${aed(f.earned_premium)}</td>
+            <td>${aed(f.net_premium)}</td></tr>
+      </table></div>
+      ${mismatch}
+    </div>`;
+}
+
 function _renewalBenchScorecardHtml(r) {
   const b = r.method_b;
   const ibnr = r.ibnr_detail;
   const gapPositive = r.method_gap >= 0;
-  return `
+  const dropped = (r.excluded_months || []).length ? `
+      <div class="rb-card-sub" style="margin-top:8px;">Excluded as part months:
+        ${escapeHtml(r.excluded_months.join(', '))} &mdash; holding
+        AED ${Math.round(r.excluded_paid).toLocaleString()} paid and
+        AED ${Math.round(r.excluded_outstanding).toLocaleString()} outstanding that no figure below
+        counts. Dropping a part month from an AVERAGE is right; dropping its claims from a total is
+        not, which is why the book panel above is the one to price from.</div>` : '';
+  return _renewalBookPanelHtml(r) + `
     <div class="rb-card">
-      <div class="rb-card-title">Renewal scorecard</div>
+      <div class="rb-card-title">Renewal scorecard${r.from_book
+        ? ' &mdash; from this case&rsquo;s claims ledger' : ''}</div>
+      ${dropped}
       <div class="rb-card-sub">Both methods reach an Incurred Claims figure (Paid + Outstanding + IBNR) from this case's own trailing full months in the claims ledger, but compute IBNR differently. Months used: ${r.months_used.join(', ')}.</div>
       <div class="rb-scorecard-methods">
         <div class="rb-method-card">
@@ -4653,15 +4723,15 @@ function _renewalBenchScorecardHtml(r) {
             <span class="rb-method-name">Method A &middot; Gross Loss Ratio</span>
             <span class="rb-badge rb-badge-a">A</span>
           </div>
-          <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()}.</div>
+          <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()} to date, which annualises &times;${ibnr.annualization_factor} to <b>AED ${ibnr.annualized_ibnr.toLocaleString()}</b> - and that is the figure the build-up below adds, so the column reconciles.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
             ${_rbKpi('Actual loss ratio', `${(r.actual_loss_ratio * 100).toFixed(1)}%`, `AED ${r.annualized_incurred_claims.toLocaleString()} incurred claims &divide; AED ${r.current_annual_premium.toLocaleString()} current premium`)}
             ${_rbKpi('Renewal increase', `${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%`, `vs. AED ${r.current_annual_premium.toLocaleString()} current`)}
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Paid + Outstanding', value: r.annualized_paid_and_outstanding },
-              { label: `+ IBNR (dynamic)`, value: r.annualized_incurred_claims },
+              { label: 'Paid + Outstanding (annualised)', value: r.annualized_paid_and_outstanding },
+              { label: `+ IBNR ${ibnr.annualized_ibnr.toLocaleString()} (dynamic, annualised)`, value: r.annualized_incurred_claims },
               { label: `+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: r.trended_claims },
               { label: `Required premium`, value: r.required_premium, final: true },
             ])}
@@ -4679,7 +4749,7 @@ function _renewalBenchScorecardHtml(r) {
           </div>
           <div style="margin-top:12px;">
             ${_rbBuildupHtml([
-              { label: 'Paid + Outstanding', value: b.annualized_paid_and_outstanding },
+              { label: 'Paid + Outstanding (annualised)', value: b.annualized_paid_and_outstanding },
               { label: `+ IBNR (${(b.ibnr_pct * 100).toFixed(0)}% flat)`, value: b.annualized_incurred_claims },
               { label: `+ Inflation (${(b.assumptions_used.inflation_pct * 100).toFixed(1)}%)`, value: b.trended_claims },
               { label: `× Credibility (${(b.assumptions_used.credibility_pct * 100).toFixed(0)}%)`, value: b.credible_claims },

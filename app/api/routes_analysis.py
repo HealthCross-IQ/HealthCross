@@ -906,6 +906,79 @@ def get_claims_ledger_analysis(
     return result
 
 
+def _account_rating_from_book(case: models.Case) -> Optional[dict]:
+    """This account's renewal experience read off the Portfolio Analysis
+    book - the latest membership and claims uploaded - rather than off a
+    claims ledger attached to the case.
+
+    The ledger path below is a per-case upload that goes stale the moment
+    the book is refreshed, and it answers the question differently in
+    three ways that all pushed the renewal ask DOWN:
+
+      - It discards the last month in the file (see full_months_only),
+        which is deliberate for averaging a part month but silently drops
+        every claim in it. On NOMADA that lost AED 1,953.89 of
+        outstanding, reporting 6,671.57 where the ledger held 8,625.46.
+      - It annualises claims by averaging whole months and multiplying by
+        twelve, asserting the rest of the year looks like the part
+        observed.
+      - It divides by the case's current_annual_premium, which a renewal
+        opened from the book sets to the ANNUALISED premium (headcount x
+        each member's full annual rate) rather than what was actually
+        charged. On NOMADA that was 114,488 against a booked 90,347, and
+        it read the account at 75.6% where it is 95.8%.
+
+    So this uses the house measure instead (renewal_loss_ratio): every
+    claim to the day the data covers, a 30-day IBNR tail on the active
+    members' own paid run rate, over premium EARNED by those same members
+    to that same day. Nothing is discarded and nothing is projected.
+
+    Returns None when the account is not on the book, so the caller falls
+    back to the ledger.
+    """
+    from sqlalchemy.orm import object_session
+
+    from app.api.routes_portfolio_analysis import account_loss_ratio_rows_for_book
+
+    db = object_session(case)
+    if db is None or not case.company_name:
+        return None
+
+    # Deliberately the SAME call the Portfolio Loss Ratio screen makes,
+    # not a second implementation of the same arithmetic. Two code paths
+    # computing one account's loss ratio is how the renewal card came to
+    # read 75.6% on an account the Loss Ratio screen had at 83.6%, and
+    # no amount of care in a reimplementation prevents the next drift.
+    rows = account_loss_ratio_rows_for_book(db, client=case.company_name)
+    if not rows:
+        return None
+
+    # One row per policy period; the renewal is about the latest.
+    row = max(rows, key=lambda r: r["policy_start_date"])
+    if not row.get("earned_premium"):
+        return None
+    return {
+        "source": "Portfolio Loss Ratio (the uploaded book)",
+        "as_of": row["as_of"],
+        "master_client": row["master_client"],
+        "policy_start_date": row["policy_start_date"],
+        "premium_basis": row["premium_basis"],
+        "member_count": row["member_count"],
+        "days": row["days"],
+        "expired": row["expired"],
+        "paid": row["paid"],
+        "outstanding": row["outstanding"],
+        "ibnr": row["ibnr"],
+        "incurred_claims": row["incurred_claims"],
+        "gross_premium": row["gross_premium"],
+        "earned_premium": row["earned_premium"],
+        "net_premium": row["net_premium"],
+        "loading_pct": row["loading_pct"],
+        "gross_loss_ratio": row["gross_loss_ratio"],
+        "net_loss_ratio": row["net_loss_ratio"],
+    }
+
+
 def _case_renewal_rating(
     case: models.Case,
     inflation_pct: Optional[float] = None,
@@ -963,6 +1036,25 @@ def _case_renewal_rating(
         else:
             total_outstanding += e.final_amount or 0.0
 
+    # What the excluded months hold. full_months_only drops the ledger's
+    # last month (it is exported mid-month, so averaging it understates
+    # the run rate) - but dropping it from the AVERAGE is not the same as
+    # pretending its claims do not exist, and reporting nothing is how
+    # AED 1,953.89 of NOMADA's outstanding went missing between the
+    # ledger and the card.
+    excluded_paid = 0.0
+    excluded_outstanding = 0.0
+    excluded_months = set()
+    for e in entries:
+        d = e.date_of_treatment
+        if not d or (d.year, d.month) in full_month_keys:
+            continue
+        excluded_months.add(f"{d.year}-{d.month:02d}")
+        if _is_paid_claim_status(e.claim_status):
+            excluded_paid += e.final_amount or 0.0
+        else:
+            excluded_outstanding += e.final_amount or 0.0
+
     policy_start = entries[0].policy_start_date
     last_year, last_month = max(full_month_keys)
     period_end = date(last_year, last_month, calendar.monthrange(last_year, last_month)[1])
@@ -999,6 +1091,24 @@ def _case_renewal_rating(
 
     result["method_gap"] = two_methods["gap"]
     result["method_gap_pct"] = two_methods["gap_pct"]
+    result["excluded_months"] = sorted(excluded_months)
+    result["excluded_paid"] = round(excluded_paid, 2)
+    result["excluded_outstanding"] = round(excluded_outstanding, 2)
+
+    # The same account measured off the latest uploaded book. Attached
+    # rather than merged, so the card can lead with it and the ledger
+    # figures stay visible beside it instead of two different answers
+    # appearing under one label on different screens.
+    from_book = _account_rating_from_book(case)
+    if from_book:
+        result["from_book"] = from_book
+        # The case's own premium against the account's actual gross on
+        # the book. NOMADA carried 114,488 against the book's 90,347 and
+        # nothing said so, which is the whole of how it read 75.6%.
+        result["premium_disagrees_with_book"] = bool(
+            from_book["gross_premium"]
+            and abs(case.current_annual_premium - from_book["gross_premium"]) > 1.0
+        )
     return result
 
 

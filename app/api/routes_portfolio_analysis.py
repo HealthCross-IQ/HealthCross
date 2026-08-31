@@ -67,6 +67,58 @@ from app.scoring.rules.renewal_intake import (
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
 
 
+def account_loss_ratio_rows_for_book(
+    db: Session,
+    client: Optional[str] = None,
+    as_of: Optional[date] = None,
+    premium_basis: str = "actual",
+    default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+) -> List[dict]:
+    """The Portfolio Loss Ratio rows, on the underwriting-year basis, for
+    the whole book or one account.
+
+    Extracted so anything that needs an account's loss ratio CALLS the
+    loss ratio rather than recomputing it. The Renewal Bench scorecard
+    used to build its own Paid/Outstanding/IBNR figures from a per-case
+    claims ledger and reported NOMADA at 75.6% while this view had the
+    same account at 83.6% - a second implementation drifts, and the
+    reader has no way to know which screen to believe.
+    """
+    # No book uploaded is a normal state for a hand-built case, not an
+    # error - _run_analysis raises a 400 for it, which is right for the
+    # Loss Ratio screen and wrong for a caller that falls back to its
+    # own claims ledger. Checked here so callers get [] either way.
+    if not db.query(models.PortfolioMember.id).first():
+        return []
+    try:
+        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db),
+                                client=client, require_rate_card=False)
+    except HTTPException:
+        # An account that is not on the book is a 400 to the Loss Ratio
+        # screen (the user asked for it by name) and an ordinary "no"
+        # to a caller with its own fallback.
+        return []
+    if not results:
+        return []
+    opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
+    for cm in db.query(models.ClientMasterInfo).all():
+        if cm.opex_pct is not None:
+            opex_records_by_client[cm.master_client_name].append(
+                {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
+            )
+    effective_as_of = as_of or _get_stored_as_of(db) or date.today()
+    rows = account_loss_ratio_rows(
+        results,
+        as_of=effective_as_of,
+        opex_records_by_client=opex_records_by_client,
+        default_loading_pct=default_loading_pct,
+        premium_basis=premium_basis,
+    )
+    for row in rows:
+        row["as_of"] = effective_as_of.isoformat()
+    return rows
+
+
 def _get_stored_as_of(db: Session) -> Optional[date]:
     snapshot = db.query(models.PortfolioDataSnapshot).first()
     return snapshot.data_as_of_date if snapshot else None
@@ -609,12 +661,12 @@ def portfolio_account_loss_ratio(
             if policy_year:
                 rows = [r for r in rows if str(r["calendar_year"]) == str(policy_year)]
         else:
-            rows = account_loss_ratio_rows(
-                results,
-                as_of=effective_as_of,
-                opex_records_by_client=opex_records_by_client,
-                default_loading_pct=default_loading_pct,
+            # Same helper the Renewal Bench scorecard calls, so the two
+            # screens cannot report different loss ratios for one account.
+            rows = account_loss_ratio_rows_for_book(
+                db, client=client, as_of=as_of,
                 premium_basis=premium_basis,
+                default_loading_pct=default_loading_pct,
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

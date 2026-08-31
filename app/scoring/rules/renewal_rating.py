@@ -186,13 +186,25 @@ def dynamic_ibnr_incurred_claims(
     """
     ibnr = (total_paid / elapsed_days * 30) if elapsed_days > 0 else 0.0
     incurred_to_date = total_paid + total_outstanding + ibnr
-    annualized_incurred_claims = (incurred_to_date / months_count * 12) if months_count else 0.0
+    scale = (12 / months_count) if months_count else 0.0
+    annualized_incurred_claims = incurred_to_date * scale
     return {
         "total_paid": round(total_paid, 2),
         "total_outstanding": round(total_outstanding, 2),
         "elapsed_days": elapsed_days,
         "ibnr": round(ibnr, 2),
         "incurred_to_date": round(incurred_to_date, 2),
+        # The IBNR as it lands in the annualised figure. Without this a
+        # card printed the to-date IBNR (5,784.65 on NOMADA) beside
+        # annualised everything else and its own column stopped adding
+        # up: 78,825 + 5,785 = 84,610, under a printed 86,538. The
+        # number a reader cannot reconcile is the number they stop
+        # trusting.
+        "annualized_ibnr": round(ibnr * scale, 2),
+        "annualized_paid": round(total_paid * scale, 2),
+        "annualized_outstanding": round(total_outstanding * scale, 2),
+        "annualization_factor": round(scale, 4),
+        "months_count": months_count,
         "annualized_incurred_claims": round(annualized_incurred_claims, 2),
     }
 
