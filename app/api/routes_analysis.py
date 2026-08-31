@@ -1122,22 +1122,45 @@ def _rating_from_book_figures(
         member_count=book.get("member_count"),
     )
     if problems:
-        return {
+        # The SAME shape as a priced result, with the priced figures
+        # None. Nine call sites read this dict - the member-rate table,
+        # the bench KPIs, the NB comparison - and a short dict took every
+        # one of them down with a KeyError, so blocking one bad price
+        # blanked the whole case.
+        assumptions = {
+            "inflation_pct": effective_inflation_pct,
+            "loading_pct": effective_loading_pct,
+            "credibility_pct": credibility_pct
+            if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+        }
+        blocked = {
+            "annualized_incurred_claims": None,
+            "current_annual_premium": book["gross_premium"],
+            "renewal_base_premium": base,
+            "actual_loss_ratio": round(lr_a, 4),
+            "trended_claims": None,
+            "credible_claims": None,
+            "required_premium": None,
+            "renewal_increase_pct": None,
+            "assumptions_used": assumptions,
+            "annualized_paid_and_outstanding": None,
+            "months_used": [],
+            "ibnr_detail": {},
+            "method_gap": None,
+            "method_gap_pct": None,
+            "excluded_months": [],
+            "excluded_paid": 0.0,
+            "excluded_outstanding": 0.0,
             "rating_source": "book",
             "from_book": book,
             "expiring_premium": expiring,
             "case_current_annual_premium": case.current_annual_premium,
-            "actual_loss_ratio": round(lr_a, 4),
-            "months_used": [],
+            "premium_disagrees_with_book": False,
             "pricing_blocked": True,
             "pricing_problems": problems,
-            "assumptions_used": {
-                "inflation_pct": effective_inflation_pct,
-                "loading_pct": effective_loading_pct,
-                "credibility_pct": credibility_pct
-                if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
-            },
         }
+        blocked["method_b"] = {**blocked, "ibnr_pct": effective_ibnr_pct}
+        return blocked
     ladder_a = renewal_from_loss_ratio(lr_a, base, effective_inflation_pct, effective_loading_pct)
     ladder_b = renewal_from_loss_ratio(lr_b, base, effective_inflation_pct, effective_loading_pct)
 
@@ -1520,12 +1543,14 @@ def get_renewal_vs_new_business(case_id: int, db: Session = Depends(get_db)):
     gap = None
     gap_pct = None
     if new_business_premium is not None:
-        gap = round(renewal["required_premium"] - new_business_premium, 2)
-        gap_pct = round((renewal["required_premium"] / new_business_premium - 1) * 100, 2) if new_business_premium else None
+        required = renewal.get("required_premium")
+        gap = round(required - new_business_premium, 2) if required is not None else None
+        gap_pct = (round((required / new_business_premium - 1) * 100, 2)
+                   if (required is not None and new_business_premium) else None)
 
     return {
-        "renewal_required_premium": renewal["required_premium"],
-        "renewal_required_premium_method_b": renewal["method_b"]["required_premium"],
+        "renewal_required_premium": renewal.get("required_premium"),
+        "renewal_required_premium_method_b": (renewal.get("method_b") or {}).get("required_premium"),
         "new_business_module_premium": new_business_premium,
         "new_business_quote_id": latest_quote.id if latest_quote else None,
         "gap": gap,
@@ -1634,9 +1659,12 @@ def get_renewal_bench_summary(
     census_change_pct = census_change_pct_from_snapshots(snapshots, current_relation_counts, case.current_annual_premium)
 
     loading_pct = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
-    drivers = renewal_drivers(
-        annualized_incurred_claims=renewal["annualized_incurred_claims"],
-        trended_claims=renewal["trended_claims"],
+    # No drivers when the price is withheld: a waterfall of contributions
+    # to a number that does not exist is not a partial answer, it is a
+    # crash waiting for the first arithmetic step.
+    drivers = None if renewal.get("pricing_blocked") else renewal_drivers(
+        annualized_incurred_claims=renewal.get("annualized_incurred_claims"),
+        trended_claims=renewal.get("trended_claims"),
         current_annual_premium=case.current_annual_premium,
         loading_pct=loading_pct,
         census_change_pct=census_change_pct,
@@ -1998,7 +2026,10 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
     if case.claims_ledger_entries and case.current_annual_premium:
         renewal = _case_renewal_rating(case)
         if renewal is not None:
-            renewal_increase_pct = renewal["renewal_increase_pct"]
+            # None when the price is withheld for a bad input, which
+            # leaves the per-member table override-only rather than
+            # propagating a figure that does not exist.
+            renewal_increase_pct = renewal.get("renewal_increase_pct")
 
     members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
     existing_premium = existing_premium_breakdown(

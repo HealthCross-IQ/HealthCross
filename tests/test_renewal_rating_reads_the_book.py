@@ -574,7 +574,11 @@ def test_an_impossible_loading_blocks_the_price_instead_of_producing_one(client)
 
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert body["pricing_blocked"] is True
-    assert "required_premium" not in body
+    # Present but withheld, not absent. Nine other panels read this dict
+    # and a missing key took every one of them down with a KeyError.
+    assert body["required_premium"] is None
+    assert body["renewal_increase_pct"] is None
+    assert body["method_b"]["required_premium"] is None
     assert any(p["field"] == "loading_pct" for p in body["pricing_problems"])
     # The account's own experience is still reported - it is not the
     # thing that is wrong.
@@ -617,3 +621,26 @@ def test_a_normal_case_reports_no_problems():
     assert pricing_input_problems(
         loss_ratio=0.836, expiring_annual_premium=103_486.0,
         inflation_pts=0.075, loading_pct=0.23, member_count=14) == []
+
+
+def test_blocking_the_price_does_not_blank_the_rest_of_the_case(client):
+    # Withholding one figure must not take down the member-rate table,
+    # the bench KPIs or the new-business comparison - all of which read
+    # the same dict.
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    _ledger(client, case_id, LEDGER_MONTHS)
+    client.patch(f"/cases/{case_id}", json={
+        "tpa_fee_pct": 0.065, "commission_pct": 0.60, "hc_fee_pct": 0.15, "qic_fee_pct": 0.05})
+
+    rates = client.get(f"/cases/{case_id}/member-rates")
+    assert rates.status_code == 200
+    body = rates.json()
+    assert len(body["members"]) == 14
+    # The expiring premium is still there to read and to type against.
+    assert body["existing_premium"]["total_existing_premium"] == 103_487.0
+    # Override-only, because there is no computed increase to apply.
+    assert body["case_renewal_increase_pct"] is None
+
+    assert client.get(f"/cases/{case_id}/renewal-bench-summary").status_code == 200
