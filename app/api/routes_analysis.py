@@ -949,12 +949,24 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     # computing one account's loss ratio is how the renewal card came to
     # read 75.6% on an account the Loss Ratio screen had at 83.6%, and
     # no amount of care in a reimplementation prevents the next drift.
-    rows = account_loss_ratio_rows_for_book(db, client=case.company_name)
+    #
+    # The whole book, then matched here - NOT _run_analysis's own client
+    # filter, which compares the raw contract field with ==. A case named
+    # "... MANAGING LLC" against a contract booked "... MANAGING LL" found
+    # nothing and the card silently fell back to the stale ledger, which
+    # is the same failure wearing a different hat. Matching is on the
+    # resolved master client, trimmed and case-folded, exactly as
+    # account_members does it.
+    rows = account_loss_ratio_rows_for_book(db)
     if not rows:
+        return None
+    wanted = case.company_name.strip().casefold()
+    mine = [r for r in rows if (r.get("master_client") or "").strip().casefold() == wanted]
+    if not mine:
         return None
 
     # One row per policy period; the renewal is about the latest.
-    row = max(rows, key=lambda r: r["policy_start_date"])
+    row = max(mine, key=lambda r: r["policy_start_date"])
     if not row.get("earned_premium"):
         return None
     return {
@@ -976,6 +988,55 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
         "loading_pct": row["loading_pct"],
         "gross_loss_ratio": row["gross_loss_ratio"],
         "net_loss_ratio": row["net_loss_ratio"],
+    }
+
+
+def _why_no_book_figures(case: models.Case) -> dict:
+    """Why this case could not be measured off the book, said out loud.
+
+    Almost always a name that does not match. The case is opened by
+    company name and the book keys on master client, and the two are
+    typed by different people at different times - "... MANAGING LLC"
+    against "... MANAGING LL" is enough. So this names the closest
+    accounts on the book rather than leaving an underwriter to guess
+    why a card is showing them ledger figures.
+    """
+    from difflib import get_close_matches
+
+    from sqlalchemy.orm import object_session
+
+    from app.api.routes_portfolio_analysis import account_loss_ratio_rows_for_book
+
+    db = object_session(case)
+    if db is None:
+        return {"reason": "no database session"}
+    if not db.query(models.PortfolioMember.id).first():
+        return {"reason": "No membership has been uploaded to Portfolio Analysis yet."}
+
+    rows = account_loss_ratio_rows_for_book(db)
+    names = sorted({r["master_client"] for r in rows if r.get("master_client")})
+    if not names:
+        return {"reason": "The uploaded book produced no account rows."}
+    # Substring first, then fuzzy. The common miss is a name that is a
+    # prefix of the other ("NOMADA EVENTS" inside "NOMADA EVENTS
+    # ORGANIZING AND MANAGING LLC"), and a long tail of extra words drags
+    # the similarity ratio below any sensible cutoff even though it is
+    # obviously the same account.
+    wanted = (case.company_name or "").strip().casefold()
+    close = [n for n in names
+             if wanted and (wanted in n.casefold() or n.casefold() in wanted)]
+    for name in get_close_matches(case.company_name or "", names, n=5, cutoff=0.5):
+        if name not in close:
+            close.append(name)
+    return {
+        "reason": (
+            f"This case's company name, '{case.company_name}', matches no account on the book, "
+            f"so the figures below come from the case's own claims ledger instead. Rename the case "
+            f"to the account's name on the book to price it off the latest upload."
+        ),
+        "case_company_name": case.company_name,
+        "closest_accounts_on_the_book": close,
+        "accounts_on_the_book": len(names),
     }
 
 
@@ -1109,6 +1170,11 @@ def _case_renewal_rating(
             from_book["gross_premium"]
             and abs(case.current_annual_premium - from_book["gross_premium"]) > 1.0
         )
+    else:
+        # Why it is missing, in the response. A card that silently falls
+        # back to the stale ledger looks identical to one that never
+        # tried, and the reader has no way to tell which they are seeing.
+        result["from_book_unavailable"] = _why_no_book_figures(case)
     return result
 
 

@@ -218,3 +218,40 @@ def test_an_account_absent_from_an_uploaded_book_still_rates_off_its_ledger(clie
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert "from_book" not in body
     assert body["annualized_incurred_claims"] > 0
+
+
+# --- matching the case to the account on the book ------------------------
+
+def test_the_account_is_matched_on_the_master_client_not_the_raw_contract(client):
+    # _run_analysis's own client filter compares the contract field with
+    # ==. A case named for the account still has to find it, so matching
+    # is on the resolved master client, trimmed and case-folded.
+    _nomada(client)
+    case_id = _case(client, company="  nomada events  ")
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert "from_book" in body, body.get("from_book_unavailable")
+    assert body["from_book"]["gross_loss_ratio"] is not None
+
+
+def test_a_name_that_matches_nothing_says_so_and_names_the_near_misses(client):
+    # Silence here is what stranded NOMADA: a card falling back to the
+    # stale ledger looks exactly like one that never tried.
+    _nomada(client)
+    case_id = _case(client, company="NOMADA EVENTS ORGANIZING AND MANAGING LLC")
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert "from_book" not in body
+    u = body["from_book_unavailable"]
+    assert "matches no account on the book" in u["reason"]
+    assert "NOMADA EVENTS" in u["closest_accounts_on_the_book"]
+
+
+def test_no_book_uploaded_is_reported_as_that_rather_than_a_name_problem(client):
+    case_id = _case(client, company="ANYTHING")
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert "No membership has been uploaded" in body["from_book_unavailable"]["reason"]

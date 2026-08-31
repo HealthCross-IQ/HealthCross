@@ -4664,7 +4664,18 @@ function _rbBuildupHtml(steps) {
 // is refreshed. NOMADA showed 75.6% here against 83.6% there.
 function _renewalBookPanelHtml(r) {
   const f = r.from_book;
-  if (!f) return '';
+  if (!f) {
+    const u = r.from_book_unavailable;
+    if (!u || !u.reason) return '';
+    const close = (u.closest_accounts_on_the_book || []);
+    return `
+      <div class="rb-card" style="margin-bottom:14px;">
+        <div class="rb-card-title">Loss ratio &mdash; not read from the book</div>
+        <div class="rb-card-sub">${escapeHtml(u.reason)}</div>
+        ${close.length ? `<div class="rb-card-sub" style="margin-top:8px;">Closest accounts on the
+          book: ${close.map(n => `<b>${escapeHtml(n)}</b>`).join(', ')}.</div>` : ''}
+      </div>`;
+  }
   const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
   const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
   const mismatch = r.premium_disagrees_with_book ? `
