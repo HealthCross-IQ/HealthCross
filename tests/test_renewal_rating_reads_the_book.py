@@ -280,3 +280,74 @@ def test_the_headline_says_when_it_is_falling_back_to_the_ledger(client):
     kpis = client.get(f"/cases/{case_id}/renewal-bench-summary").json()["kpis"]
     assert kpis["loss_ratio_basis"] == "Method A, from this case's claims ledger"
     assert kpis.get("loss_ratio_net") is None
+
+
+# --- both methods, not just the panel above them -------------------------
+
+def test_method_a_reports_the_books_loss_ratio_not_the_ledgers(client):
+    # Fixing the panel and leaving Method A alone left the wrong number
+    # on the same card, three lines further down.
+    _nomada(client)
+    case_id = _case(client, premium=114_488.0)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["rating_source"] == "book"
+    assert body["actual_loss_ratio"] == body["from_book"]["gross_loss_ratio"]
+
+
+def test_both_methods_price_against_the_books_premium(client):
+    # Not the case record's. That single substitution was the whole of
+    # the +21% quoted on an account needing far more.
+    _nomada(client)
+    case_id = _case(client, premium=114_488.0)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    book_premium = body["from_book"]["gross_premium"]
+    assert body["current_annual_premium"] == book_premium
+    assert body["method_b"]["current_annual_premium"] == book_premium
+    # The case record's own figure stays visible so the mismatch can be
+    # named without printing the book's number on both sides of it.
+    assert body["case_current_annual_premium"] == 114_488.0
+    assert body["premium_disagrees_with_book"] is True
+
+
+def test_the_two_methods_differ_only_in_how_they_reserve(client):
+    _nomada(client)
+    case_id = _case(client)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["annualized_paid_and_outstanding"] == \
+        body["method_b"]["annualized_paid_and_outstanding"]
+    assert body["method_b"]["annualized_incurred_claims"] != body["annualized_incurred_claims"]
+
+
+def test_reading_the_book_discards_no_month(client):
+    _nomada(client)
+    case_id = _case(client)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["excluded_months"] == []
+    assert body["excluded_paid"] == 0.0
+
+
+def test_an_account_on_the_book_needs_no_case_ledger_at_all(client):
+    # The book brings its own claims and its own premium; requiring a
+    # per-case upload to see them is what made the stale one load.
+    _nomada(client)
+    case_id = _case(client)
+
+    resp = client.get(f"/cases/{case_id}/renewal-rating")
+    assert resp.status_code == 200
+    assert resp.json()["rating_source"] == "book"
+
+
+def test_the_ledger_fallback_still_names_itself(client):
+    case_id = _case(client, company="NOT ON THE BOOK")
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["rating_source"] == "case claims ledger"

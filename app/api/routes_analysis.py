@@ -991,6 +991,106 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     }
 
 
+def _rating_from_book_figures(
+    case: models.Case,
+    book: dict,
+    inflation_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+    ibnr_pct: Optional[float] = None,
+    credibility_pct: Optional[float] = None,
+) -> dict:
+    """Both scorecard methods, built entirely from the book.
+
+    Method A and Method B differ in ONE thing by design - how they
+    reserve for claims incurred but not reported - and that is all they
+    should differ in. They used to differ in their data source as well:
+    a claims ledger uploaded against the case, annualised off whole
+    months, divided by whatever premium the case record carried. On
+    NOMADA that produced 75.6% against the book's 83.6%, and correcting
+    the panel above them while leaving them alone left the wrong number
+    on the card in three more places.
+
+    So both now read the same account the Portfolio Loss Ratio screen
+    does: its paid, its outstanding, its days on risk, its own gross
+    premium. Method A reserves with the house 30-day tail on the paid
+    run rate; Method B with a flat load. Nothing here is measured
+    against a premium the account was not charged, and nothing is
+    dropped for being a part month.
+    """
+    days = book["days"] or 0
+    paid, outstanding = book["paid"], book["outstanding"]
+    scale = (365 / days) if days else 0.0
+
+    effective_ibnr_pct = ibnr_pct if ibnr_pct is not None else DEFAULT_IBNR_PCT
+    incurred_a = (paid + outstanding + book["ibnr"]) * scale
+    incurred_b = (paid + outstanding) * (1 + effective_ibnr_pct) * scale
+
+    defaults = RenewalRatingAssumptions()
+    effective_loading_pct = (
+        loading_pct
+        if loading_pct is not None
+        else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
+    )
+    effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
+    two_methods = calculate_renewal_rating_two_methods(
+        incurred_a, incurred_b, book["gross_premium"],
+        inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
+        credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+    )
+
+    # The calendar months the exposure actually spans, so anything
+    # reading len(months_used) for a credibility or frequency
+    # denominator still gets a real number.
+    start = date.fromisoformat(book["policy_start_date"])
+    end = date.fromisoformat(book["as_of"])
+    months_used, cursor = [], date(start.year, start.month, 1)
+    while cursor <= end:
+        months_used.append(f"{cursor.year}-{cursor.month:02d}")
+        cursor = date(cursor.year + (cursor.month == 12), (cursor.month % 12) + 1, 1)
+
+    annualised_po = (paid + outstanding) * scale
+    result = two_methods["method_a"]
+    result["annualized_paid_and_outstanding"] = round(annualised_po, 2)
+    result["months_used"] = months_used
+    result["ibnr_detail"] = {
+        "total_paid": paid,
+        "total_outstanding": outstanding,
+        "elapsed_days": days,
+        "ibnr": book["ibnr"],
+        "incurred_to_date": book["incurred_claims"],
+        "annualized_ibnr": round(book["ibnr"] * scale, 2),
+        "annualized_paid": round(paid * scale, 2),
+        "annualized_outstanding": round(outstanding * scale, 2),
+        "annualization_factor": round(scale, 4),
+        "months_count": len(months_used),
+        "annualized_incurred_claims": round(incurred_a, 2),
+    }
+    result["method_b"] = two_methods["method_b"]
+    result["method_b"]["annualized_paid_and_outstanding"] = result["annualized_paid_and_outstanding"]
+    result["method_b"]["ibnr_pct"] = effective_ibnr_pct
+    result["method_b"]["months_used"] = months_used
+    result["method_gap"] = two_methods["gap"]
+    result["method_gap_pct"] = two_methods["gap_pct"]
+    result["from_book"] = book
+    result["rating_source"] = "book"
+    # No month is discarded when reading the book, so there is nothing
+    # unaccounted for - said explicitly because the ledger path's own
+    # exclusions are what lost NOMADA's August outstanding.
+    result["excluded_months"] = []
+    result["excluded_paid"] = 0.0
+    result["excluded_outstanding"] = 0.0
+    # What the CASE RECORD still says, kept separate from the premium
+    # the rating actually used - otherwise the mismatch warning prints
+    # the book figure on both sides of "these disagree".
+    result["case_current_annual_premium"] = case.current_annual_premium
+    result["premium_disagrees_with_book"] = bool(
+        case.current_annual_premium
+        and book["gross_premium"]
+        and abs(case.current_annual_premium - book["gross_premium"]) > 1.0
+    )
+    return result
+
+
 def _why_no_book_figures(case: models.Case) -> dict:
     """Why this case could not be measured off the book, said out loud.
 
@@ -1070,6 +1170,16 @@ def _case_renewal_rating(
     DIFFERENT IBNR conventions on the same Paid+Outstanding base - see
     calculate_renewal_rating_two_methods and dynamic_ibnr_incurred_claims.
     """
+    # The book first, and then nothing else. Both methods are built from
+    # the account's own uploaded experience and its own gross premium, so
+    # there is no figure anywhere on the card measured against a premium
+    # the account was not charged. The ledger path below runs only for a
+    # case that is not on the book at all.
+    from_book = _account_rating_from_book(case)
+    if from_book:
+        return _rating_from_book_figures(
+            case, from_book, inflation_pct, loading_pct, ibnr_pct, credibility_pct)
+
     entries = case.claims_ledger_entries
     if not entries or not case.current_annual_premium:
         return None
@@ -1156,25 +1266,11 @@ def _case_renewal_rating(
     result["excluded_paid"] = round(excluded_paid, 2)
     result["excluded_outstanding"] = round(excluded_outstanding, 2)
 
-    # The same account measured off the latest uploaded book. Attached
-    # rather than merged, so the card can lead with it and the ledger
-    # figures stay visible beside it instead of two different answers
-    # appearing under one label on different screens.
-    from_book = _account_rating_from_book(case)
-    if from_book:
-        result["from_book"] = from_book
-        # The case's own premium against the account's actual gross on
-        # the book. NOMADA carried 114,488 against the book's 90,347 and
-        # nothing said so, which is the whole of how it read 75.6%.
-        result["premium_disagrees_with_book"] = bool(
-            from_book["gross_premium"]
-            and abs(case.current_annual_premium - from_book["gross_premium"]) > 1.0
-        )
-    else:
-        # Why it is missing, in the response. A card that silently falls
-        # back to the stale ledger looks identical to one that never
-        # tried, and the reader has no way to tell which they are seeing.
-        result["from_book_unavailable"] = _why_no_book_figures(case)
+    # Reached only when the account is not on the book, so say why. A
+    # card falling back to a case ledger looks identical to one reading
+    # the latest upload, and the reader has no way to tell them apart.
+    result["rating_source"] = "case claims ledger"
+    result["from_book_unavailable"] = _why_no_book_figures(case)
     return result
 
 
@@ -1204,14 +1300,16 @@ def get_renewal_rating(
     "Burning Cost" scorecard method, alongside this one.
     """
     case = _get_case_or_404(db, case_id)
-    if not case.claims_ledger_entries:
+    # An account on the book needs neither of these: it brings its own
+    # claims and its own gross premium. Only the ledger fallback does.
+    result = _case_renewal_rating(case, inflation_pct, loading_pct, ibnr_pct, credibility_pct)
+    if result is None and not case.claims_ledger_entries:
         raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
-    if not case.current_annual_premium:
+    if result is None and not case.current_annual_premium:
         raise HTTPException(
             status_code=400,
             detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
         )
-    result = _case_renewal_rating(case, inflation_pct, loading_pct, ibnr_pct, credibility_pct)
     if result is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
     return result

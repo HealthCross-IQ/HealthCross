@@ -4678,13 +4678,16 @@ function _renewalBookPanelHtml(r) {
   }
   const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
   const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  // The case RECORD's premium against the book's. Both methods now price
+  // off the book, so this is a housekeeping note rather than a warning
+  // that the figures are wrong - which is why it says to correct the
+  // record instead of telling the reader to distrust the card.
   const mismatch = r.premium_disagrees_with_book ? `
     <div class="rb-reconcile" style="margin-top:12px;">
-      <div class="txt">This case carries <b>AED ${aed(r.current_annual_premium)}</b> as its expiring
-        premium; the book has this account's actual gross premium at
-        <b>AED ${aed(f.gross_premium)}</b>. Method A and B below divide by the case figure, so their
-        loss ratio and renewal increase are both measured against a premium the account was not
-        charged. The figures above use the book.</div>
+      <div class="txt">The case record still carries
+        <b>AED ${aed(r.case_current_annual_premium)}</b> as this account's expiring premium, where
+        the book has its actual gross premium at <b>AED ${aed(f.gross_premium)}</b>. Every figure on
+        this tab prices off the book; update the case record so the two agree.</div>
     </div>` : '';
   return `
     <div class="rb-card" style="margin-bottom:14px;">
@@ -4715,6 +4718,7 @@ function _renewalBenchScorecardHtml(r) {
   const b = r.method_b;
   const ibnr = r.ibnr_detail;
   const gapPositive = r.method_gap >= 0;
+  const fromBook = r.rating_source === 'book';
   const dropped = (r.excluded_months || []).length ? `
       <div class="rb-card-sub" style="margin-top:8px;">Excluded as part months:
         ${escapeHtml(r.excluded_months.join(', '))} &mdash; holding
@@ -4724,10 +4728,16 @@ function _renewalBenchScorecardHtml(r) {
         not, which is why the book panel above is the one to price from.</div>` : '';
   return _renewalBookPanelHtml(r) + `
     <div class="rb-card">
-      <div class="rb-card-title">Renewal scorecard${r.from_book
-        ? ' &mdash; from this case&rsquo;s claims ledger' : ''}</div>
+      <div class="rb-card-title">Renewal scorecard &mdash; ${fromBook
+        ? 'from the book' : 'from this case&rsquo;s claims ledger'}</div>
       ${dropped}
-      <div class="rb-card-sub">Both methods reach an Incurred Claims figure (Paid + Outstanding + IBNR) from this case's own trailing full months in the claims ledger, but compute IBNR differently. Months used: ${r.months_used.join(', ')}.</div>
+      <div class="rb-card-sub">Both methods reach an Incurred Claims figure (Paid + Outstanding +
+        IBNR) from ${fromBook
+          ? `this account's own experience on the book to ${escapeHtml(String(r.from_book.as_of))} -
+             ${r.from_book.days} days on risk, annualised - against its own gross premium of
+             AED ${Math.round(r.from_book.gross_premium).toLocaleString()}`
+          : `this case's own trailing full months in the claims ledger`}, but compute IBNR
+        differently. Months used: ${escapeHtml(r.months_used.join(', '))}.</div>
       <div class="rb-scorecard-methods">
         <div class="rb-method-card">
           <div class="rb-method-head">
