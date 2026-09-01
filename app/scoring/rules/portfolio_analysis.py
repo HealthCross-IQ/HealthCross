@@ -1922,8 +1922,8 @@ def _reprice_scenario(
 #: The net loss ratio an account is re-priced TO. 1.0 means the premium
 #: exactly funds expected claims after expenses - break-even, no margin.
 #: Deliberately a parameter: pricing every remediation to break-even
-#: leaves nothing for adverse development, while pricing to 0.85 asks for
-#: an increase some clients will simply refuse.
+#: leaves nothing for adverse development, while pricing well under the
+#: house maximum asks for an increase some clients will simply refuse.
 DEFAULT_TARGET_NET_LOSS_RATIO = 1.0
 
 

@@ -2872,6 +2872,15 @@ function renderCaseWorkspace() {
         // case has no claims ledger/current premium for a Renewal Bench.
         if (t.id === 'new-business') return c.business_type !== 'existing';
         if (t.id === 'renewal-bench') return c.business_type === 'existing';
+        // The Scorecard is a NEW BUSINESS instrument. It scores what a
+        // population and a plan design imply about next year's cost,
+        // because a brand-new group has no claims of its own to read.
+        // A renewal does, and the Renewal Bench reads them - so on a
+        // renewal the Scorecard answers the same question a second time
+        // and worse, from a book relativity rather than the account's
+        // own experience, and its "suggested loading %" can contradict
+        // the price Method 1 quotes on the next tab.
+        if (t.id === 'scorecard') return c.business_type !== 'existing';
         return true;
       }).map(t => `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('')}
     </div>
@@ -4978,7 +4987,7 @@ function _renewalBenchScorecardHtml(r) {
         <div class="rb-method-card">
           <div class="rb-method-head">
             <span class="rb-method-name">Method A &middot; Gross Loss Ratio</span>
-            <span class="rb-badge rb-badge-a">A</span>
+            <span class="rb-badge rb-badge-a" title="The house quotes Method A. It is the number on the renewal list, the Member Rates grid and the printed Renewal Review.">A &middot; QUOTED</span>
           </div>
           <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is dynamic: this case's own Paid claims run rate over the elapsed days so far, projected over a 30-day unreported tail - AED ${ibnr.total_paid.toLocaleString()} paid &divide; ${ibnr.elapsed_days} elapsed days &times; 30 = AED ${ibnr.ibnr.toLocaleString()} to date, which annualises &times;${ibnr.annualization_factor} to <b>AED ${ibnr.annualized_ibnr.toLocaleString()}</b> - and that is the figure the build-up below adds, so the column reconciles.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
@@ -4996,7 +5005,7 @@ function _renewalBenchScorecardHtml(r) {
         <div class="rb-method-card">
           <div class="rb-method-head">
             <span class="rb-method-name">Method B &middot; Burning Cost</span>
-            <span class="rb-badge rb-badge-b">B</span>
+            <span class="rb-badge rb-badge-b" title="Not quoted, and not decoration: a flat IBNR load and a credibility weight are the more defensible technical treatment. Where B asks for materially more than A, A is the softer number and the gap is the argument.">B &middot; REFERENCE</span>
           </div>
           <div class="rb-card-sub" style="margin:0 0 10px;">IBNR here is a flat load on the same Paid+Outstanding base: AED ${b.annualized_paid_and_outstanding.toLocaleString()} &times; ${(b.ibnr_pct * 100).toFixed(0)}% = AED ${(b.annualized_incurred_claims - b.annualized_paid_and_outstanding).toLocaleString()}.</div>
           <div class="rb-kpi-strip" style="grid-template-columns:1fr;">
@@ -5013,7 +5022,7 @@ function _renewalBenchScorecardHtml(r) {
       </div>
       <div class="rb-card-sub" style="margin-top:10px;">Both methods gross up their own final claims figure by the same loading (TPA Fee + Commission + HC Fee + QIC Fee, ${(r.assumptions_used.loading_pct * 100).toFixed(1)}% total) to reach Required Premium - see the Scorecard tab for that fee split.</div>
       <div class="rb-reconcile">
-        <div class="txt">Method B (Burning Cost) requires <b>AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the different IBNR convention and credibility weighting's combined effect once grossed up through the same loading.</div>
+        <div class="txt"><b>Method A is what the house quotes</b> - it is the figure on the renewal list, the Member Rates grid and the printed review. Method B is not decoration: a flat IBNR load with a credibility weight is the more defensible technical treatment, so where it asks for materially more, Method A is the softer number and this gap is the argument. Method B (Burning Cost) requires <b>AED ${Math.abs(r.method_gap).toLocaleString()}</b> ${gapPositive ? 'more' : 'less'} than Method A - the different IBNR convention and credibility weighting's combined effect once grossed up through the same loading.</div>
         <div class="delta">${r.method_gap_pct > 0 ? '+' : ''}${r.method_gap_pct}%</div>
       </div>
       <div class="rb-row" style="margin-top:14px;">

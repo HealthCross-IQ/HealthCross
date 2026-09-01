@@ -81,17 +81,21 @@ def test_a_case_with_no_policy_start_earns_its_whole_premium(client):
     assert row["incurred_claims"] == 500_000.0
 
 
-def test_the_list_prices_to_the_house_target_not_to_break_even(client):
-    # It defaulted to a net loss ratio of 1.0 while new business priced
-    # to 95%, so the same book was held to two different targets
-    # depending on which screen it was looked at from.
-    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
-
+def test_the_list_carries_no_target_loss_ratio_at_all(client):
+    # The board used to re-price every account to a house target loss
+    # ratio. That is a different question from what the account costs, and
+    # it gave a different answer to the case's own Renewal Bench. The
+    # renewal ladder has no target in it - the account's own ratio, plus
+    # inflation in points, grossed up for its own loading, floored at the
+    # house minimum - so the board no longer advertises one.
     _case(client, premium=1_000_000.0, start=date(2025, 10, 1),
           renewal=date(2026, 9, 30), claims=[500_000.0])
     _, body = _row(client, as_of="2026-08-15")
-    assert body["target_net_loss_ratio"] == HOUSE_TARGET_LOSS_RATIO
 
+    assert "target_net_loss_ratio" not in body
+    assert "trend_pct" not in body
+    # What it does carry is the ladder's own inflation, in POINTS.
+    assert body["inflation_pts"] == 0.075
 
 def test_the_build_up_is_reported_line_by_line(client):
     # So the figure can be checked against a spreadsheet rather than

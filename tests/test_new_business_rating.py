@@ -154,14 +154,13 @@ def test_unknown_selected_option_is_flagged_and_falls_back_to_base():
 
 
 def test_the_house_default_loading_is_by_product_tier():
-    # 30% on Platinum and Gold, 28% on Silver and Bronze. These replaced a
-    # build-up of commission + QIC + TPA + a product HealthCross fee that
-    # summed to 25% and 26.5% - close enough to look deliberate, and not
-    # the house numbers.
+    # 30% on Platinum and Gold, 26.5% on Silver and Bronze - the house
+    # figures. Platinum and Gold moved: the old build-up of commission +
+    # QIC + TPA + a product HealthCross fee summed to 25% there.
     assert category_loading_pct("Platinum") == 0.30
     assert category_loading_pct("Gold") == 0.30
-    assert category_loading_pct("Silver") == 0.28
-    assert category_loading_pct("Bronze") == 0.28
+    assert category_loading_pct("Silver") == 0.265
+    assert category_loading_pct("Bronze") == 0.265
     # An unrecognized product takes the higher default rather than
     # silently under-pricing the quote.
     assert category_loading_pct("Titanium") == 0.30
@@ -170,7 +169,7 @@ def test_the_house_default_loading_is_by_product_tier():
 def test_a_category_that_names_its_own_commission_moves_the_default():
     # The default assumes 10%. A broker on 15% costs five points more.
     assert round(category_loading_pct("Gold", commission_pct=0.15), 4) == 0.35
-    assert round(category_loading_pct("Bronze", commission_pct=0.0), 4) == 0.18
+    assert round(category_loading_pct("Bronze", commission_pct=0.0), 4) == 0.165
 
 
 def test_an_actual_loading_overrides_the_default_outright():

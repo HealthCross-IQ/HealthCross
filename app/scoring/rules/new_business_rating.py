@@ -29,7 +29,7 @@ Per-member formula:
 Per-category: gross_total = sum(net_member) / (1 - loading_pct), where
 loading_pct is the category's own actual loading when one is entered,
 and otherwise the house default for the product tier - 30% on Platinum
-and Gold, 28% on Silver and Bronze - moved by any commission the
+and Gold, 26.5% on Silver and Bronze - moved by any commission the
 category names (see category_loading_pct). The same division-based
 gross-up used everywhere else in this codebase (renewal_rating.py,
 claims_projection.py), not a multiplicative markup. Case total is the
@@ -74,8 +74,8 @@ _DEFAULT_HEALTHCROSS_FEE_PCT = max(HEALTHCROSS_FEE_BY_PRODUCT.values())
 DEFAULT_LOADING_BY_PRODUCT = {
     "platinum": 0.30,
     "gold": 0.30,
-    "silver": 0.28,
-    "bronze": 0.28,
+    "silver": 0.265,
+    "bronze": 0.265,
 }
 # An unrecognized or mistyped product takes the higher default, so it
 # cannot silently under-price a quote.
@@ -246,8 +246,10 @@ def category_loading_pct(
          more than one on 10%.
 
     The tier default replaced a build-up of commission + QIC + TPA + a
-    product HealthCross fee, which summed to 25% and 26.5% - close enough
-    to look deliberate and not the house numbers.
+    product HealthCross fee, which summed to 25% on Platinum and Gold -
+    close enough to look deliberate and not the house number. Silver and
+    Bronze happen to land on the same 26.5% the build-up produced; they
+    are the house figure now rather than a coincidence of four fees.
     """
     if loading_pct is not None:
         return loading_pct

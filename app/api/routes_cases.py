@@ -31,7 +31,6 @@ from app.api.routes_new_business_rating import maybe_auto_requote
 from app.reference.benefit_category_mapping import build_standard_summary_from_rows, to_case_benefit_plan_fields
 from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
-from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
 from app.book import repository as book_repo
 
@@ -86,18 +85,18 @@ def list_cases(db: Session = Depends(get_db)):
 # come first or /{case_id} swallows it and 422s on the int conversion.
 @router.get("/renewal-summary")
 def get_renewal_summary(
-    trend_pct: float = Query(0.10),
-    target_net_loss_ratio: float = Query(
-        HOUSE_TARGET_LOSS_RATIO,
-        description="The net loss ratio each case should be re-priced to - the house target",
-    ),
     as_of: Optional[date] = Query(None, description="Date the policy year is measured as elapsed to"),
     db: Session = Depends(get_db),
 ):
-    """Every renewal case with its own loss ratio and the increase that
-    would bring it back to target - so the renewal list itself says which
-    cases need attention, rather than each having to be opened to find
-    out.
+    """Every renewal case with its own loss ratio and the increase Method
+    1 quotes for it - so the renewal list itself says which cases need
+    attention, rather than each having to be opened to find out.
+
+    The increase is Method 1's, produced by the same function the case's
+    own Renewal Bench calls, so the board and the case cannot disagree.
+    It carries no target loss ratio: the board used to re-price every
+    account to a house target, which is a different question from what
+    the account costs, and the two answers did not match.
 
     Claims to date are measured against premium EARNED to date, both
     over the same elapsed part of the policy year. Neither side is
@@ -231,8 +230,12 @@ def get_renewal_summary(
             "portfolio_master_client": case.portfolio_master_client,
         })
     return {
-        "trend_pct": trend_pct,
-        "target_net_loss_ratio": target_net_loss_ratio,
+        # The ladder's own inflation, in POINTS - not a multiplicative
+        # trend, and not a target loss ratio. A renewal is priced to what
+        # the account costs plus inflation, grossed up for its own
+        # loading, floored at the house minimum. There is no target ratio
+        # in it and the board no longer advertises one.
+        "inflation_pts": DEFAULT_INFLATION_PCT,
         "as_of": reference,
         "cases": out,
     }

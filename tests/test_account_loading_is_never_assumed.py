@@ -262,3 +262,17 @@ def test_the_floor_applies_on_both_of_method_1s_paths(client):
         # "needs 9%" and "needs nothing, floored to 9%" are different
         # conversations and one number cannot tell them apart.
         assert body["experience_increase_pct"] < 9.0
+
+
+def test_the_scorecard_tab_is_new_business_only(client):
+    # A renewal has its own claims; the Renewal Bench reads them. The
+    # Scorecard scores what a population and a plan design IMPLY about
+    # next year, which is the question only a brand-new group needs
+    # answered - and on a renewal its "suggested loading %", derived from
+    # a book relativity, can contradict the price Method 1 quotes on the
+    # next tab. The endpoint stays (it is still the new business
+    # instrument); it is the renewal TAB that goes.
+    import pathlib
+    index = pathlib.Path(__file__).resolve().parent.parent / "app" / "static" / "index.html"
+    markup = index.read_text()
+    assert "if (t.id === 'scorecard') return c.business_type !== 'existing';" in markup
