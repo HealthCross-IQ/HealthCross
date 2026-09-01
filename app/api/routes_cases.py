@@ -33,6 +33,7 @@ from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
 from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
+from app.book import repository as book_repo
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -347,7 +348,6 @@ def get_renewal_premium(
     from app.scoring.rules.expected_cost_pricing import renewal_premium_from_experience
     from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
 
-    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
     from app.scoring.rules.portfolio_analysis import group_claims_by_beneficiary
     from app.scoring.rules.renewal_intake import account_members, claims_by_member_status
 
@@ -361,8 +361,8 @@ def get_renewal_premium(
                 "dates. Open this renewal from the Renewal Due List."
             ),
         )
-    book = _member_dicts(db)
-    account = account_members(book, case.portfolio_master_client, _subgroup_master_by_name(db))
+    book = book_repo.members(db)
+    account = account_members(book, case.portfolio_master_client, book_repo.subgroup_master_by_name(db))
     if not account:
         raise HTTPException(
             status_code=404,

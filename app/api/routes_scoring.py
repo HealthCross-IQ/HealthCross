@@ -12,6 +12,8 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_population_mix,
     summarize_portfolio,
 )
+from app.book import repository as book_repo
+from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/cases", tags=["scoring"])
 
@@ -46,10 +48,9 @@ def _book_results(db: Session) -> Optional[list]:
     whole-book analysis twice for one scorecard is the expensive mistake
     here, not building the cube.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis
 
     try:
-        return _run_analysis(db, as_of=_get_stored_as_of(db))
+        return book_analysis.run_analysis(db, as_of=book_repo.stored_as_of(db))
     except HTTPException:
         return None
 
@@ -60,19 +61,14 @@ def _book_cube(db: Session, results: Optional[list]) -> Optional[dict]:
     the book has no experience to price from, in which case the scorecard
     falls back to its old score-derived loading rather than failing.
     """
-    from app.api.routes_portfolio_analysis import (
-        _get_stored_as_of,
-        _rate_card_dicts,
-        analysis_with_cube,
-    )
 
     if not results:
         return None
-    if not _rate_card_dicts(db):
+    if not book_repo.rate_cards(db):
         return None
     # Same arguments _book_results used, so this reuses that analysis
     # from the cache rather than re-pricing the book.
-    _, cube = analysis_with_cube(db, as_of=_get_stored_as_of(db))
+    _, cube = book_analysis.analysis_with_cube(db, as_of=book_repo.stored_as_of(db))
     return cube if cube["book"]["burning_cost"] is not None else None
 
 

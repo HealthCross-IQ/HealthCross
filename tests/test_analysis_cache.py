@@ -1,10 +1,10 @@
 """Skipping work is only an improvement while the answer stays right -
-app/api/analysis_cache.py.
+app/book/cache.py.
 """
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.api import analysis_cache
+from app.book import cache as analysis_cache
 from app.database import Base
 from app.models import db_models as models
 

@@ -7,7 +7,7 @@ of dashboard views. Requires an ANTHROPIC_API_KEY environment variable
 logged, never sent anywhere except directly to Anthropic's API.
 
 Reuses the same portfolio-analysis machinery the Portfolio Insights
-dashboard already runs (_run_analysis et al. from routes_portfolio_analysis)
+dashboard already runs (book_analysis.run_analysis et al. from routes_portfolio_analysis)
 rather than re-deriving book-wide figures a second way, so the assistant's
 answers are always consistent with what the dashboard itself shows.
 """
@@ -18,7 +18,6 @@ import anthropic
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app.api.routes_portfolio_analysis import _get_stored_as_of, _rate_card_dicts, _run_analysis
 from app.database import get_db
 from app.models import db_models as models
 from app.models import schemas
@@ -29,6 +28,8 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_population_mix,
     summarize_portfolio,
 )
+from app.book import repository as book_repo
+from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
@@ -57,11 +58,11 @@ def _pct(ratio: Optional[float]) -> str:
 
 def _portfolio_context(db: Session) -> str:
     try:
-        results = _run_analysis(db, as_of=_get_stored_as_of(db))
+        results = book_analysis.run_analysis(db, as_of=book_repo.stored_as_of(db))
     except HTTPException:
         return "PORTFOLIO BOOK: No portfolio membership/claims data has been uploaded yet."
 
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     lines = ["PORTFOLIO BOOK (HealthCross's own already-booked business):"]
 
     for group_by, heading, row_cap in (

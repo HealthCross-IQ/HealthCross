@@ -60,6 +60,8 @@ from app.scoring.rules.renewal_rating import (
     dynamic_ibnr_incurred_claims,
     premium_component_breakdown,
 )
+from app.book import repository as book_repo
+from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
 
@@ -943,7 +945,6 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     """
     from sqlalchemy.orm import object_session
 
-    from app.api.routes_portfolio_analysis import account_loss_ratio_rows_for_book
 
     db = object_session(case)
     if db is None or not case.company_name:
@@ -955,14 +956,14 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     # read 75.6% on an account the Loss Ratio screen had at 83.6%, and
     # no amount of care in a reimplementation prevents the next drift.
     #
-    # The whole book, then matched here - NOT _run_analysis's own client
+    # The whole book, then matched here - NOT book_analysis.run_analysis's own client
     # filter, which compares the raw contract field with ==. A case named
     # "... MANAGING LLC" against a contract booked "... MANAGING LL" found
     # nothing and the card silently fell back to the stale ledger, which
     # is the same failure wearing a different hat. Matching is on the
     # resolved master client, trimmed and case-folded, exactly as
     # account_members does it.
-    rows = account_loss_ratio_rows_for_book(db)
+    rows = book_analysis.account_loss_ratio_rows_for_book(db)
     if not rows:
         return None
     wanted = case.company_name.strip().casefold()
@@ -1017,7 +1018,6 @@ def _annualised_expiring_premium(case: models.Case) -> dict:
     """
     from sqlalchemy.orm import object_session
 
-    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
     from app.scoring.rules.renewal_intake import (
         account_members,
         continuing_and_leaving,
@@ -1034,7 +1034,7 @@ def _annualised_expiring_premium(case: models.Case) -> dict:
 
     db = object_session(case)
     if db is not None and case.company_name:
-        account = account_members(_member_dicts(db), case.company_name, _subgroup_master_by_name(db))
+        account = account_members(book_repo.members(db), case.company_name, book_repo.subgroup_master_by_name(db))
         if account:
             active, _ = continuing_and_leaving(account)
             rates = [member_annual_rate(m) or 0.0 for m in active]
@@ -1327,15 +1327,14 @@ def _why_no_book_figures(case: models.Case) -> dict:
 
     from sqlalchemy.orm import object_session
 
-    from app.api.routes_portfolio_analysis import account_loss_ratio_rows_for_book
 
     db = object_session(case)
     if db is None:
         return {"reason": "no database session"}
-    if not db.query(models.PortfolioMember.id).first():
+    if not book_repo.has_members(db):
         return {"reason": "No membership has been uploaded to Portfolio Analysis yet."}
 
-    rows = account_loss_ratio_rows_for_book(db)
+    rows = book_analysis.account_loss_ratio_rows_for_book(db)
     names = sorted({r["master_client"] for r in rows if r.get("master_client")})
     if not names:
         return {"reason": "The uploaded book produced no account rows."}
@@ -2243,7 +2242,6 @@ def fill_member_rates_from_book(case_id: int, db: Session = Depends(get_db)):
     seeding the whole census would fill the rates too, and would throw
     away every other edit made since - which is why this exists instead.
     """
-    from app.api.routes_portfolio_analysis import _member_dicts
     from app.scoring.rules.renewal_intake import member_annual_rate
 
     case = _get_case_or_404(db, case_id)
@@ -2251,7 +2249,7 @@ def fill_member_rates_from_book(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="This case has no census to fill rates on")
 
     rate_by_beneficiary = {}
-    for member in _member_dicts(db):
+    for member in book_repo.members(db):
         beneficiary_id = member.get("beneficiary_id")
         rate = member_annual_rate(member)
         if beneficiary_id and rate:
@@ -2356,7 +2354,6 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
     figures scattered across them; this assembles it - what the account
     cost, what it therefore needs, and what the claims are made of.
     """
-    from app.api.routes_portfolio_analysis import _member_dicts, _subgroup_master_by_name
     from app.scoring.rules.portfolio_analysis import group_claims_by_beneficiary
     from app.scoring.rules.renewal_intake import (
         account_members,
@@ -2383,7 +2380,7 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
         )
     book = rating["from_book"]
 
-    account = account_members(_member_dicts(db), case.company_name, _subgroup_master_by_name(db))
+    account = account_members(book_repo.members(db), case.company_name, book_repo.subgroup_master_by_name(db))
     term = current_term_members(account)
     windows = term_member_windows(term)
     claim_rows = [

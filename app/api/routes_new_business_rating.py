@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import HTMLResponse
 from sqlalchemy.orm import Session
 
-from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
 from app.database import get_db
 from app.ingestion.rate_cards import parse_benefit_variant_option_list, parse_product_pricing_list
 from app.models import db_models as models
@@ -28,41 +27,14 @@ from app.scoring.rules.new_business_rating import (
 from app.reference.emirate_regions import region_for_emirate
 from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.portfolio_analysis import _burning_cost_lookup_network, nas_tpa_factor
+from app.book import repository as book_repo
+from app.book import analysis as book_analysis
 
 router = APIRouter(tags=["new-business-rating"])
 
 
-def _rate_card_dicts(db: Session) -> List[dict]:
-    return [
-        {
-            "product": r.product,
-            "region": r.region,
-            "network": r.network,
-            "tpa": r.tpa,
-            "from_age": r.from_age,
-            "to_age": r.to_age,
-            "male_price": r.male_price,
-            "female_price": r.female_price,
-            "married_female_surcharge": r.married_female_surcharge,
-        }
-        for r in db.query(models.RateCard).all()
-    ]
 
 
-def _variant_rate_dicts(db: Session) -> List[dict]:
-    return [
-        {
-            "variant_name": r.variant_name,
-            "option_value": r.option_value,
-            "direction": r.direction,
-            "impact_type": r.impact_type,
-            "impact_value": r.impact_value,
-            "region": r.region,
-            "tpa": r.tpa,
-            "network": r.network,
-        }
-        for r in db.query(models.BenefitVariantRate).all()
-    ]
 
 
 @router.post("/admin/rate-cards/upload", response_model=schemas.RateCardUploadOut)
@@ -306,10 +278,10 @@ def compute_new_business_quote(case_id: int, payload: schemas.NewBusinessQuoteRe
     if not census:
         raise HTTPException(status_code=400, detail="Case has no census data to rate")
 
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if not rate_cards:
         raise HTTPException(status_code=400, detail="No rate card uploaded yet")
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
 
     categories = _normalize_quote_categories([c.model_dump() for c in payload.categories])
     return _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
@@ -397,10 +369,10 @@ def maybe_auto_requote(case_id: int, db: Session) -> None:
     census = _case_census_dicts(case)
     if not census:
         return
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if not rate_cards:
         return
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
     try:
         _price_and_store_quote(case, categories, census, rate_cards, variant_rates, db)
     except Exception:
@@ -455,8 +427,8 @@ def get_new_business_quote_by_tier(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="No new business quote found for this case")
 
     census = _case_census_dicts(case)
-    rate_cards = _rate_card_dicts(db)
-    variant_rates = _variant_rate_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
+    variant_rates = book_repo.variant_rates(db)
     return price_case_by_tier(census, _normalize_quote_categories(quote.categories), rate_cards, variant_rates)
 
 
@@ -530,14 +502,14 @@ def upload_hc_plan_details(case_id: int, file: UploadFile = File(...), db: Sessi
             ),
         )
 
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if not rate_cards:
         raise HTTPException(status_code=400, detail="No rate card uploaded - nothing can be priced")
     census = _case_census_dicts(case)
     if not census:
         raise HTTPException(status_code=400, detail="Upload a census for this case first")
 
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
     # Check the selections against what is actually priced for each
     # category's own region/tpa/network before quoting, so the warnings
     # describe this quote rather than a generic possibility.
@@ -606,7 +578,7 @@ def get_existing_vs_proposed(case_id: int, db: Session = Depends(get_db)):
         for p in case.benefit_plans
         if p.role == "quoted" and p.category and p.standard_summary
     }
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
 
     # The issued quote counts as a category too: a case whose only
     # benefit information is the document the broker received would
@@ -695,7 +667,7 @@ def get_quote_readiness(case_id: int, db: Session = Depends(get_db)):
         1 for r in case.census_records if not _normalize_category(r.category)
     )
     readiness["census_member_count"] = len(case.census_records)
-    readiness["has_rate_card"] = bool(_rate_card_dicts(db))
+    readiness["has_rate_card"] = bool(book_repo.rate_cards(db))
     if not readiness["has_rate_card"]:
         readiness["blockers"].insert(0, {
             "severity": "blocking",
@@ -731,7 +703,6 @@ def get_risk_based_price(
     re-entered: what makes this a suggestion rather than a form is that
     the census and the benefits are the only inputs.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
     from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.expected_cost_pricing import price_by_category
     from app.scoring.rules.nationality_mix_pricing import nationality_mix_factor, within_zone_rows
@@ -762,14 +733,14 @@ def get_risk_based_price(
         )
 
     try:
-        results, cube = analysis_with_cube(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+        results, cube = book_analysis.analysis_with_cube(db, as_of=as_of or book_repo.stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
             detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to price against",
         )
 
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if cube["book"]["burning_cost"] is None:
         raise HTTPException(status_code=400, detail="The book has no claims experience to price against")
 
@@ -868,7 +839,6 @@ def get_case_nationality_mix_pricing(
     factor, what it rests on, and the quote with and without it - the
     decision stays with the underwriter.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
     from app.scoring.rules.nationality_mix_pricing import apply_mix_to_quote, nationality_mix_factor
     from app.scoring.rules.portfolio_analysis import nationality_risk_table
 
@@ -881,7 +851,7 @@ def get_case_nationality_mix_pricing(
         raise HTTPException(status_code=400, detail="Case has no census to measure a nationality mix from")
 
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
@@ -920,19 +890,18 @@ def get_rate_card_calibration(
     is a commercial document too and a cell may be knowingly held below
     cost to win a segment.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of, _run_analysis, analysis_with_cube
     from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.rate_card_calibration import (
         calibration_summary_by_product,
         rate_card_calibration,
     )
 
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if not rate_cards:
         raise HTTPException(status_code=400, detail="No rate card uploaded to calibrate")
 
     try:
-        results, cube = analysis_with_cube(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+        results, cube = book_analysis.analysis_with_cube(db, as_of=as_of or book_repo.stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
@@ -986,7 +955,6 @@ def get_new_business_quote_burning_cost_comparison(
     that's optional supporting data; still 404s when there's no quote to
     compare against.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
     from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.expected_cost_pricing import price_by_category
 
@@ -1004,12 +972,12 @@ def get_new_business_quote_burning_cost_comparison(
         raise HTTPException(status_code=404, detail="No new business quote found for this case")
 
     try:
-        portfolio_results, cube = analysis_with_cube(db, as_of=_stored_as_of(db), require_rate_card=False)
+        portfolio_results, cube = book_analysis.analysis_with_cube(db, as_of=book_repo.stored_as_of(db), require_rate_card=False)
     except HTTPException:
         return None
 
     census = _case_census_dicts(case)
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     if cube["book"]["burning_cost"] is None:
         return None
 
@@ -1089,7 +1057,6 @@ def get_case_annual_limit_exposure(case_id: int, db: Session = Depends(get_db)):
     fraction of a percent of them, and the limit is being priced against
     the pool it will actually sit in.
     """
-    from app.api.routes_portfolio_analysis import _claim_dicts_for_large_claims
     from app.scoring.rules.annual_limit_exposure import exposure_for_quoted_limits
     from app.scoring.rules.proposed_benefits import proposed_benefit_summary
 
@@ -1106,13 +1073,13 @@ def get_case_annual_limit_exposure(case_id: int, db: Session = Depends(get_db)):
     if not quote:
         raise HTTPException(status_code=404, detail="No quote on this case yet")
 
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
     quoted_limits = {
         c["category"]: proposed_benefit_summary(c.get("variant_selections") or {}, variant_rates).get("annual_limit")
         for c in _normalize_quote_categories(quote.categories or [])
     }
 
-    claims = _claim_dicts_for_large_claims(db)
+    claims = book_repo.large_claim_lines(db)
     if not claims:
         raise HTTPException(status_code=400, detail="No portfolio claims uploaded yet")
     return exposure_for_quoted_limits(claims, quoted_limits)
@@ -1181,7 +1148,6 @@ def get_opportunity_assessment(
     the burning-cost cube already prices are shown and explicitly do NOT
     move the number; only the ones it cannot see are allowed to.
     """
-    from app.api.routes_portfolio_analysis import _get_stored_as_of as _stored_as_of
     from app.scoring.rules.benefits_comparison import extract_amount_aed
     from app.scoring.rules.burning_cost_cube import burning_cost_cube, expected_cost_for_census
     from app.scoring.rules.opportunity_risk import assess_opportunity, book_benchmarks
@@ -1196,7 +1162,7 @@ def get_opportunity_assessment(
         raise HTTPException(status_code=400, detail="Upload a census for this case first")
 
     try:
-        results, cube = analysis_with_cube(db, as_of=as_of or _stored_as_of(db), require_rate_card=False)
+        results, cube = book_analysis.analysis_with_cube(db, as_of=as_of or book_repo.stored_as_of(db), require_rate_card=False)
     except HTTPException:
         raise HTTPException(
             status_code=400,
@@ -1249,7 +1215,7 @@ def get_opportunity_assessment(
     quoted_price = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
 
     # The plan being proposed, and how it sits against the incumbent's.
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
     quoted_categories = _normalize_quote_categories(quote.categories or []) if quote else []
     selections = quoted_categories[0].get("variant_selections") if quoted_categories else {}
     proposed_summary = proposed_benefit_summary(selections or {}, variant_rates)
@@ -1924,7 +1890,7 @@ def _proposed_and_comparison(case, db: Session):
     )
     categories = _normalize_quote_categories(quote.categories or []) if quote else []
     selections = categories[0].get("variant_selections") if categories else {}
-    variant_rates = _variant_rate_dicts(db)
+    variant_rates = book_repo.variant_rates(db)
     proposed = proposed_benefit_summary(selections or {}, variant_rates)
     existing = next((p for p in case.benefit_plans if p.role == "existing"), None)
     rows = proposed_benefit_rows(

@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.api import analysis_cache
 from app.database import get_db
 from app.ingestion.client_master import parse_client_master
 from app.ingestion.group_product_mapping import parse_group_product_mapping
@@ -64,105 +63,25 @@ from app.scoring.rules.renewal_intake import (
     renewal_intake_profile,
     term_member_windows,
 )
+from app.book import repository as book_repo
+from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/portfolio-analysis", tags=["portfolio-analysis"])
 
 
-def _book_covered_to(db: Session) -> Optional[date]:
-    """The last day the uploaded claims actually cover.
-
-    Used when nobody has told us a report date. The alternative was
-    today, and today is always wrong in the same direction: it earns
-    premium through weeks the claims file does not reach, so the ratio
-    reads better the longer the extract sits. NOMADA measured 83.6% to
-    15 August and 79.3% to today, on identical data.
-    """
-    return db.query(func.max(models.PortfolioClaimEntry.date_of_treatment)).scalar()
 
 
-def account_loss_ratio_rows_for_book(
-    db: Session,
-    client: Optional[str] = None,
-    as_of: Optional[date] = None,
-    premium_basis: str = "actual",
-    default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
-) -> List[dict]:
-    """The Portfolio Loss Ratio rows, on the underwriting-year basis, for
-    the whole book or one account.
-
-    Extracted so anything that needs an account's loss ratio CALLS the
-    loss ratio rather than recomputing it. The Renewal Bench scorecard
-    used to build its own Paid/Outstanding/IBNR figures from a per-case
-    claims ledger and reported NOMADA at 75.6% while this view had the
-    same account at 83.6% - a second implementation drifts, and the
-    reader has no way to know which screen to believe.
-    """
-    # No book uploaded is a normal state for a hand-built case, not an
-    # error - _run_analysis raises a 400 for it, which is right for the
-    # Loss Ratio screen and wrong for a caller that falls back to its
-    # own claims ledger. Checked here so callers get [] either way.
-    if not db.query(models.PortfolioMember.id).first():
-        return []
-    effective_as_of = as_of or _get_stored_as_of(db) or _book_covered_to(db) or date.today()
-    try:
-        results = _run_analysis(db, as_of=effective_as_of,
-                                client=client, require_rate_card=False)
-    except HTTPException:
-        # An account that is not on the book is a 400 to the Loss Ratio
-        # screen (the user asked for it by name) and an ordinary "no"
-        # to a caller with its own fallback.
-        return []
-    if not results:
-        return []
-    opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
-    for cm in db.query(models.ClientMasterInfo).all():
-        if cm.opex_pct is not None:
-            opex_records_by_client[cm.master_client_name].append(
-                {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
-            )
-    rows = account_loss_ratio_rows(
-        results,
-        as_of=effective_as_of,
-        opex_records_by_client=opex_records_by_client,
-        default_loading_pct=default_loading_pct,
-        premium_basis=premium_basis,
-    )
-    for row in rows:
-        row["as_of"] = effective_as_of.isoformat()
-    return rows
 
 
-def _get_stored_as_of(db: Session) -> Optional[date]:
-    snapshot = db.query(models.PortfolioDataSnapshot).first()
-    return snapshot.data_as_of_date if snapshot else None
 
 
-def _measurement_date(db: Session, supplied: Optional[date] = None) -> Optional[date]:
-    """The day the book's numbers are measured to, in the order that
-    keeps them honest: what the caller asked for, then the extract's own
-    production date if one was recorded on upload, then None - which
-    lets the rules fall back to the last day the claims data covers.
-
-    Never today. Earning premium to today against claims that stop at
-    the extract date credits an account with premium for weeks nobody
-    has reported a claim in yet, and it flatters every ratio by more the
-    longer the extract sits.
-    """
-    return supplied or _get_stored_as_of(db)
 
 
-def _set_stored_as_of(db: Session, as_of_date: date) -> None:
-    snapshot = db.query(models.PortfolioDataSnapshot).first()
-    if snapshot:
-        snapshot.data_as_of_date = as_of_date
-    else:
-        db.add(models.PortfolioDataSnapshot(data_as_of_date=as_of_date))
-    db.commit()
 
 
 @router.get("/data-as-of", response_model=schemas.PortfolioDataAsOfOut)
 def get_data_as_of(db: Session = Depends(get_db)):
-    return schemas.PortfolioDataAsOfOut(data_as_of_date=_get_stored_as_of(db))
+    return schemas.PortfolioDataAsOfOut(data_as_of_date=book_repo.stored_as_of(db))
 
 
 @router.post("/data-as-of", response_model=schemas.PortfolioDataAsOfOut)
@@ -173,7 +92,7 @@ def set_data_as_of(payload: schemas.PortfolioDataAsOfIn, db: Session = Depends(g
     whatever calendar day the analysis happens to be run on, which can be
     weeks after the data was actually pulled.
     """
-    _set_stored_as_of(db, payload.data_as_of_date)
+    book_repo.set_stored_as_of(db, payload.data_as_of_date)
     return schemas.PortfolioDataAsOfOut(data_as_of_date=payload.data_as_of_date)
 
 
@@ -191,7 +110,7 @@ def upload_portfolio_members(
     db.bulk_insert_mappings(models.PortfolioMember, rows)
     db.commit()
     if data_as_of is not None:
-        _set_stored_as_of(db, data_as_of)
+        book_repo.set_stored_as_of(db, data_as_of)
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
 
@@ -209,7 +128,7 @@ def upload_portfolio_claims(
     db.bulk_insert_mappings(models.PortfolioClaimEntry, rows)
     db.commit()
     if data_as_of is not None:
-        _set_stored_as_of(db, data_as_of)
+        book_repo.set_stored_as_of(db, data_as_of)
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
 
@@ -268,205 +187,18 @@ def upload_client_master(file: UploadFile = File(...), db: Session = Depends(get
     return schemas.PortfolioUploadOut(rows_ingested=len(rows))
 
 
-def _rate_card_dicts(db: Session) -> List[dict]:
-    return [
-        {
-            "product": r.product,
-            "region": r.region,
-            "network": r.network,
-            "tpa": r.tpa,
-            "from_age": r.from_age,
-            "to_age": r.to_age,
-            "male_price": r.male_price,
-            "female_price": r.female_price,
-            "married_female_surcharge": r.married_female_surcharge,
-        }
-        for r in db.query(models.RateCard).all()
-    ]
 
 
-def _variant_rate_dicts(db: Session) -> List[dict]:
-    return [
-        {
-            "variant_name": r.variant_name,
-            "option_value": r.option_value,
-            "direction": r.direction,
-            "impact_type": r.impact_type,
-            "impact_value": r.impact_value,
-            "region": r.region,
-            "tpa": r.tpa,
-            "network": r.network,
-        }
-        for r in db.query(models.BenefitVariantRate).all()
-    ]
 
 
-def _member_dicts(db: Session) -> List[dict]:
-    return [
-        {
-            "beneficiary_id": m.beneficiary_id,
-            "contract": m.contract,
-            "master_contract": m.master_contract,
-            "master_client_name": m.master_client_name,
-            "product_name": m.product_name,
-            "category": m.category,
-            "network_type_raw": m.network_type_raw,
-            "date_of_birth": m.date_of_birth,
-            "age": m.age,
-            "gender": m.gender,
-            "marital_status": m.marital_status,
-            "relation": m.relation,
-            "nationality": m.nationality,
-            "nationality_zone": m.nationality_zone,
-            "residence_emirate": m.residence_emirate,
-            "region": m.region,
-            "actual_gross_premium": m.actual_gross_premium,
-            # The Membership export carries BOTH a booked GrossPremium and
-            # an ActualGrossPremium; only the latter has ever fed the
-            # analysis. Carried through so a caller can report on either -
-            # see account_loss_ratio_rows' premium_basis.
-            "gross_premium": m.gross_premium,
-            "policy_start_date": m.policy_start_date,
-            "policy_end_date": m.policy_end_date,
-            "member_start_date": m.member_start_date,
-            "member_end_date": m.member_end_date,
-        }
-        for m in db.query(models.PortfolioMember).all()
-    ]
 
 
-#: Result-level fields (present on analyze_portfolio_member's output, only
-#: known after pricing/network resolution) that can be filtered on directly
-#: - e.g. product=Gold AND network=... to stack more than one filter at
-#: once, unlike group_by which only picks what's shown in rows.
-_FILTERABLE_RESULT_FIELDS = ("product", "network", "region", "nationality_zone", "gender", "relation", "category", "master_client")
 
 
-def _run_analysis(
-    db: Session,
-    as_of: Optional[date] = None,
-    policy_year: Optional[str] = None,
-    client: Optional[str] = None,
-    filters: Optional[Dict[str, str]] = None,
-    require_rate_card: bool = True,
-) -> List[dict]:
-    """Every member priced against the rate card, with their own claims.
-
-    Cached on the uploaded data plus these arguments (see
-    app/api/analysis_cache.py). A single screen - and a single printed
-    report especially - asks for the same analysis several times over,
-    and re-pricing the whole book each time is what made the report slow
-    enough for the browser to block its own print tab.
-
-    Callers must treat the returned rows as read-only: the list is
-    shared between everyone who asked the same question.
-    """
-    key = (
-        "run_analysis",
-        as_of,
-        policy_year,
-        client,
-        tuple(sorted((k, v) for k, v in (filters or {}).items() if v)),
-        require_rate_card,
-    )
-    return analysis_cache.cached(db, key, lambda: _analyse(
-        db, as_of=as_of, policy_year=policy_year, client=client,
-        filters=filters, require_rate_card=require_rate_card,
-    ))
 
 
-def analysis_with_cube(
-    db: Session,
-    as_of: Optional[date] = None,
-    policy_year: Optional[str] = None,
-    client: Optional[str] = None,
-    filters: Optional[Dict[str, str]] = None,
-    require_rate_card: bool = True,
-) -> tuple:
-    """The analysis and the burning-cost cube built from it, both cached.
-
-    The cube is a pure function of the analysis and the rate card, so it
-    is keyed on the same arguments the analysis was - which is what lets
-    one printed report build it once instead of once per endpoint it
-    happens to touch.
-    """
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
-
-    results = _run_analysis(
-        db, as_of=as_of, policy_year=policy_year, client=client,
-        filters=filters, require_rate_card=require_rate_card,
-    )
-    key = (
-        "cube",
-        as_of,
-        policy_year,
-        client,
-        tuple(sorted((k, v) for k, v in (filters or {}).items() if v)),
-        require_rate_card,
-    )
-    cube = analysis_cache.cached(db, key, lambda: burning_cost_cube(results, _rate_card_dicts(db)))
-    return results, cube
 
 
-def _analyse(
-    db: Session,
-    as_of: Optional[date] = None,
-    policy_year: Optional[str] = None,
-    client: Optional[str] = None,
-    filters: Optional[Dict[str, str]] = None,
-    require_rate_card: bool = True,
-) -> List[dict]:
-    members = _member_dicts(db)
-    if not members:
-        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    if policy_year:
-        members = [m for m in members if m.get("policy_start_date") and str(m["policy_start_date"].year) == policy_year]
-        if not members:
-            raise HTTPException(status_code=400, detail=f"No members found whose policy started in {policy_year}")
-    if client:
-        members = [m for m in members if (m.get("contract") or m.get("master_contract")) == client]
-        if not members:
-            raise HTTPException(status_code=400, detail=f"No members found for client '{client}'")
-    rate_cards = _rate_card_dicts(db)
-    if not rate_cards and require_rate_card:
-        raise HTTPException(status_code=400, detail="No rate card uploaded yet")
-    variant_rates = _variant_rate_dicts(db)
-
-    claims = [
-        {
-            "patient_id": patient_id,
-            "date_of_treatment": date_of_treatment,
-            "final_amount": final_amount,
-            "claim_status": claim_status,
-        }
-        for patient_id, date_of_treatment, final_amount, claim_status in db.query(
-            models.PortfolioClaimEntry.patient_id,
-            models.PortfolioClaimEntry.date_of_treatment,
-            models.PortfolioClaimEntry.final_amount,
-            models.PortfolioClaimEntry.claim_status,
-        ).all()
-    ]
-    claims_by_beneficiary = group_claims_by_beneficiary(claims)
-
-    group_product_by_name: Dict[str, str] = {
-        gp.group_name: gp.product for gp in db.query(models.GroupProductMapping).all()
-    }
-    subgroup_master_by_name: Dict[str, str] = {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
-    }
-
-    results = [
-        analyze_portfolio_member(
-            m, group_product_by_name, rate_cards, variant_rates, claims_by_beneficiary,
-            as_of=as_of, subgroup_master_by_name=subgroup_master_by_name,
-        )
-        for m in members
-    ]
-
-    for field, value in (filters or {}).items():
-        if value:
-            results = [r for r in results if str(r.get(field)) == value]
-    return results
 
 
 def _result_filters(
@@ -527,7 +259,7 @@ def portfolio_summary(
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     in_scope = [r for r in results if r.get("in_scope", True)]
     out_of_scope_count = len(results) - len(in_scope)
     unmapped_product_count = sum(1 for r in in_scope if not r.get("product"))
@@ -570,7 +302,7 @@ def portfolio_executive_summary(
     see resolve_client_opex_pct - for a client whose loading changed
     between renewals), falling back to expense_ratio_pct otherwise.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
     for cm in db.query(models.ClientMasterInfo).all():
         if cm.opex_pct is not None:
@@ -630,8 +362,8 @@ def portfolio_account_loss_ratio(
     # policies touched. Calendar basis therefore analyses ALL members and
     # filters the finished ROWS by their own calendar year.
     calendar_basis = year_basis == "calendar"
-    results = _run_analysis(
-        db, as_of=as_of or _get_stored_as_of(db),
+    results = book_analysis.run_analysis(
+        db, as_of=as_of or book_repo.stored_as_of(db),
         policy_year=None if calendar_basis else policy_year,
         client=client, filters=filters, require_rate_card=False,
     )
@@ -641,7 +373,7 @@ def portfolio_account_loss_ratio(
             opex_records_by_client[cm.master_client_name].append(
                 {"start_date": cm.start_date, "end_date": cm.end_date, "opex_pct": cm.opex_pct}
             )
-    effective_as_of = as_of or _get_stored_as_of(db) or date.today()
+    effective_as_of = as_of or book_repo.stored_as_of(db) or date.today()
     if year_basis not in YEAR_BASES:
         raise HTTPException(status_code=400, detail=f"year_basis must be one of {YEAR_BASES}")
     try:
@@ -676,7 +408,7 @@ def portfolio_account_loss_ratio(
         else:
             # Same helper the Renewal Bench scorecard calls, so the two
             # screens cannot report different loss ratios for one account.
-            rows = account_loss_ratio_rows_for_book(
+            rows = book_analysis.account_loss_ratio_rows_for_book(
                 db, client=client, as_of=as_of,
                 premium_basis=premium_basis,
                 default_loading_pct=default_loading_pct,
@@ -729,8 +461,8 @@ def portfolio_nationality_risk(
     No rate card is required: this compares each nationality's own claims
     against its own exposure and never touches rate-card pricing.
     """
-    results = _run_analysis(
-        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year,
+    results = book_analysis.run_analysis(
+        db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year,
         filters=filters, require_rate_card=False,
     )
     rows = nationality_risk_table(
@@ -761,10 +493,10 @@ def portfolio_renewal_due_list(
     master client (see renewal_due_accounts) - distinct from a case's own
     manually-set renewal_date in the case-management workflow.
     """
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    subgroup_master_by_name = _subgroup_master_by_name(db)
+    subgroup_master_by_name = book_repo.subgroup_master_by_name(db)
     due = renewal_due_accounts(members, subgroup_master_by_name, within_days=within_days, as_of=as_of)
 
     # Which of these accounts already have a renewal case open, so the list
@@ -782,11 +514,6 @@ def _client_key(name: Optional[str]) -> str:
     return (name or "").strip().casefold()
 
 
-def _subgroup_master_by_name(db: Session) -> Dict[str, str]:
-    return {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name
-        for sm in db.query(models.SubgroupMasterMapping).all()
-    }
 
 
 def _portfolio_cases_by_client(db: Session) -> Dict[str, models.Case]:
@@ -852,7 +579,7 @@ def get_loss_ratio_tips(
     # rather than failing outright.
     account_rows: List[dict] = []
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), require_rate_card=False)
+        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), require_rate_card=False)
         opex_by_client: Dict[str, List[dict]] = defaultdict(list)
         for cm in db.query(models.ClientMasterInfo).all():
             if cm.opex_pct is not None:
@@ -861,7 +588,7 @@ def get_loss_ratio_tips(
                 )
         account_rows = account_loss_ratio_rows(
             results,
-            as_of=as_of or _get_stored_as_of(db) or date.today(),
+            as_of=as_of or book_repo.stored_as_of(db) or date.today(),
             opex_records_by_client=opex_by_client,
         )
     except HTTPException:
@@ -904,8 +631,8 @@ def get_burning_cost_cube(
     # lines up with the card row that prices it - but the book's own
     # experience is worth showing before pricing is set up, so a missing
     # card falls back to conventional bands rather than 400-ing.
-    results, cube = analysis_with_cube(
-        db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, require_rate_card=False
+    results, cube = book_analysis.analysis_with_cube(
+        db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, require_rate_card=False
     )
     cells = cube["cells"]
     if level is not None:
@@ -922,10 +649,10 @@ def preview_renewal_intake(master_client: str, db: Session = Depends(get_db)):
     creating anything. Lets the Renewal Due List show the underwriter
     exactly what they're about to get before they commit to a case.
     """
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    profile = renewal_intake_profile(members, master_client, _subgroup_master_by_name(db))
+    profile = renewal_intake_profile(members, master_client, book_repo.subgroup_master_by_name(db))
     if not profile["member_count"]:
         raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
     case = _portfolio_cases_by_client(db).get(_client_key(master_client))
@@ -966,10 +693,10 @@ def renewal_claims_split(
     """
     from app.scoring.rules.renewal_intake import claims_by_member_status
 
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    account = account_members(members, master_client, book_repo.subgroup_master_by_name(db))
     if not account:
         raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
 
@@ -988,7 +715,7 @@ def renewal_claims_split(
         ).all()
     ]
     split = claims_by_member_status(account, group_claims_by_beneficiary(claims),
-                                    as_at=as_at, as_of=_measurement_date(db, as_of))
+                                    as_at=as_at, as_of=book_repo.measurement_date(db, as_of))
     return {"master_client": master_client, **split}
 
 
@@ -1006,10 +733,10 @@ def population_movement_for_account(master_client: str, db: Session = Depends(ge
     """
     from app.scoring.rules.renewal_intake import population_movement
 
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    account = account_members(members, master_client, book_repo.subgroup_master_by_name(db))
     if not account:
         raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
     return {"master_client": master_client, **population_movement(account)}
@@ -1052,10 +779,10 @@ async def compare_renewal_census(
     from app.ingestion.census import parse_census
     from app.scoring.rules.renewal_intake import compare_against_supplied_census
 
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    subgroups = _subgroup_master_by_name(db)
+    subgroups = book_repo.subgroup_master_by_name(db)
     account = account_members(members, master_client, subgroups)
     for sibling in include:
         account += account_members(members, sibling, subgroups)
@@ -1102,7 +829,7 @@ async def compare_renewal_census(
 
     result = compare_against_supplied_census(
         account, refs, group_claims_by_beneficiary(claims),
-        as_of=_measurement_date(db, as_of), cut_date=as_at, elsewhere_in_book=elsewhere,
+        as_of=book_repo.measurement_date(db, as_of), cut_date=as_at, elsewhere_in_book=elsewhere,
     )
     return {
         "master_client": master_client,
@@ -1152,10 +879,10 @@ def renewal_repricing(
         reprice,
     )
 
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
-    account = account_members(members, master_client, _subgroup_master_by_name(db))
+    account = account_members(members, master_client, book_repo.subgroup_master_by_name(db))
     if not account:
         raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
 
@@ -1185,7 +912,7 @@ def renewal_repricing(
     # export produced on the 15th has an incomplete month even if its
     # last claim happens to fall on the 14th.
     treated = [c["date_of_treatment"] for c in claims if c.get("date_of_treatment")]
-    data_to = _measurement_date(db) or (max(treated) if treated else None)
+    data_to = book_repo.measurement_date(db) or (max(treated) if treated else None)
 
     current_premium = sum(member_annual_rate(m) or 0.0 for m in active) or None
     priced = reprice(
@@ -1221,11 +948,11 @@ def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Dep
     and takes the same before-snapshot as a census upload does so Census
     Movement still has an expiring state to compare against.
     """
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
 
-    subgroup_master_by_name = _subgroup_master_by_name(db)
+    subgroup_master_by_name = book_repo.subgroup_master_by_name(db)
     profile = renewal_intake_profile(members, payload.master_client, subgroup_master_by_name)
     if not profile["member_count"]:
         raise HTTPException(status_code=404, detail=f"No members found for master client '{payload.master_client}'")
@@ -1354,7 +1081,7 @@ def portfolio_group_size_bands(
     Size Distribution view (group_count/member_count/average_group_size
     per band) - see summarize_by_group_size_band for the full rationale.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     return {"rows": summarize_by_group_size_band(results)}
 
 
@@ -1372,7 +1099,7 @@ def portfolio_new_vs_renewal(
     only one year visible, making everything look like New Business
     regardless of its real history.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), filters=filters)
     return {"rows": summarize_new_vs_renewal(results)}
 
 
@@ -1395,12 +1122,12 @@ def portfolio_insights(
     of the same already-computed per-member results, so there's no
     correctness difference - only fetches the expensive shared inputs once.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     in_scope = [r for r in results if r.get("in_scope", True)]
     out_of_scope_count = len(results) - len(in_scope)
     unmapped_product_count = sum(1 for r in in_scope if not r.get("product"))
     unmapped_network_count = sum(1 for r in in_scope if not r.get("network"))
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
 
     def _summary(group_by: str) -> schemas.PortfolioSummaryOut:
         return schemas.PortfolioSummaryOut(
@@ -1445,7 +1172,7 @@ def portfolio_demographic_summary(
     reuses census_demographic_summary directly). Raises the same 400s as
     /summary when there's no book/rate card to analyze yet.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
     return demographic_summary(results)
 
 
@@ -1462,7 +1189,7 @@ def portfolio_member_detail(
     """Every member's own analysis row, unaggregated - for spot-checking a
     specific group/member rather than only seeing the rolled-up summary.
     """
-    return _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    return book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
 
 
 @router.get("/burning-cost-by-age-gender", response_model=List[dict])
@@ -1478,8 +1205,8 @@ def burning_cost_by_age_gender(
     directly against one Male-Price/Female-Price row in the rate card for
     calibration.
     """
-    results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
-    rate_cards = _rate_card_dicts(db)
+    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    rate_cards = book_repo.rate_cards(db)
     return summarize_burning_cost_by_age_gender(results, rate_cards)
 
 
@@ -1498,7 +1225,7 @@ def burning_cost_by_product_network(
     not something that page requires to function.
     """
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db))
+        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db))
     except HTTPException:
         return []
     return summarize_burning_cost_by_product_network(results)
@@ -1518,10 +1245,10 @@ def burning_cost_by_product_network_age_gender(
     when Members/Claims/a rate card haven't been uploaded yet.
     """
     try:
-        results = _run_analysis(db, as_of=as_of or _get_stored_as_of(db))
+        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db))
     except HTTPException:
         return []
-    rate_cards = _rate_card_dicts(db)
+    rate_cards = book_repo.rate_cards(db)
     return summarize_burning_cost_by_product_network_age_gender(results, rate_cards)
 
 
@@ -1574,13 +1301,13 @@ def portfolio_filter_options(db: Session = Depends(get_db)):
     nothing on a typo or case mismatch.
 
     Deliberately does NOT run the full rate-card-pricing + claims-matching
-    analysis (_run_analysis) - none of these 6 fields need that (no
+    analysis (book_analysis.run_analysis) - none of these 6 fields need that (no
     standard_premium or actual_claims involved), and this endpoint fires
     on every Portfolio Analysis page load plus after every upload, so
     running the expensive full pipeline here made the whole screen feel
     like it hung on a real multi-thousand-member book.
     """
-    members = _member_dicts(db)
+    members = book_repo.members(db)
     if not members:
         raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
     group_product_by_name: Dict[str, str] = {
@@ -1616,79 +1343,20 @@ def portfolio_filter_options(db: Session = Depends(get_db)):
     }
 
 
-def _master_client_by_beneficiary(db: Session) -> Dict[str, str]:
-    """beneficiary_id -> resolved master client name, for attributing a
-    raw claim line (which only carries a patient_id, not a master client)
-    to the same master client every other Portfolio Analysis view uses -
-    see resolve_master_client. Shared by every claims-only view
-    (Large Claims, Utilization of Benefits) that needs to roll up or
-    filter by master client without a full membership/rate-card join.
-    """
-    subgroup_master_by_name: Dict[str, str] = {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name for sm in db.query(models.SubgroupMasterMapping).all()
-    }
-    return {
-        m.beneficiary_id: resolve_master_client(
-            {"contract": m.contract, "master_contract": m.master_contract, "master_client_name": m.master_client_name},
-            subgroup_master_by_name,
-        )
-        for m in db.query(
-            models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
-            models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name,
-        ).all()
-        if m.beneficiary_id
-    }
 
 
-def _claim_dicts_for_large_claims(db: Session) -> List[dict]:
-    """Every uploaded claim line's own group_name/client_name/provider_name
-    are already denormalized onto PortfolioClaimEntry itself (a book-wide
-    export carries its own group identity per row - see
-    app/ingestion/portfolio_claims.py), but that denormalized client_name
-    is the raw SUBGROUP name on the claims export, not the master policy -
-    the same subgroup fragmentation _run_analysis resolves away via
-    resolve_master_client for every other view. `client_name` here is
-    overridden with the resolved master client name (falling back to the
-    claim's own raw client_name only for a patient_id with no matching
-    PortfolioMember row), so large-claims/high-cost-member analysis rolls
-    up by master client just like everything else, instead of splintering
-    one group across its own subgroups.
-    """
-    master_client_by_beneficiary = _master_client_by_beneficiary(db)
-
-    rows = db.query(
-        models.PortfolioClaimEntry.patient_id,
-        models.PortfolioClaimEntry.group_name,
-        models.PortfolioClaimEntry.client_name,
-        models.PortfolioClaimEntry.provider_name,
-        models.PortfolioClaimEntry.diagnosis_description,
-        models.PortfolioClaimEntry.date_of_treatment,
-        models.PortfolioClaimEntry.final_amount,
-    ).all()
-    return [
-        {
-            "patient_id": patient_id,
-            "group_name": group_name,
-            "client_name": master_client_by_beneficiary.get(patient_id) or client_name,
-            "provider_name": provider_name,
-            "diagnosis_description": diagnosis_description,
-            "date_of_treatment": date_of_treatment,
-            "final_amount": final_amount,
-        }
-        for patient_id, group_name, client_name, provider_name, diagnosis_description, date_of_treatment, final_amount in rows
-    ]
 
 
 def _claim_dicts_for_utilization(db: Session) -> List[dict]:
     """Every uploaded claim line's own ip_op_maternity/medical_category/
     medical_act/final_amount, plus its resolved master client (see
-    _master_client_by_beneficiary) so this can be scoped to one client for
+    book_repo.master_client_by_beneficiary) so this can be scoped to one client for
     a client-level report - a Utilization of Benefits view, like Large
     Claims, is purely about the claim lines themselves and needs no
-    member/rate-card join otherwise (see _claim_dicts_for_large_claims's
+    member/rate-card join otherwise (see book_repo.large_claim_lines's
     own docstring).
     """
-    master_client_by_beneficiary = _master_client_by_beneficiary(db)
+    master_client_by_beneficiary = book_repo.master_client_by_beneficiary(db)
 
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
@@ -1782,7 +1450,7 @@ def large_claims(
     up) - pass master_client to scope every view above to one master
     client's own claims instead, for a client-level report.
     """
-    claims = _claim_dicts_for_large_claims(db)
+    claims = book_repo.large_claim_lines(db)
     if master_client:
         claims = [c for c in claims if c.get("client_name") == master_client]
     if not claims:
@@ -1823,7 +1491,7 @@ def get_annual_limit_exposure(
         members_above_limit,
     )
 
-    claims = _claim_dicts_for_large_claims(db)
+    claims = book_repo.large_claim_lines(db)
     if master_client:
         claims = [c for c in claims if c.get("client_name") == master_client]
     if not claims:
@@ -1871,10 +1539,10 @@ def get_client_loading(db: Session = Depends(get_db)):
     on_file = {_normalize_client_key(r.master_client_name) for r in records}
 
     # Clients carrying real exposure that no record covers. Read off the
-    # membership table directly rather than through _run_analysis, so the
+    # membership table directly rather than through book_analysis.run_analysis, so the
     # screen still works before an analysis has been run.
     gaps: Dict[str, dict] = {}
-    subgroup_master = _subgroup_master_by_name(db)
+    subgroup_master = book_repo.subgroup_master_by_name(db)
     for member in db.query(models.PortfolioMember).all():
         name = resolve_master_client(
             {
@@ -1904,11 +1572,6 @@ def _normalize_client_key(name: Optional[str]) -> str:
     return " ".join(str(name or "").split()).casefold()
 
 
-def _subgroup_master_by_name(db: Session) -> Dict[str, str]:
-    return {
-        normalize_subgroup_key(sm.subgroup_name): sm.master_name
-        for sm in db.query(models.SubgroupMasterMapping).all()
-    }
 
 
 @router.post("/client-loading")
