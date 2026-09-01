@@ -2026,14 +2026,17 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
     override-only) whenever the case doesn't have enough claims history
     for a renewal rating yet - same eligibility as /renewal-rating.
     """
+    # No ledger gate. An account priced off the book has no per-case
+    # claims ledger, so requiring one left every new rate blank on the
+    # renewals that read the book - _case_renewal_rating already decides
+    # for itself whether it can price, and says so.
     renewal_increase_pct = None
-    if case.claims_ledger_entries and case.current_annual_premium:
-        renewal = _case_renewal_rating(case)
-        if renewal is not None:
-            # None when the price is withheld for a bad input, which
-            # leaves the per-member table override-only rather than
-            # propagating a figure that does not exist.
-            renewal_increase_pct = renewal.get("renewal_increase_pct")
+    renewal = _case_renewal_rating(case)
+    if renewal is not None:
+        # None when the price is withheld for a bad input, which leaves
+        # the per-member table override-only rather than propagating a
+        # figure that does not exist.
+        renewal_increase_pct = renewal.get("renewal_increase_pct")
 
     members = [_member_rate_row(m, renewal_increase_pct) for m in case.census_records]
     existing_premium = existing_premium_breakdown(
@@ -2057,6 +2060,12 @@ def _maybe_auto_populate_current_premium(case: models.Case, db: Session) -> None
     or an earlier auto-populate stands until the case itself is updated via
     PATCH /cases/{id}), and only populates when every rated member actually
     contributes (total_existing_premium > 0)."""
+    # Never silently replaces a premium that is already set. The
+    # bottom-up total can be a part-rated grid, and one member's 10,000
+    # overwriting a typed 500,000 destroys a correct number to fix a
+    # stale one. Where the two disagree the Renewal Bench says so and
+    # offers to adopt the computed figure - a decision an underwriter
+    # takes, not one taken for them.
     if case.current_annual_premium is not None:
         return
     computed = existing_premium_breakdown(
