@@ -3361,9 +3361,18 @@ function renderMemberRatesTable(data) {
     area.innerHTML = '<div class="hint">No census uploaded yet - upload one on the Census tab first.</div>';
     return;
   }
+  // A blank New rate column now says why it is blank. A grid of dashes
+  // reads the same whether the case needs a claims ledger, has a fee
+  // field that cannot be right, or is simply broken - and those are
+  // three different actions.
   const increaseNote = data.case_renewal_increase_pct != null
     ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills every member's new rate once a cell's existing rate is applied below.`
-    : `No case-level renewal increase computed yet (needs a claims ledger and current premium set on this case) - come back once the renewal rating is available, or set rates individually below in the meantime.`;
+    : escapeHtml(data.no_increase_reason
+        || 'No case-level renewal increase computed yet - set rates individually below in the meantime.');
+  const blockedBanner = (data.case_renewal_increase_pct == null && data.no_increase_reason)
+    ? `<div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;padding:10px 13px;
+         margin:10px 0;color:#922b21;">${escapeHtml(data.no_increase_reason)}</div>`
+    : '';
 
   const regionTree = _groupMembersForRateGrid(data.members);
 
@@ -3384,7 +3393,8 @@ function renderMemberRatesTable(data) {
   area.innerHTML = `
     <div class="card">
       <h3>Existing vs. New Rates by Category, Age Band &amp; Gender</h3>
-      <div class="hint">${increaseNote} One rate applies to every member in that region/category/gender/age-band cell at once - matching how the insurer's own rate card is priced. Only cells with at least one member are shown.</div>
+      <div class="hint">One rate applies to every member in that region/category/gender/age-band cell at once - matching how the insurer's own rate card is priced. Only cells with at least one member are shown.</div>
+      ${blockedBanner || `<div class="hint">${increaseNote}</div>`}
       ${_rateGridHtml(regionTree, data.case_renewal_increase_pct)}
       <div style="margin-top:12px;"><button class="primary" onclick="saveCategoryRates()">Apply rates</button></div>
     </div>

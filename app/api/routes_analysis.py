@@ -2047,6 +2047,29 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
         "members": members,
         "existing_premium": existing_premium,
     }
+    # Why there is no increase, when there is none. A grid of dashes is
+    # indistinguishable from a grid that has not loaded, and an
+    # underwriter has no way to tell "this case needs a claims ledger"
+    # from "a fee field on this case is wrong" from "it is broken".
+    if renewal_increase_pct is None:
+        if renewal is None:
+            response["no_increase_reason"] = (
+                "No renewal increase yet: this account is not on the uploaded book, and the case "
+                "has no claims ledger and expiring premium of its own to rate from. Upload the "
+                "book in Portfolio Analysis, or a claims ledger on the Claims tab."
+            )
+        elif renewal.get("pricing_blocked"):
+            problems = "; ".join(p["message"] for p in renewal.get("pricing_problems") or [])
+            response["no_increase_reason"] = (
+                f"No renewal increase: the renewal price is being withheld because an input it "
+                f"depends on cannot be right. {problems} Correct it on the case record and the new "
+                f"rates fill in."
+            )
+        else:
+            response["no_increase_reason"] = (
+                "No renewal increase could be computed for this case, so the new rates are "
+                "override-only - type them per member below."
+            )
     if extra:
         response.update(extra)
     return response

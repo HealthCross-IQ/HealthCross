@@ -657,3 +657,50 @@ def test_the_new_business_comparison_works_without_a_case_ledger(client):
     assert resp.status_code == 200
     body = resp.json()
     assert body["renewal_required_premium"] is not None
+
+
+# --- a blank New rate column has to say why it is blank ------------------
+#
+# "member rate / renewal premium is not showing" on MPH #42. The grid
+# rendered a column of dashes, which reads identically whether the case
+# needs a claims ledger, has a fee field that cannot be right, or is
+# simply broken - and those are three different actions. The response
+# now names which one it is.
+
+def test_a_blocked_price_tells_the_underwriter_which_field_to_fix(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    client.patch(f"/cases/{case_id}", json={
+        "tpa_fee_pct": 0.065, "commission_pct": 0.60, "hc_fee_pct": 0.15, "qic_fee_pct": 0.05})
+
+    body = client.get(f"/cases/{case_id}/member-rates").json()
+    assert body["case_renewal_increase_pct"] is None
+    reason = body["no_increase_reason"]
+    # The actual problem, not a generic "not available yet".
+    assert "loading" in reason.lower()
+    assert "86.5%" in reason
+
+
+def test_a_case_off_the_book_with_no_ledger_says_where_to_upload(client):
+    # No book, no ledger: nothing to rate from. The grid should send the
+    # underwriter to Portfolio Analysis rather than leaving them to guess.
+    case_id = _case(client, company="ACCOUNT NOT ON THE BOOK", premium=None)
+    _rate_the_census(client, case_id, [10_000.0] * 3)
+
+    body = client.get(f"/cases/{case_id}/member-rates").json()
+    assert body["case_renewal_increase_pct"] is None
+    reason = body["no_increase_reason"]
+    assert "Portfolio Analysis" in reason or "claims ledger" in reason
+
+
+def test_a_priced_case_carries_no_reason_at_all(client):
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    client.patch(f"/cases/{case_id}", json={
+        "tpa_fee_pct": 0.055, "commission_pct": 0.10, "hc_fee_pct": 0.045, "qic_fee_pct": 0.03})
+
+    body = client.get(f"/cases/{case_id}/member-rates").json()
+    assert body["case_renewal_increase_pct"] is not None
+    assert "no_increase_reason" not in body
