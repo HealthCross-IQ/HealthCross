@@ -428,6 +428,72 @@ def resolve_fee_pcts(
     )
 
 
+# The four components of a loading, in the order the case form asks for
+# them, with the label an underwriter reads.
+FEE_FIELDS = (
+    ("tpa_fee_pct", "TPA fee"),
+    ("commission_pct", "Commission"),
+    ("hc_fee_pct", "HealthCross fee"),
+    ("qic_fee_pct", "Carrier fee"),
+)
+
+
+def unset_fee_fields(
+    tpa_fee_pct: Optional[float] = None,
+    commission_pct: Optional[float] = None,
+    hc_fee_pct: Optional[float] = None,
+    qic_fee_pct: Optional[float] = None,
+) -> List[str]:
+    """Which of the four loading components have never been answered.
+
+    None means unanswered. Zero is an answer - direct business really
+    does pay no commission - and is left alone.
+    """
+    supplied = {
+        "tpa_fee_pct": tpa_fee_pct, "commission_pct": commission_pct,
+        "hc_fee_pct": hc_fee_pct, "qic_fee_pct": qic_fee_pct,
+    }
+    return [field for field, _ in FEE_FIELDS if supplied[field] is None]
+
+
+def renewal_loading_problems(
+    tpa_fee_pct: Optional[float] = None,
+    commission_pct: Optional[float] = None,
+    hc_fee_pct: Optional[float] = None,
+    qic_fee_pct: Optional[float] = None,
+) -> List[dict]:
+    """A renewal is not priced on an assumed loading.
+
+    case_loading_pct fills any unset fee with its DEFAULT_*_PCT, so a
+    case whose fee split was never entered still prices - at the flat 33%
+    house average. That is a fair assumption for a book-wide view and an
+    indefensible one for a quote: the loading is the entire difference
+    between the claims an account generates and the premium it is asked
+    for, so assuming it means part of the ask is invented, and nothing on
+    the page says which part.
+
+    So for a renewal the four fields are required, and an unanswered one
+    is returned as a problem - the same shape pricing_input_problems
+    uses, so the screens that already report a bad input report a missing
+    one without changing.
+    """
+    missing = unset_fee_fields(tpa_fee_pct, commission_pct, hc_fee_pct, qic_fee_pct)
+    if not missing:
+        return []
+    labels = [label for field, label in FEE_FIELDS if field in missing]
+    named = labels[0] if len(labels) == 1 else ", ".join(labels[:-1]) + " and " + labels[-1]
+    return [{
+        "field": "loading_pct",
+        "value": None,
+        "message": (
+            f"The renewal loading is not set on this case: {named} "
+            f"{'has' if len(labels) == 1 else 'have'} no value. Enter the fee split on the case "
+            f"record - a renewal is not quoted on an assumed loading. Enter 0 for a fee the "
+            f"account genuinely does not pay."
+        ),
+    }]
+
+
 def case_loading_pct(
     tpa_fee_pct: Optional[float] = None,
     commission_pct: Optional[float] = None,

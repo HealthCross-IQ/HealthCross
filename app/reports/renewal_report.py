@@ -134,7 +134,18 @@ def _the_ask(payload: dict) -> str:
     book, rating = payload["book"], payload["rating"]
     inc, base = rating.get("renewal_increase_pct"), rating.get("renewal_base_premium")
     if inc is None or base is None:
-        return ""
+        # A page printed for a meeting with the headline silently missing
+        # reads as an oversight. Say the price is withheld and why - the
+        # experience below it is still worth the meeting.
+        problems = rating.get("pricing_problems") or []
+        if not problems:
+            return ""
+        return (
+            '<div class="callout"><strong>Not priced.</strong> The account\'s experience is '
+            'reported below, but the renewal price is withheld until this is resolved: '
+            + " ".join(esc(p["message"]) for p in problems)
+            + "</div>"
+        )
     gross = book.get("gross_loss_ratio")
     direction = "an increase of" if inc >= 0 else "a reduction of"
     verdict = (

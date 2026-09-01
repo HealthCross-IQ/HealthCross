@@ -2769,7 +2769,15 @@ function renderCaseWorkspace() {
         </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
-      <div class="hint" style="margin-top:8px;">Sets the renewal premium's actual loading (these four sum to the real gross-up %, default 33%) into its real named components - Risk Premium (the pure claims-funding cost) is whatever's left over, not set here. Leave blank to use the defaults (TPA 6.5% / Commission 15% / HC 6.5% / QIC 5%). Drives both the required premium itself and the Renewal Client Summary's premium breakdown.</div>
+      ${_missingFeeFields(c).length ? `
+      <div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;padding:10px 13px;
+           margin-top:8px;color:#922b21;">
+        <strong>Required before this renewal can be priced.</strong>
+        ${_missingFeeFields(c).join(', ')} ${_missingFeeFields(c).length === 1 ? 'has' : 'have'} no
+        value yet, so the renewal is not being quoted - a renewal is not priced on an assumed
+        loading. Enter <strong>0</strong> for a fee this account genuinely does not pay.
+      </div>` : ''}
+      <div class="hint" style="margin-top:8px;">These four sum to the renewal premium's actual gross-up % - Risk Premium (the pure claims-funding cost) is whatever's left over, not set here. All four are required on a renewal: the loading is the whole difference between the claims the account generates and the premium it is asked for, so an assumed one would make part of the ask invented. Enter 0 for a fee that isn't paid. Drives both the required premium itself and the Renewal Client Summary's premium breakdown.</div>
       ` : ''}
       <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column. Target premium is the broker's ask for a new-business case - compared against HealthCross's own rated price in the New Business Rating tab.</div>
     </div>
@@ -3121,6 +3129,19 @@ async function loadCaseCompleteness() {
   } catch (err) {
     card.innerHTML = '';
   }
+}
+
+// The four loading components a renewal cannot be priced without, and
+// which of them this case has never been asked. Mirrors
+// renewal_loading_problems on the server - null is unanswered, 0 is an
+// answer, because direct business really does pay no commission.
+function _missingFeeFields(c) {
+  return [
+    ['tpa_fee_pct', 'TPA Fee'],
+    ['commission_pct', 'Commission'],
+    ['hc_fee_pct', 'HC Fee'],
+    ['qic_fee_pct', 'QIC Fee'],
+  ].filter(([field]) => c[field] == null).map(([, label]) => label);
 }
 
 async function saveCaseDetails() {
@@ -4898,8 +4919,8 @@ function _renewalBenchScorecardHtml(r) {
       <div class="rb-card">
         <div class="rb-card-title">Renewal scorecard &mdash; not priced</div>
         <div class="rb-card-sub">The account's experience is above; the renewal price is withheld
-          because an input it depends on cannot be right. Correct it on the case record and this
-          card prices itself.</div>
+          until the input below is resolved. Correct it on the case record and this card prices
+          itself.</div>
         ${r.pricing_problems.map(p => `
           <div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;
                padding:10px 13px;margin-top:10px;color:#922b21;">

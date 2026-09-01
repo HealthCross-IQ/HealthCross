@@ -2,6 +2,11 @@ from datetime import date
 
 from app.models import db_models as models
 
+# A renewal is not priced on an assumed loading, so a case under test
+# has to state its fee split the way a real one does. These are the
+# house defaults, so every figure asserted in this file is unchanged.
+HOUSE_FEES = {"tpa_fee_pct": 0.065, "commission_pct": 0.15,
+              "hc_fee_pct": 0.065, "qic_fee_pct": 0.05}
 
 def _create_case(client, **overrides):
     payload = {"broker_name": "Broker", "company_name": "Amazonico", "industry": "trading"}
@@ -95,7 +100,7 @@ def test_executive_summary_bare_case_returns_none_for_every_optional_section(cli
 
 def test_executive_summary_renewal_account(client):
     case_id = _create_case(client, company_name="Renewal Co")
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _add_census(client, case_id, count=10)
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
     _insert_claims_report(
@@ -127,7 +132,7 @@ def test_executive_summary_renewal_account(client):
 
 def test_executive_summary_burning_cost_trend_uses_latest_and_prior_report(client):
     case_id = _create_case(client, company_name="Two Year Co")
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _add_census(client, case_id, count=10)
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
     _insert_claims_report(
@@ -152,7 +157,7 @@ def test_executive_summary_burning_cost_trend_uses_latest_and_prior_report(clien
 
 def test_executive_summary_new_business_account_benchmarks_against_the_book(client):
     other_case = _create_case(client, company_name="Existing Book Case")
-    client.patch(f"/cases/{other_case}", json={"current_annual_premium": 500_000})
+    client.patch(f"/cases/{other_case}", json={**HOUSE_FEES, "current_annual_premium": 500_000})
     _add_census(client, other_case, count=10)  # 50,000/member
 
     case_id = _create_case(client, company_name="New Biz Co")

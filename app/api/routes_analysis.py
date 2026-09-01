@@ -55,6 +55,7 @@ from app.scoring.rules.renewal_rating import (
     calculate_renewal_rating_two_methods,
     pricing_input_problems,
     renewal_from_loss_ratio,
+    renewal_loading_problems,
     case_loading_pct,
     dynamic_ibnr_incurred_claims,
     premium_component_breakdown,
@@ -1046,6 +1047,98 @@ def _annualised_expiring_premium(case: models.Case) -> dict:
     return {"total": None, "member_count": 0, "source": None}
 
 
+def _comparable_results(db: Session, case_id: int) -> List[dict]:
+    """Every OTHER case's renewal rating, for benchmarking this one
+    against - minus any whose price is withheld.
+
+    benchmark_case_against_book takes a median of renewal_increase_pct
+    across the set, and a withheld price has none, so one unpriceable
+    case in the book took the benchmark down for every other case with
+    it. Ineligible cases were already skipped here; unpriced ones are
+    the same thing arriving by a different route.
+    """
+    results = []
+    for other in db.query(models.Case).filter(models.Case.id != case_id).all():
+        result = _case_renewal_rating(other)
+        if result is not None and not result.get("pricing_blocked"):
+            results.append(result)
+    return results
+
+
+def _renewal_loading(case: models.Case, loading_pct: Optional[float]) -> tuple:
+    """The loading a renewal is priced with, and any problem with it.
+
+    Never invents one. An explicit override - the what-if query param on
+    /renewal-rating - wins outright. Otherwise the case's own fee split
+    is used, and if that split has never been entered the price is
+    withheld rather than quoted on the house average: see
+    renewal_loading_problems.
+
+    Both renewal paths (the book and the case ledger) resolve the loading
+    through here, so neither can be the one that still assumes.
+    """
+    if loading_pct is not None:
+        return loading_pct, []
+    fees = (case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
+    return case_loading_pct(*fees), renewal_loading_problems(*fees)
+
+
+def _blocked_rating(
+    problems: List[dict],
+    assumptions: dict,
+    *,
+    current_annual_premium: Optional[float],
+    renewal_base_premium: Optional[float],
+    actual_loss_ratio: Optional[float],
+    rating_source: str,
+    case_current_annual_premium: Optional[float],
+    ibnr_pct: float,
+    from_book: Optional[dict] = None,
+    from_book_unavailable: Optional[dict] = None,
+    expiring_premium: Optional[dict] = None,
+) -> dict:
+    """A withheld price, in the SAME shape as a quoted one.
+
+    Nine call sites read this dict - the member-rate table, the bench
+    KPIs, the new-business comparison, the report - and a short dict took
+    every one of them down with a KeyError, so blocking one bad price
+    blanked the whole case. Everything that depends on the price is None;
+    everything that does not - the account's own experience, its premium,
+    where the figures came from - is still reported, because it is not
+    the thing that is wrong.
+    """
+    blocked = {
+        "annualized_incurred_claims": None,
+        "current_annual_premium": current_annual_premium,
+        "renewal_base_premium": renewal_base_premium,
+        "actual_loss_ratio": None if actual_loss_ratio is None else round(actual_loss_ratio, 4),
+        "trended_claims": None,
+        "credible_claims": None,
+        "required_premium": None,
+        "renewal_increase_pct": None,
+        "assumptions_used": assumptions,
+        "annualized_paid_and_outstanding": None,
+        "months_used": [],
+        "ibnr_detail": {},
+        "method_gap": None,
+        "method_gap_pct": None,
+        "excluded_months": [],
+        "excluded_paid": 0.0,
+        "excluded_outstanding": 0.0,
+        "rating_source": rating_source,
+        "from_book": from_book,
+        "expiring_premium": expiring_premium,
+        "case_current_annual_premium": case_current_annual_premium,
+        "premium_disagrees_with_book": False,
+        "pricing_blocked": True,
+        "pricing_problems": problems,
+    }
+    if from_book_unavailable is not None:
+        blocked["from_book_unavailable"] = from_book_unavailable
+    blocked["method_b"] = {**blocked, "ibnr_pct": ibnr_pct}
+    return blocked
+
+
 def _rating_from_book_figures(
     case: models.Case,
     book: dict,
@@ -1081,11 +1174,7 @@ def _rating_from_book_figures(
     incurred_b = (paid + outstanding) * (1 + effective_ibnr_pct) * scale
 
     defaults = RenewalRatingAssumptions()
-    effective_loading_pct = (
-        loading_pct
-        if loading_pct is not None
-        else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
-    )
+    effective_loading_pct, loading_problems = _renewal_loading(case, loading_pct)
     effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
 
     # What the increase is quoted against: a full year at current rates
@@ -1116,51 +1205,33 @@ def _rating_from_book_figures(
     # times wrong, and an underwriter reading the result has no way to
     # see the input was the cause - so the price is withheld and the
     # problem named instead.
-    problems = pricing_input_problems(
+    # A loading that was never entered comes first: it is a question for
+    # the underwriter rather than a wrong number, and it is the reason the
+    # other checks would be measuring an assumed 33% in the first place.
+    problems = loading_problems + pricing_input_problems(
         loss_ratio=lr_a, expiring_annual_premium=base,
-        inflation_pts=effective_inflation_pct, loading_pct=effective_loading_pct,
+        inflation_pts=effective_inflation_pct,
+        loading_pct=None if loading_problems else effective_loading_pct,
         member_count=book.get("member_count"),
     )
     if problems:
-        # The SAME shape as a priced result, with the priced figures
-        # None. Nine call sites read this dict - the member-rate table,
-        # the bench KPIs, the NB comparison - and a short dict took every
-        # one of them down with a KeyError, so blocking one bad price
-        # blanked the whole case.
-        assumptions = {
-            "inflation_pct": effective_inflation_pct,
-            "loading_pct": effective_loading_pct,
-            "credibility_pct": credibility_pct
-            if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
-        }
-        blocked = {
-            "annualized_incurred_claims": None,
-            "current_annual_premium": book["gross_premium"],
-            "renewal_base_premium": base,
-            "actual_loss_ratio": round(lr_a, 4),
-            "trended_claims": None,
-            "credible_claims": None,
-            "required_premium": None,
-            "renewal_increase_pct": None,
-            "assumptions_used": assumptions,
-            "annualized_paid_and_outstanding": None,
-            "months_used": [],
-            "ibnr_detail": {},
-            "method_gap": None,
-            "method_gap_pct": None,
-            "excluded_months": [],
-            "excluded_paid": 0.0,
-            "excluded_outstanding": 0.0,
-            "rating_source": "book",
-            "from_book": book,
-            "expiring_premium": expiring,
-            "case_current_annual_premium": case.current_annual_premium,
-            "premium_disagrees_with_book": False,
-            "pricing_blocked": True,
-            "pricing_problems": problems,
-        }
-        blocked["method_b"] = {**blocked, "ibnr_pct": effective_ibnr_pct}
-        return blocked
+        return _blocked_rating(
+            problems,
+            {
+                "inflation_pct": effective_inflation_pct,
+                "loading_pct": None if loading_problems else effective_loading_pct,
+                "credibility_pct": credibility_pct
+                if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+            },
+            current_annual_premium=book["gross_premium"],
+            renewal_base_premium=base,
+            actual_loss_ratio=lr_a,
+            rating_source="book",
+            case_current_annual_premium=case.current_annual_premium,
+            ibnr_pct=effective_ibnr_pct,
+            from_book=book,
+            expiring_premium=expiring,
+        )
     ladder_a = renewal_from_loss_ratio(lr_a, base, effective_inflation_pct, effective_loading_pct)
     ladder_b = renewal_from_loss_ratio(lr_b, base, effective_inflation_pct, effective_loading_pct)
 
@@ -1388,12 +1459,34 @@ def _case_renewal_rating(
     incurred_claims_method_b = annualized_paid_and_outstanding * (1 + effective_ibnr_pct)
 
     defaults = RenewalRatingAssumptions()
-    effective_loading_pct = (
-        loading_pct
-        if loading_pct is not None
-        else case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
-    )
+    effective_loading_pct, loading_problems = _renewal_loading(case, loading_pct)
     effective_inflation_pct = inflation_pct if inflation_pct is not None else defaults.inflation_pct
+
+    # The same gate as the book path. This branch used to price with
+    # whatever case_loading_pct returned, which for an un-configured case
+    # is the flat house 33% - so an account off the book was quoted on an
+    # assumption while an account on the book was refused for it.
+    if loading_problems:
+        return _blocked_rating(
+            loading_problems,
+            {
+                "inflation_pct": effective_inflation_pct,
+                "loading_pct": None,
+                "credibility_pct": credibility_pct
+                if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
+            },
+            current_annual_premium=case.current_annual_premium,
+            renewal_base_premium=case.current_annual_premium,
+            actual_loss_ratio=(
+                dynamic["annualized_incurred_claims"] / case.current_annual_premium
+                if case.current_annual_premium else None
+            ),
+            rating_source="case claims ledger",
+            case_current_annual_premium=case.current_annual_premium,
+            ibnr_pct=effective_ibnr_pct,
+            from_book_unavailable=_why_no_book_figures(case),
+        )
+
     two_methods = calculate_renewal_rating_two_methods(
         dynamic["annualized_incurred_claims"], incurred_claims_method_b, case.current_annual_premium,
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
@@ -1489,11 +1582,12 @@ def get_renewal_benchmark(case_id: int, db: Session = Depends(get_db)):
     if this_result is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
 
-    other_results = []
-    for other in db.query(models.Case).filter(models.Case.id != case_id).all():
-        other_result = _case_renewal_rating(other)
-        if other_result is not None:
-            other_results.append(other_result)
+    # No price, nothing to rank. The case's own result still goes out,
+    # carrying the reason - a 500 here would say nothing at all.
+    if this_result.get("pricing_blocked"):
+        return {"case": this_result, "book": None}
+
+    other_results = _comparable_results(db, case_id)
 
     return {
         "case": this_result,
@@ -1840,12 +1934,11 @@ def get_executive_summary(case_id: int, db: Session = Depends(get_db)):
     benchmark = None
     if is_renewal:
         renewal = _case_renewal_rating(case)
-        if renewal is not None:
-            other_results = []
-            for other in db.query(models.Case).filter(models.Case.id != case_id).all():
-                other_result = _case_renewal_rating(other)
-                if other_result is not None:
-                    other_results.append(other_result)
+        # A withheld price has no increase to rank against the book. The
+        # rating still goes out - it carries the account's experience and
+        # says why the price is withheld.
+        if renewal is not None and not renewal.get("pricing_blocked"):
+            other_results = _comparable_results(db, case_id)
             benchmark = benchmark_case_against_book(renewal, other_results)
 
     reports = (
@@ -1940,12 +2033,12 @@ def get_renewal_client_summary(case_id: int, db: Session = Depends(get_db)):
     premium_breakdown = None
     if case.claims_ledger_entries and case.current_annual_premium:
         renewal = _case_renewal_rating(case)
-        if renewal is not None:
-            other_results = []
-            for other in db.query(models.Case).filter(models.Case.id != case_id).all():
-                other_result = _case_renewal_rating(other)
-                if other_result is not None:
-                    other_results.append(other_result)
+        # A withheld price has no required_premium to split or to rank,
+        # and both of these divide by it. The rating itself still goes
+        # out - it carries the account's experience and the reason the
+        # price is withheld, which is what the summary should show.
+        if renewal is not None and not renewal.get("pricing_blocked"):
+            other_results = _comparable_results(db, case_id)
             benchmark = benchmark_case_against_book(renewal, other_results)
             premium_breakdown = premium_component_breakdown(
                 renewal, case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct
@@ -2059,11 +2152,10 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
                 "book in Portfolio Analysis, or a claims ledger on the Claims tab."
             )
         elif renewal.get("pricing_blocked"):
-            problems = "; ".join(p["message"] for p in renewal.get("pricing_problems") or [])
+            problems = " ".join(p["message"] for p in renewal.get("pricing_problems") or [])
             response["no_increase_reason"] = (
-                f"No renewal increase: the renewal price is being withheld because an input it "
-                f"depends on cannot be right. {problems} Correct it on the case record and the new "
-                f"rates fill in."
+                f"No renewal increase: the price is withheld until this is resolved. {problems} "
+                f"Correct it on the case record and the new rates fill in."
             )
         else:
             response["no_increase_reason"] = (
@@ -2352,6 +2444,10 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
             "case_current_annual_premium": rating.get("case_current_annual_premium"),
             "premium_disagrees_with_book": rating.get("premium_disagrees_with_book"),
             "assumptions_used": rating.get("assumptions_used"),
+            # Why there is no price, when there is none - so the printed
+            # page says so instead of omitting its own headline.
+            "pricing_blocked": rating.get("pricing_blocked"),
+            "pricing_problems": rating.get("pricing_problems"),
         },
         "monthly": monthly,
         "top_diagnoses": diagnoses,

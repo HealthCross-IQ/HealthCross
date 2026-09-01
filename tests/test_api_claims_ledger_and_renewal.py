@@ -5,6 +5,12 @@ import pytest
 
 from app.models import db_models as models
 
+# A renewal is not priced on an assumed loading, so a case under test
+# has to state its fee split the way a real one does. These are the
+# house defaults - 6.5 + 15 + 6.5 + 5 = the 33% that used to be filled
+# in silently - so every figure asserted in this file is unchanged.
+HOUSE_FEES = {"tpa_fee_pct": 0.065, "commission_pct": 0.15,
+              "hc_fee_pct": 0.065, "qic_fee_pct": 0.05}
 
 def _create_case(client, **overrides):
     payload = {"broker_name": "Broker", "company_name": "Amazonico", "industry": "trading"}
@@ -39,7 +45,7 @@ def _insert_ledger_entries(client, case_id, months_and_amounts, policy_start=dat
 
 def test_case_update_sets_business_type_and_current_premium(client):
     case_id = _create_case(client)
-    resp = client.patch(f"/cases/{case_id}", json={"business_type": "existing", "current_annual_premium": 3_000_000})
+    resp = client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "business_type": "existing", "current_annual_premium": 3_000_000})
     assert resp.status_code == 200
     body = resp.json()
     assert body["business_type"] == "existing"
@@ -315,7 +321,7 @@ def test_claims_ledger_analysis_404_without_upload(client):
 
 def test_renewal_rating_end_to_end(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
 
     monthly = {
         (2025, 10): 175385.01, (2025, 11): 155086.56, (2025, 12): 159281.85,
@@ -349,7 +355,7 @@ def test_renewal_rating_requires_current_premium(client):
 
 def test_renewal_rating_credibility_style_dynamic_assumptions(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     default_resp = client.get(f"/cases/{case_id}/renewal-rating")
@@ -359,7 +365,7 @@ def test_renewal_rating_credibility_style_dynamic_assumptions(client):
 
 def test_renewal_rating_includes_method_b_alongside_method_a(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     resp = client.get(f"/cases/{case_id}/renewal-rating")
@@ -384,7 +390,7 @@ def test_renewal_rating_ibnr_pct_is_overridable(client):
     # always the dynamic Paid/elapsed_days*30 figure, not adjustable via
     # a percentage.
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     default_resp = client.get(f"/cases/{case_id}/renewal-rating")
@@ -397,7 +403,7 @@ def test_renewal_rating_ibnr_pct_is_overridable(client):
 
 def test_renewal_rating_credibility_pct_is_overridable(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     resp = client.get(f"/cases/{case_id}/renewal-rating", params={"credibility_pct": 0.75})
@@ -408,7 +414,7 @@ def test_renewal_rating_credibility_pct_is_overridable(client):
 
 def test_renewal_benchmark_with_no_comparable_cases(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
 
     resp = client.get(f"/cases/{case_id}/renewal-benchmark")
@@ -421,12 +427,12 @@ def test_renewal_benchmark_with_no_comparable_cases(client):
 
 def test_renewal_benchmark_compares_against_other_eligible_cases_only(client):
     this_case = _create_case(client, company_name="This Case")
-    client.patch(f"/cases/{this_case}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{this_case}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, this_case, {(2025, 10): 90000, (2025, 11): 90000, (2025, 12): 90000})
 
     # A comparable case, eligible (ledger + premium).
     other_case = _create_case(client, company_name="Other Case")
-    client.patch(f"/cases/{other_case}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{other_case}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, other_case, {(2025, 10): 40000, (2025, 11): 40000, (2025, 12): 40000})
 
     # An ineligible case (no current_annual_premium set) - must be skipped, not error the whole call.
@@ -478,7 +484,7 @@ def _upload_minimal_rate_card(client, tmp_path):
 
 def test_renewal_vs_new_business_generates_the_nb_premium_automatically(client, tmp_path):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     _upload_minimal_rate_card(client, tmp_path)
@@ -501,7 +507,7 @@ def test_renewal_vs_new_business_generates_the_nb_premium_automatically(client, 
 
 def test_renewal_vs_new_business_returns_none_for_nb_side_without_a_rate_card(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000})
 
     resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
@@ -580,7 +586,7 @@ def test_case_large_claims_404s_without_a_ledger(client):
 
 def test_renewal_client_summary_full_case(client):
     case_id = _create_case(client, company_name="ServicePlan", broker_name="NASCO")
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
 
     db = client.db_session_local()
@@ -672,7 +678,7 @@ def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client
     actual required_premium/renewal_increase_pct, not just relabel a
     number still computed off the fixed default loading."""
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
 
     default_resp = client.get(f"/cases/{case_id}/renewal-client-summary")
@@ -700,7 +706,7 @@ def _insert_census(client, case_id, members):
 
 def test_member_rates_computes_new_rate_from_case_renewal_increase(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
     _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
 
@@ -730,7 +736,7 @@ def test_member_rates_computes_new_rate_from_case_renewal_increase(client):
 
 def test_member_rates_override_wins_over_computed_new_rate(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 1_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 1_000_000})
     _insert_ledger_entries(client, case_id, {(2025, 10): 80000, (2025, 11): 80000, (2025, 12): 80000})
     _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
     census_record_id = client.get(f"/cases/{case_id}/member-rates").json()["members"][0]["census_record_id"]
@@ -819,7 +825,7 @@ def test_member_rates_patch_auto_populates_current_annual_premium_when_unset(cli
 
 def test_member_rates_patch_never_overwrites_an_already_set_current_annual_premium(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 500_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 500_000})
     _insert_census(client, case_id, [{"employee_ref": "E1", "age": 30, "gender": "M", "relation": "employee"}])
     census_record_id = client.get(f"/cases/{case_id}/member-rates").json()["members"][0]["census_record_id"]
 

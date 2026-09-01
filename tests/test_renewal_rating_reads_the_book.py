@@ -73,12 +73,20 @@ def _nomada(client):
     return members, claims
 
 
-def _case(client, company="NOMADA EVENTS", premium=114_488.0):
+# A renewal is not priced on an assumed loading, so a case under test
+# has to state its fee split the way a real one does. These are the
+# house defaults - 6.5 + 15 + 6.5 + 5 = the 33% that used to be filled
+# in silently - so every figure asserted in this file is unchanged.
+HOUSE_FEES = {"tpa_fee_pct": 0.065, "commission_pct": 0.15,
+              "hc_fee_pct": 0.065, "qic_fee_pct": 0.05}
+
+
+def _case(client, company="NOMADA EVENTS", premium=114_488.0, fees=HOUSE_FEES):
     case_id = client.post("/cases", json={
         "broker_name": "Broker", "company_name": company, "industry": "events",
     }).json()["id"]
     client.patch(f"/cases/{case_id}", json={
-        "business_type": "existing", "current_annual_premium": premium,
+        **(fees or {}), "business_type": "existing", "current_annual_premium": premium,
     })
     return case_id
 
@@ -704,3 +712,154 @@ def test_a_priced_case_carries_no_reason_at_all(client):
     body = client.get(f"/cases/{case_id}/member-rates").json()
     assert body["case_renewal_increase_pct"] is not None
     assert "no_increase_reason" not in body
+
+
+# --- a renewal is never priced on an assumed loading ---------------------
+#
+# case_loading_pct fills any unset fee with its DEFAULT_*_PCT, so a case
+# whose fee split was never entered still priced - at the flat 33% house
+# average, with nothing on the page saying so. The loading is the entire
+# difference between the claims an account generates and the premium it
+# is asked for; assuming it means part of the ask is invented. So the
+# fields are now required, on BOTH renewal paths.
+
+def test_a_case_with_no_fee_split_is_not_priced_off_the_book(client):
+    _nomada(client)
+    case_id = _case(client, fees=None)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["pricing_blocked"] is True
+    assert body["renewal_increase_pct"] is None
+    # Not "33% was assumed" - no loading was used at all.
+    assert body["assumptions_used"]["loading_pct"] is None
+    (problem,) = [p for p in body["pricing_problems"] if p["field"] == "loading_pct"]
+    for label in ("TPA fee", "Commission", "HealthCross fee", "Carrier fee"):
+        assert label in problem["message"]
+    # The account's own experience is still reported - it is not the
+    # thing that is missing.
+    assert body["from_book"]["gross_loss_ratio"] is not None
+    assert body["actual_loss_ratio"] is not None
+
+
+def test_only_the_fee_that_is_missing_is_named(client):
+    _nomada(client)
+    case_id = _case(client, fees={"tpa_fee_pct": 0.065, "hc_fee_pct": 0.065, "qic_fee_pct": 0.05})
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    (problem,) = [p for p in body["pricing_problems"] if p["field"] == "loading_pct"]
+    assert "Commission" in problem["message"]
+    assert "TPA fee" not in problem["message"]
+
+
+def test_a_fee_of_zero_is_an_answer_not_a_blank(client):
+    # Direct business really does pay no commission. Typing 0 must price;
+    # only never having been asked blocks.
+    _nomada(client)
+    case_id = _case(client, fees={"tpa_fee_pct": 0.065, "commission_pct": 0.0,
+                                  "hc_fee_pct": 0.065, "qic_fee_pct": 0.05})
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert not body.get("pricing_blocked")
+    assert body["assumptions_used"]["loading_pct"] == 0.18
+    assert body["required_premium"] > 0
+
+
+def test_the_ledger_path_is_gated_the_same_way(client):
+    # An account off the book was quoted on the assumed 33% while an
+    # account on the book was refused for it - the same question, two
+    # different answers depending on which upload the case happened to
+    # match.
+    case_id = _case(client, company="NOT ON THE BOOK", fees=None)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert body["pricing_blocked"] is True
+    assert body["rating_source"] == "case claims ledger"
+    assert body["required_premium"] is None
+    assert body["method_b"]["required_premium"] is None
+    # Full shape, so the panels that read it still render.
+    assert body["current_annual_premium"] == 114_488.0
+    assert body["actual_loss_ratio"] is not None
+    assert any(p["field"] == "loading_pct" for p in body["pricing_problems"])
+
+
+def test_an_explicit_loading_still_prices_an_unconfigured_case(client):
+    # The what-if query param is the underwriter answering the question
+    # for this one calculation, which is not the same as assuming.
+    _nomada(client)
+    case_id = _case(client, fees=None)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/renewal-rating", params={"loading_pct": 0.23}).json()
+    assert not body.get("pricing_blocked")
+    assert body["assumptions_used"]["loading_pct"] == 0.23
+
+
+def test_the_rate_grid_asks_for_the_fee_split(client):
+    _nomada(client)
+    case_id = _case(client, fees=None)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    body = client.get(f"/cases/{case_id}/member-rates").json()
+    assert body["case_renewal_increase_pct"] is None
+    assert "fee split" in body["no_increase_reason"]
+
+
+def test_an_unanswered_fee_is_reported_but_a_zero_one_is_not():
+    from app.scoring.rules.renewal_rating import renewal_loading_problems
+
+    assert renewal_loading_problems(0.065, 0.0, 0.065, 0.05) == []
+    assert len(renewal_loading_problems(None, None, None, None)) == 1
+    assert len(renewal_loading_problems(0.065, 0.15, 0.065, None)) == 1
+
+
+def test_no_renewal_screen_falls_over_on_an_unconfigured_case(client):
+    # Withholding one price must not blank the case. Blocking used to
+    # KeyError nine panels at once; this time it also has to survive the
+    # screens that DIVIDE by the price - the premium split, the book
+    # benchmark, the new-business gap - none of which have one to divide
+    # by. Every renewal screen, on a case with no fee split at all.
+    _nomada(client)
+    case_id = _case(client, fees=None)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+    _ledger(client, case_id, LEDGER_MONTHS)
+
+    for path in ("renewal-rating", "renewal-benchmark", "renewal-vs-new-business",
+                 "renewal-bench-summary", "renewal-client-summary", "member-rates",
+                 "renewal-report", "renewal-report.html"):
+        resp = client.get(f"/cases/{case_id}/{path}")
+        assert resp.status_code < 500, f"{path} returned {resp.status_code}: {resp.text[:400]}"
+
+
+def test_one_unpriceable_case_does_not_take_the_benchmark_down_for_the_others(client):
+    # The benchmark takes a median of every other case's increase, and a
+    # withheld price has none.
+    _nomada(client)
+    priced = _case(client)
+    _rate_the_census(client, priced, [10_801.0] * 5 + [5_498.0] * 9)
+    _ledger(client, priced, LEDGER_MONTHS)
+
+    unpriceable = _case(client, company="NO FEES SET", fees=None)
+    _ledger(client, unpriceable, LEDGER_MONTHS)
+
+    body = client.get(f"/cases/{priced}/renewal-benchmark").json()
+    assert body["case"]["renewal_increase_pct"] is not None
+    # The unpriceable case is simply not in the comparison set.
+    assert body["book"]["comparable_case_count"] == 0
+
+
+def test_the_printed_report_says_it_is_not_priced_rather_than_omitting_the_ask(client):
+    # A page printed for a meeting with the headline silently missing
+    # reads as an oversight, not as a decision.
+    _nomada(client)
+    case_id = _case(client, fees=None)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    html = client.get(f"/cases/{case_id}/renewal-report.html").text
+    assert "Not priced" in html
+    assert "renewal loading is not set" in html
+    # The experience is still on the page - it is not what is missing.
+    assert "Gross earned loss ratio" in html

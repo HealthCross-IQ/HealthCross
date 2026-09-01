@@ -4,6 +4,12 @@ import pytest
 
 from app.models import db_models as models
 
+# A renewal is not priced on an assumed loading, so a case under test
+# has to state its fee split the way a real one does. These are the
+# house defaults - 6.5 + 15 + 6.5 + 5 = the 33% that used to be filled
+# in silently - so every figure asserted in this file is unchanged.
+HOUSE_FEES = {"tpa_fee_pct": 0.065, "commission_pct": 0.15,
+              "hc_fee_pct": 0.065, "qic_fee_pct": 0.05}
 
 def _create_case(client, **overrides):
     payload = {"broker_name": "Broker", "company_name": "Amazonico", "industry": "trading"}
@@ -46,7 +52,7 @@ def _insert_census(client, case_id, ages, relation="employee"):
 
 def _base_case(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     _insert_ledger_entries(
         client, case_id, {(2025, 10): 100000, (2025, 11): 100000, (2025, 12): 100000, (2026, 1): 100000}
     )
@@ -56,7 +62,7 @@ def _base_case(client):
 
 def test_renewal_bench_summary_requires_claims_ledger(client):
     case_id = _create_case(client)
-    client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+    client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "current_annual_premium": 3_000_000})
     resp = client.get(f"/cases/{case_id}/renewal-bench-summary")
     assert resp.status_code == 404
 
