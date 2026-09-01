@@ -5,7 +5,6 @@ key / bad input hit before that call would even be made.
 """
 import datetime
 
-import pytest
 
 from app.api.routes_chat import _build_context, _case_context, _portfolio_context
 from app.models import db_models as models

@@ -43,7 +43,6 @@ applied by the caller rather than guessed at silently.
 Pure functions over plain dicts - no ORM, no database.
 """
 import math
-from datetime import date
 from typing import Any, Dict, List, Optional
 
 from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS

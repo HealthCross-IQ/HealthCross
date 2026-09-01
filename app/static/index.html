@@ -3154,8 +3154,13 @@ async function saveCaseDetails() {
   const commissionEl = document.getElementById('case-commission-pct');
   const hcFeeEl = document.getElementById('case-hc-fee-pct');
   const qicFeeEl = document.getElementById('case-qic-fee-pct');
+  // The case this save is for. If the user opens another case while the
+  // PATCH is in flight, assigning the reply to currentCase would put the
+  // OLD case back on screen under the new case's name - so the reply is
+  // only adopted while it is still the case being looked at.
+  const savingCaseId = currentCase.id;
   try {
-    currentCase = await api(`/cases/${currentCase.id}`, {
+    const saved = await api(`/cases/${savingCaseId}`, {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
@@ -3170,6 +3175,8 @@ async function saveCaseDetails() {
         qic_fee_pct: qicFeeEl && qicFeeEl.value !== '' ? Number(qicFeeEl.value) / 100 : null,
       }),
     });
+    if (!currentCase || currentCase.id !== savingCaseId) return;
+    currentCase = saved;
     toast('Case details saved');
     renderCaseWorkspace();
   } catch (err) {
@@ -5034,12 +5041,17 @@ function _rbHeaderHtml(identity) {
 
 async function adoptComputedExistingPremium(computedTotal) {
   if (!currentCase) return;
+  // Same guard as saveCaseDetails: a reply that arrives after the user has
+  // moved to another case must not put the old one back on screen.
+  const savingCaseId = currentCase.id;
   try {
-    currentCase = await api(`/cases/${currentCase.id}`, {
+    const saved = await api(`/cases/${savingCaseId}`, {
       method: 'PATCH',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({ current_annual_premium: computedTotal }),
     });
+    if (!currentCase || currentCase.id !== savingCaseId) return;
+    currentCase = saved;
     toast(`Current annual premium set to AED ${Math.round(computedTotal).toLocaleString()}`);
     // The premium drives the scorecard, drivers and NB comparison too, so
     // the whole tab is reloaded rather than just this one card.
@@ -6208,10 +6220,18 @@ function _lrFillPickers() {
   clientSel.dataset.filled = '1';
 }
 
+// Which loss-ratio request is the current one. Changing the basis or the
+// client filter twice in quick succession fires two fetches, and the
+// slower one can land last - painting the table with figures that do not
+// match the filters shown above them. An underwriter has no way to see
+// that has happened; the numbers simply look wrong.
+let _lrRequestToken = 0;
+
 async function loadLossRatioBoard() {
   const bannerArea = document.getElementById('lr-banner-area');
   const tableArea = document.getElementById('lr-table-area');
   if (!tableArea) return;
+  const token = ++_lrRequestToken;
   const asOfEl = document.getElementById('lr-as-of');
   const loadEl = document.getElementById('lr-loading');
   const clientEl = document.getElementById('lr-client');
@@ -6235,6 +6255,10 @@ async function loadLossRatioBoard() {
   tableArea.innerHTML = '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
   try {
     const r = await api(`/portfolio-analysis/account-loss-ratio?${params.toString()}`);
+    // A newer request has been fired since this one left. Its answer is
+    // the one that matches what is on screen, so drop this reply rather
+    // than painting the table with the previous filter's figures.
+    if (token !== _lrRequestToken) return;
     lrState.rows = r.rows || [];
     lrState.totals = r.totals || null;
     if (asOfEl && !asOfEl.value && lrState.rows.length) {
@@ -6247,6 +6271,7 @@ async function loadLossRatioBoard() {
     bannerArea.innerHTML = _lrBannerHtml(lrState.totals);
     tableArea.innerHTML = _lrTableHtml() + _lrShedHtml();
   } catch (err) {
+    if (token !== _lrRequestToken) return;
     bannerArea.innerHTML = '';
     tableArea.innerHTML = `<div class="lr-card"><div class="lr-empty">${escapeHtml(err.message || 'Could not load the loss ratio board')}</div></div>`;
   }

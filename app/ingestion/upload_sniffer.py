@@ -18,7 +18,7 @@ parsers themselves key off (see app/ingestion/claims_report.py and
 app/ingestion/quote_pdf.py), falling back to "benefits" as the single
 most common case-level PDF upload when nothing else matches.
 """
-from typing import BinaryIO, Dict, List, Optional
+from typing import BinaryIO, Dict, Optional
 
 import pandas as pd
 import pdfplumber

@@ -12,7 +12,7 @@ rather than re-deriving book-wide figures a second way, so the assistant's
 answers are always consistent with what the dashboard itself shows.
 """
 import os
-from typing import List, Optional
+from typing import Optional
 
 import anthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,7 +22,6 @@ from app.database import get_db
 from app.models import db_models as models
 from app.models import schemas
 from app.scoring.rules.portfolio_analysis import (
-    summarize_burning_cost_by_age_gender,
     summarize_burning_cost_by_product_network,
     summarize_burning_cost_overall,
     summarize_population_mix,
@@ -62,7 +61,6 @@ def _portfolio_context(db: Session) -> str:
     except HTTPException:
         return "PORTFOLIO BOOK: No portfolio membership/claims data has been uploaded yet."
 
-    rate_cards = book_repo.rate_cards(db)
     lines = ["PORTFOLIO BOOK (HealthCross's own already-booked business):"]
 
     for group_by, heading, row_cap in (

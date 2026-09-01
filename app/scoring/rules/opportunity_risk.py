@@ -35,7 +35,7 @@ it runs, never hardcoded, so the assessment moves as the book does.
 Pure functions over plain dicts - no ORM, no database.
 """
 from collections import defaultdict
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional
 
 from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS
 

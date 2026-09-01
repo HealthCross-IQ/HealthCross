@@ -35,7 +35,7 @@ exact shape of every upload here, which is why the counter exists.
 """
 import threading
 from collections import OrderedDict
-from typing import Callable, Tuple, TypeVar
+from typing import Callable, TypeVar
 
 from sqlalchemy import event, func
 from sqlalchemy.engine import Engine

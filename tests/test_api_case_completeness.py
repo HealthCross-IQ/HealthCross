@@ -2,7 +2,6 @@
 checklist backing the case workspace's "Case status" card, so a broker
 doesn't have to click into every tab just to see what's still missing.
 """
-from datetime import date
 
 from app.models import db_models as models
 

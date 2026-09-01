@@ -122,9 +122,9 @@ def _concentration_tip(claims: List[dict], total: float, assumptions: dict) -> O
         f"{len(values):,} people with any claim) account for AED {cohort_spend:,.0f} of "
         f"AED {total:,.0f}. Broad measures - benefit trims, blanket rate rises - act on the "
         f"{(1 - share) * 100:.0f}% that is not the problem.",
-        f"Put named case management on this cohort: care coordination, adherence follow-up, "
-        f"and pre-authorisation review on their recurring claims. It is a tractable list of "
-        f"people, not a population-wide programme.",
+        "Put named case management on this cohort: care coordination, adherence follow-up, "
+        "and pre-authorisation review on their recurring claims. It is a tractable list of "
+        "people, not a population-wide programme.",
         cohort_spend * reduction,
         f"{reduction * 100:.0f}% of the cohort's own AED {cohort_spend:,.0f} - an assumption "
         f"about what active management recovers, applied to a measured base.",

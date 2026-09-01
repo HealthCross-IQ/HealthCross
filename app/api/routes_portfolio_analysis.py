@@ -10,7 +10,6 @@ from datetime import date
 from typing import Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, UploadFile, File
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -34,7 +33,6 @@ from app.scoring.rules.portfolio_analysis import (
     loss_ratio_shed_impact,
     DEFAULT_EXPENSE_RATIO_PCT,
     DEFAULT_LARGE_CLAIM_THRESHOLDS,
-    analyze_portfolio_member,
     claims_above_thresholds,
     demographic_summary,
     executive_portfolio_summary,

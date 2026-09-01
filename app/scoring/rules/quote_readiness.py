@@ -22,7 +22,6 @@ and they need opposite responses.
 
 Pure functions over plain dicts - no ORM, no database.
 """
-from collections import defaultdict
 from typing import Dict, List, Optional
 
 #: Every field a category needs before it can be priced. All three, or the

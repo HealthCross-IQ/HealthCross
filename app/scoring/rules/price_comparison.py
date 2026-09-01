@@ -34,7 +34,7 @@ That is worth seeing at the moment the discount is typed, not at renewal.
 
 Pure functions over plain numbers - no ORM, no database.
 """
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 #: Below this the two prices are the same number written twice - a
 #: rounding difference between the portal's own arithmetic and whatever

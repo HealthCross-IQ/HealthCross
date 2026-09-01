@@ -51,7 +51,6 @@ from app.scoring.rules.renewal_rating import (
     RenewalRatingAssumptions,
     _median,
     benchmark_case_against_book,
-    calculate_renewal_rating,
     calculate_renewal_rating_two_methods,
     pricing_input_problems,
     renewal_from_loss_ratio,

@@ -1,7 +1,6 @@
 import io
 
 import pandas as pd
-import pytest
 
 
 def _xlsx_bytes(df: pd.DataFrame) -> bytes:

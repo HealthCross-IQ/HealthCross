@@ -703,7 +703,6 @@ def get_risk_based_price(
     re-entered: what makes this a suggestion rather than a form is that
     the census and the benefits are the only inputs.
     """
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.expected_cost_pricing import price_by_category
     from app.scoring.rules.nationality_mix_pricing import nationality_mix_factor, within_zone_rows
     from app.scoring.rules.portfolio_analysis import nationality_risk_table
@@ -740,7 +739,6 @@ def get_risk_based_price(
             detail="Portfolio Analysis has no membership/claims uploaded - there is no experience to price against",
         )
 
-    rate_cards = book_repo.rate_cards(db)
     if cube["book"]["burning_cost"] is None:
         raise HTTPException(status_code=400, detail="The book has no claims experience to price against")
 
@@ -890,7 +888,6 @@ def get_rate_card_calibration(
     is a commercial document too and a cell may be knowingly held below
     cost to win a segment.
     """
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.rate_card_calibration import (
         calibration_summary_by_product,
         rate_card_calibration,
@@ -955,7 +952,6 @@ def get_new_business_quote_burning_cost_comparison(
     that's optional supporting data; still 404s when there's no quote to
     compare against.
     """
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube
     from app.scoring.rules.expected_cost_pricing import price_by_category
 
     case = db.get(models.Case, case_id)
@@ -977,7 +973,6 @@ def get_new_business_quote_burning_cost_comparison(
         return None
 
     census = _case_census_dicts(case)
-    rate_cards = book_repo.rate_cards(db)
     if cube["book"]["burning_cost"] is None:
         return None
 
@@ -1149,7 +1144,7 @@ def get_opportunity_assessment(
     move the number; only the ones it cannot see are allowed to.
     """
     from app.scoring.rules.benefits_comparison import extract_amount_aed
-    from app.scoring.rules.burning_cost_cube import burning_cost_cube, expected_cost_for_census
+    from app.scoring.rules.burning_cost_cube import expected_cost_for_census
     from app.scoring.rules.opportunity_risk import assess_opportunity, book_benchmarks
     from app.scoring.rules.proposed_benefits import proposed_benefit_rows, proposed_benefit_summary
 
@@ -1561,7 +1556,6 @@ def get_underwriting_report(
     except HTTPException:
         pass
 
-    report = _latest_claims_report_dict(case)
     full_report = next(
         (r for r in sorted(case.claims_reports, key=lambda r: r.report_period_end or date.min, reverse=True)
          if r.report_period_end), None

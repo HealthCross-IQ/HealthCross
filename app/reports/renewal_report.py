@@ -181,7 +181,7 @@ def _premiums(payload: dict) -> str:
          "includes part-year premium for members added and deleted mid-term"),
         ("Annualised expiring", aed(rating.get("renewal_base_premium")),
          esc(expiring.get("source") or "a full year at current rates") +
-         f' &mdash; the renewal is quoted against this'),
+         ' &mdash; the renewal is quoted against this'),
     ]
     if case_premium:
         rows.append(("On the case record", aed(case_premium),

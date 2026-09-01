@@ -29,7 +29,7 @@ with false confidence.
 Pure functions over plain dicts - no ORM, no database.
 """
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 #: How a matched pair was established, strongest first. Surfaced on every
 #: continuing member so an underwriter can see which conclusions rest on

@@ -2,7 +2,6 @@ import pytest
 
 from app.scoring.rules.renewal_rating import (
     DEFAULT_CREDIBILITY_PCT,
-    DEFAULT_IBNR_PCT,
     MIN_CREDIBLE_CASE_COUNT,
     RenewalRatingAssumptions,
     benchmark_case_against_book,
