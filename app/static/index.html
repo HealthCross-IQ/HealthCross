@@ -2896,18 +2896,12 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="member-rates">
       <div class="card">
-        <h3>New Business Rate &mdash; import from the insurer's rate card</h3>
-        <div class="hint">The insurer's own rate card, priced as a Category &times; Age Band &times;
-          Gender grid. Each census member is matched on their own category, age and gender, and the
-          rate that applies to them is filled in below. Members with no matching row are left
-          untouched rather than zeroed.
-          <br><br>This is the INSURER'S card, not this account's expiring rates. The expiring rates
-          are what the member table below already holds - importing overwrites them, so import
-          before you adjust rather than after.</div>
-        <input type="file" id="file-member-rate-card" accept=".xls,.xlsx">
-        <button onclick="importMemberRateCard()">Import rates</button>
-        <span id="status-member-rate-card" class="status-pending"></span>
-        <div id="member-rate-card-error"></div>
+        <h3>Member premium</h3>
+        <div class="hint">Each member's own expiring annual rate, entered here. The grid below
+          totals them into this account's annualised expiring premium &mdash; the figure the
+          renewal increase is measured against &mdash; and applies the case's renewal increase to
+          give each member's new rate. An insurer's rate card is a different thing and is imported
+          on the New Business Quote tab.</div>
       </div>
       <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('member-rates', 'Existing vs. New Rates by Member')">Print / Save as PDF</button></div>
       <div id="member-rates-area"></div>
@@ -2918,6 +2912,20 @@ function renderCaseWorkspace() {
         <button onclick="printTabAsPdf('new-business', 'New Business Rating')">Print / Save as PDF</button>
         <button onclick="openUnderwritingDashboard()">Underwriting Dashboard (Internal)</button>
         <button class="primary" onclick="printNewBusinessSummary('broker')">Quotation (Broker)</button>
+      </div>
+      <div class="card">
+        <h3>New Business Rate &mdash; the insurer's PRICE grid</h3>
+        <div class="hint"><strong>Takes prices.</strong> A Category &times; Age Band &times; Gender
+          grid of premiums. Each census member is matched on their own category, age and gender and
+          given the rate that applies to them; members with no matching row are left untouched
+          rather than zeroed. Writes into the Member Rates table, so it overwrites what is there -
+          import before adjusting, not after.
+          <br><br>Not the same as a Plan Details export, which lists benefits and carries no
+          premiums - that goes to <em>Import the offer from the pricing tool</em> further down.</div>
+        <input type="file" id="file-member-rate-card" accept=".xls,.xlsx">
+        <button onclick="importMemberRateCard()">Import rates</button>
+        <span id="status-member-rate-card" class="status-pending"></span>
+        <div id="member-rate-card-error"></div>
       </div>
       <div id="new-business-rating-area"></div>
     </div>
@@ -7058,8 +7066,12 @@ async function nbRenderArea() {
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
     <div class="card">
-      <h3>Import the offer from the pricing tool</h3>
-      <div class="hint">Drop the pricing tool's own <strong>Plan Details</strong> export here and every category is configured and priced from it - product, network, TPA and every benefit selection, exactly as decided in the tool. Nothing to re-key, and nothing to disagree with the tool that produced it.</div>
+      <h3>Plan Details &mdash; the benefits spec, priced here</h3>
+      <div class="hint"><strong>Takes benefits, not prices.</strong> Drop the pricing tool's own
+        <strong>Plan Details</strong> export here and every category is configured and priced
+        against the HealthCross rate card - product, network, TPA and every benefit selection,
+        exactly as decided in the tool. The file itself carries no premiums; the price is computed
+        here. Nothing to re-key, and nothing to disagree with the tool that produced it.</div>
       <div class="dropzone" id="dropzone-hc-plan-details">
         <span class="kind-label">Plan Details</span>
         <input type="file" id="file-hc-plan-details" accept=".xlsx,.xls,.csv">

@@ -320,3 +320,50 @@ def test_the_failure_reports_rows_that_mention_a_premium_or_an_age():
     except ValueError as e:
         assert "Rows mentioning a premium or an age" in str(e)
         assert "age group" in str(e)
+
+
+def test_a_plan_details_file_is_named_as_such_and_pointed_at_the_right_control():
+    # MPH's file is a benefits spec with no premiums in it at all, so no
+    # amount of layout-widening could ever have read it as a rate card.
+    # It belongs to "Import the offer from the pricing tool", which
+    # prices it against the HealthCross card - and the message says so
+    # rather than reporting a layout problem in a file that has no
+    # prices to lay out.
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Category", "Emirates", "TPA", "Network", "Zone", "Product",
+         "Benefit Name", "Benefit Value"],
+        ["A", "AUH", "MSH MENA", "MSH Platinum", "Worldwide Excluding USA", "Silver",
+         "Annual Limit", "USD 1,000,000"],
+        [None, None, None, None, None, None, "Deductible", "AED 50"],
+    ]).to_excel(buf, sheet_name="Plan Details", index=False, header=False)
+    buf.seek(0)
+
+    try:
+        parse_premium_summary_rate_card(buf)
+        raise AssertionError("a Plan Details file must not be read as a rate card")
+    except ValueError as e:
+        assert "Plan Details file" in str(e)
+        assert "Import the offer from the pricing tool" in str(e)
+
+
+def test_a_real_rate_grid_is_still_read_and_not_mistaken_for_plan_details():
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Category", "Age Band", "Gross Premium"],
+        ["Category A - Male", "0-17", 7933],
+    ]).to_excel(buf, index=False, header=False)
+    buf.seek(0)
+    assert len(parse_premium_summary_rate_card(buf)["rates"]) == 1

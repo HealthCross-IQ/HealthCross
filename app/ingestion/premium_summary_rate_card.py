@@ -159,6 +159,22 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
             f"({type(e).__name__}: {e}). Check the attachment is the .xlsx the insurer sent."
         )
 
+    # A Plan Details export is a benefits SPEC and carries no premiums at
+    # all - it is priced against HealthCross's own rate card by the
+    # "Import and quote" control, not read as a rate card here. The two
+    # files look alike enough that one lands in the other's box, and a
+    # generic "could not find the rate table" sends the reader looking
+    # for a layout problem in a file that simply has no prices in it.
+    for name, frame in sheets.items():
+        labels = {_normalize_label(c) for c in frame.head(3).values.ravel() if not pd.isna(c)}
+        if {"benefit name", "benefit value"} <= labels:
+            raise ValueError(
+                f"That is a Plan Details file - a list of benefits per category, with no premiums "
+                f"in it (sheet \"{name}\"). It is priced against the HealthCross rate card by "
+                f"\"Import the offer from the pricing tool\" on the New Business Quote tab, which "
+                f"reads exactly this layout. This box takes an insurer's PRICE grid instead."
+            )
+
     df = None
     header = None
     for frame in sheets.values():
