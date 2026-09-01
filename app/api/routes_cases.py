@@ -121,6 +121,8 @@ def get_renewal_summary(
     disagree about what a year cost.
     """
     from app.api.case_loading import renewal_loading
+    from app.api.routes_analysis import _case_renewal_rating
+    from app.scoring.rules.renewal_rating import DEFAULT_INFLATION_PCT, renewal_from_loss_ratio
 
     cases = (
         db.query(models.Case)
@@ -166,21 +168,39 @@ def get_renewal_summary(
         gross_lr = (incurred / premium) if premium else None
         net_lr = (incurred / net_premium) if net_premium else None
 
-        # What the premium would need to be for this account to fund its
-        # own claims at the target, after trend and its own expenses.
+        # The increase on this board IS Method 1's, because it is the same
+        # function that produces it - not the same formula reimplemented.
+        #
+        # The board used to run a second formula of its own: claims put on
+        # a full-year footing, multiplied by trend, divided by a house
+        # target loss ratio, then grossed up. Method 1 adds inflation in
+        # POINTS to the loss ratio, divides by (1 - loading), applies no
+        # target and floors the ask at 9%. Two formulas cannot agree - and
+        # matching the arithmetic would not have been enough either, since
+        # Method 1 reads the account off the BOOK where it is on it, while
+        # the board reads the case's own ledger. The list is where an
+        # underwriter decides which case to open, so it was sending them
+        # in on a figure the case itself then contradicted.
+        #
+        # _case_renewal_rating reads the book once for the whole board
+        # (the analysis behind it is cached), so calling it per case is a
+        # lookup rather than a re-analysis.
+        rating = _case_renewal_rating(case)
         required_gross = None
         increase_pct = None
-        if (incurred and target_net_loss_ratio > 0 and earned_fraction
-                and loading is not None and loading < 1):
-            # Claims measured over part of a year have to be put on a
-            # full-year footing before they can price a full year's
-            # premium. Scaling here, at the pricing step, keeps the loss
-            # ratio above a measurement of what has actually happened.
-            full_year_claims = incurred / earned_fraction
-            required_net = full_year_claims * (1 + trend_pct) / target_net_loss_ratio
-            required_gross = required_net / (1 - loading)
-            if annual_premium:
-                increase_pct = round((required_gross / annual_premium - 1) * 100, 1)
+        if rating and not rating.get("pricing_blocked"):
+            required_gross = rating.get("required_premium")
+            increase_pct = rating.get("renewal_increase_pct")
+        elif rating is None and gross_lr is not None and annual_premium and loading is not None:
+            # Not on the book and no rating of its own - the same ladder,
+            # off this board's own measured ratio.
+            ladder = renewal_from_loss_ratio(
+                gross_lr, annual_premium,
+                inflation_pts=DEFAULT_INFLATION_PCT,
+                loading_pct=loading,
+            )
+            required_gross = ladder["required_premium"]
+            increase_pct = ladder["renewal_increase_pct"]
 
         out.append({
             "id": case.id,

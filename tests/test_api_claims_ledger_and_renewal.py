@@ -360,7 +360,11 @@ def test_renewal_rating_credibility_style_dynamic_assumptions(client):
 
     default_resp = client.get(f"/cases/{case_id}/renewal-rating")
     lower_loading_resp = client.get(f"/cases/{case_id}/renewal-rating", params={"loading_pct": 0.10})
-    assert lower_loading_resp.json()["renewal_increase_pct"] < default_resp.json()["renewal_increase_pct"]
+    # Compared on the account's own ask, before the house floor: both
+    # land on the 9% floor here, and the floor is deliberately not a
+    # measurement of anything the loading changes.
+    assert (lower_loading_resp.json()["experience_increase_pct"]
+            < default_resp.json()["experience_increase_pct"])
 
 
 def test_renewal_rating_includes_method_b_alongside_method_a(client):
@@ -500,9 +504,12 @@ def test_renewal_vs_new_business_generates_the_nb_premium_automatically(client, 
     resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["new_business_module_premium"] == 4000.0  # single male, age 30, category A, Gold/Net A, net 3000 grossed up
+    # Single male, age 30, category A, Gold/Net A: net 3,000 grossed up at
+    # the house default for Gold, 30% - 3,000 / 0.70.
+    assert body["new_business_module_premium"] == round(3000.0 / (1 - 0.30), 2)
     assert body["new_business_quote_id"] is not None
-    assert body["gap"] == round(body["renewal_required_premium"] - 4000.0, 2)
+    assert body["gap"] == round(
+        body["renewal_required_premium"] - body["new_business_module_premium"], 2)
 
 
 def test_renewal_vs_new_business_returns_none_for_nb_side_without_a_rate_card(client):

@@ -27,11 +27,18 @@ Per-member formula:
     net_member = base + maternity + variant_impact
 
 Per-category: gross_total = sum(net_member) / (1 - loading_pct), where
-loading_pct = commission (10% default, broker-overridable) + QIC_FEE_PCT
-+ TPA_FEE_PCT + HealthCross's own fee (product-tier-dependent) - the same
-division-based gross-up used everywhere else in this codebase
-(renewal_rating.py, claims_projection.py), not a multiplicative markup.
-Case total is the sum of every category's gross_total.
+loading_pct is the category's own actual loading when one is entered,
+and otherwise the house default for the product tier - 30% on Platinum
+and Gold, 28% on Silver and Bronze - moved by any commission the
+category names (see category_loading_pct). The same division-based
+gross-up used everywhere else in this codebase (renewal_rating.py,
+claims_projection.py), not a multiplicative markup. Case total is the
+sum of every category's gross_total.
+
+New business has a default and a renewal does not, and the difference is
+not an inconsistency: a new account does not exist yet, so there is no
+fee split to enter against it. A renewal has one, entered per account
+and kept up to date - see app/api/case_loading.py.
 """
 from collections import defaultdict
 from typing import Dict, List, Optional, Set
@@ -54,6 +61,25 @@ HEALTHCROSS_FEE_BY_PRODUCT = {
 # defaults to the higher fee so an unrecognized/mistyped product can't
 # silently under-price a quote.
 _DEFAULT_HEALTHCROSS_FEE_PCT = max(HEALTHCROSS_FEE_BY_PRODUCT.values())
+
+#: The house's own default total loading on a new business quote, by
+#: product tier. A new account has no fee split to enter against it - it
+#: does not exist yet - so unlike a renewal, new business does have a
+#: default. These are it.
+#:
+#: They assume DEFAULT_COMMISSION_PCT. A category that names its own
+#: commission moves the total by the difference (see category_loading_pct),
+#: because a broker on 15% costs five points more than one on 10% and the
+#: default cannot know which it is.
+DEFAULT_LOADING_BY_PRODUCT = {
+    "platinum": 0.30,
+    "gold": 0.30,
+    "silver": 0.28,
+    "bronze": 0.28,
+}
+# An unrecognized or mistyped product takes the higher default, so it
+# cannot silently under-price a quote.
+_DEFAULT_LOADING_PCT = max(DEFAULT_LOADING_BY_PRODUCT.values())
 
 
 def _find_rate_card(rate_cards: List[dict], product: str, region: str, network: str, age: Optional[int]) -> Optional[dict]:
@@ -202,10 +228,33 @@ def price_member(member: dict, category: dict, rate_cards: List[dict], variant_r
     }
 
 
-def category_loading_pct(product: str, commission_pct: Optional[float] = None) -> float:
-    commission = DEFAULT_COMMISSION_PCT if commission_pct is None else commission_pct
-    healthcross_fee = HEALTHCROSS_FEE_BY_PRODUCT.get((product or "").strip().lower(), _DEFAULT_HEALTHCROSS_FEE_PCT)
-    return commission + QIC_FEE_PCT + TPA_FEE_PCT + healthcross_fee
+def category_loading_pct(
+    product: str,
+    commission_pct: Optional[float] = None,
+    loading_pct: Optional[float] = None,
+) -> float:
+    """The total loading one new business category is grossed up by.
+
+    In order of authority:
+
+      1. An actual loading entered for this category wins outright. When
+         the real number is known it is not something to derive.
+      2. Otherwise the house default for the product tier - 30% on
+         Platinum and Gold, 28% on Silver and Bronze - adjusted by any
+         commission this category names, since the default assumes
+         DEFAULT_COMMISSION_PCT and a broker on 15% costs five points
+         more than one on 10%.
+
+    The tier default replaced a build-up of commission + QIC + TPA + a
+    product HealthCross fee, which summed to 25% and 26.5% - close enough
+    to look deliberate and not the house numbers.
+    """
+    if loading_pct is not None:
+        return loading_pct
+    base = DEFAULT_LOADING_BY_PRODUCT.get((product or "").strip().lower(), _DEFAULT_LOADING_PCT)
+    if commission_pct is None:
+        return base
+    return base - DEFAULT_COMMISSION_PCT + commission_pct
 
 
 def gross_up(net_total: float, loading_pct: float) -> float:
@@ -243,9 +292,15 @@ def price_case(census: List[dict], categories: List[dict], rate_cards: List[dict
     category_breakdown = []
     case_gross_total = 0.0
     for cat_name, category in categories_by_name.items():
-        loading_pct = category_loading_pct(category["product"], category.get("commission_pct"))
+        loading_pct = category_loading_pct(
+            category["product"], category.get("commission_pct"), category.get("loading_pct"))
         net_total = per_category_net.get(cat_name, 0.0)
-        gross_total = gross_up(net_total, loading_pct)
+        # The case total is the sum of the figures the quote PRINTS, not
+        # of the unrounded ones behind them. Summing unrounded and
+        # rounding once leaves a quote whose categories do not add up to
+        # its own total - a cent, but a reader who checks the addition and
+        # finds it wrong stops trusting the rest of the page.
+        gross_total = round(gross_up(net_total, loading_pct), 2)
         case_gross_total += gross_total
         category_breakdown.append(
             {
@@ -256,7 +311,7 @@ def price_case(census: List[dict], categories: List[dict], rate_cards: List[dict
                 "member_count": len(per_category_members.get(cat_name, [])),
                 "net_annual_premium": round(net_total, 2),
                 "loading_pct": round(loading_pct, 4),
-                "gross_annual_premium": round(gross_total, 2),
+                "gross_annual_premium": gross_total,
                 "member_breakdown": per_category_members.get(cat_name, []),
                 "warnings": sorted(set(per_category_warnings.get(cat_name, []))),
             }

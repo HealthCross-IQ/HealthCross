@@ -772,7 +772,8 @@ def get_risk_based_price(
     priced = price_by_category(
         priced_census, cube,
         loading_pct_by_category={
-            c["category"]: category_loading_pct(c["product"], c.get("commission_pct")) for c in categories
+            c["category"]: category_loading_pct(
+                c["product"], c.get("commission_pct"), c.get("loading_pct")) for c in categories
         },
         default_loading_pct=category_loading_pct(""),
         industry=case.industry,
@@ -982,7 +983,8 @@ def get_new_business_quote_burning_cost_comparison(
     # the quote itself is - using one blended rate would misstate every
     # category whose real loading differs from the average.
     loading_by_category = {
-        c["category"]: category_loading_pct(c["product"], c.get("commission_pct"))
+        c["category"]: category_loading_pct(
+            c["product"], c.get("commission_pct"), c.get("loading_pct"))
         for c in normalized_categories
     }
     # The cube prices on (product, network, ...), which the census rows do
@@ -1322,7 +1324,7 @@ def get_price_comparison(
     loading_pct = category_loading_pct("")
     if quote and quote.categories:
         loadings = [
-            category_loading_pct(c.get("product"), c.get("commission_pct"))
+            category_loading_pct(c.get("product"), c.get("commission_pct"), c.get("loading_pct"))
             for c in _normalize_quote_categories(quote.categories)
             if c.get("product")
         ]
@@ -1429,7 +1431,7 @@ def get_experience_price(
     )
     if quote and quote.categories:
         loadings = [
-            category_loading_pct(c.get("product"), c.get("commission_pct"))
+            category_loading_pct(c.get("product"), c.get("commission_pct"), c.get("loading_pct"))
             for c in _normalize_quote_categories(quote.categories)
             if c.get("product")
         ]

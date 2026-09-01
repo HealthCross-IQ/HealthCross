@@ -480,6 +480,10 @@ class CategoryRatingInput(BaseModel):
     network: str
     tpa: str
     commission_pct: Optional[float] = None
+    #: This category's ACTUAL total loading, when it is known. Overrides
+    #: the product-tier default outright - a real number is not something
+    #: to derive. See new_business_rating.category_loading_pct.
+    loading_pct: Optional[float] = None
     variant_selections: Dict[str, str] = {}
 
 

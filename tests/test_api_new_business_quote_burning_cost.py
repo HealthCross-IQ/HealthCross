@@ -148,7 +148,7 @@ def test_burning_cost_comparison_matches_rate_card_quote_by_category(client, mem
     assert cat["net_annual_premium"] == 90.0
     assert cat["priced_member_count"] == 1
     assert cat["loading_pct"] == rate_card_quote["result"]["categories"][0]["loading_pct"]
-    assert cat["gross_annual_premium"] == pytest.approx(90.0 / (1 - cat["loading_pct"]), rel=1e-6)
+    assert cat["gross_annual_premium"] == pytest.approx(round(90.0 / (1 - cat["loading_pct"]), 2), rel=1e-6)
     assert cat["rate_card_gross_annual_premium"] == rate_card_quote["result"]["categories"][0]["gross_annual_premium"]
 
 
@@ -170,7 +170,7 @@ def test_burning_cost_comparison_matches_a_stale_un_normalized_category_from_bef
         result={
             "categories": [{
                 "category": "a", "product": "Gold", "network": "MSH Platinum", "tpa": "MSH MENA",
-                "member_count": 1, "net_annual_premium": 4000.0, "loading_pct": 0.25,
+                "member_count": 1, "net_annual_premium": 4000.0, "loading_pct": 0.30,
                 "gross_annual_premium": 5333.33, "member_breakdown": [], "warnings": [],
             }],
             "case_gross_annual_premium": 5333.33, "priced_member_count": 1, "uncategorized_member_count": 0,

@@ -57,13 +57,15 @@ def _renewal_case(client, fees=HOUSE_FEES, premium=1_000_000.0, on_the_book=Fals
     db.add(case)
     db.commit()
     db.refresh(case)
+    # Spread across whole months: the renewal rating's ledger path needs
+    # at least six full months before it will rate anything at all.
     db.add_all([
         models.ClaimsLedgerEntry(
-            case_id=case.id, patient_id=f"P{i}", claim_id=f"C{i}",
+            case_id=case.id, patient_id=f"P{i}", claim_id=f"C{i}-{m}",
             final_amount=50_000.0, claim_status="Paid Claims",
             policy_start_date=TERM_START, policy_end_date=TERM_END,
-            date_of_treatment=date(2026, 1, 10))
-        for i in range(12)])
+            date_of_treatment=date(2025, 10 + m, 10) if m < 3 else date(2026, m - 2, 10))
+        for i in range(2) for m in range(9)])
     db.add_all([
         models.CensusRecord(case_id=case.id, employee_ref=f"P{i}", category="A",
                             age=35, gender="M", relation="employee")
@@ -91,8 +93,8 @@ def test_a_renewal_uses_its_own_fees_and_a_new_business_case_uses_the_card(clien
     assert problems == []
     assert loading == 0.33
     # New business has no account to enter a split against, so the rate
-    # card's own model applies - and 26.5% stays where it belongs.
-    assert round(scorecard_loading(fresh), 4) == 0.265
+    # card's own model applies - the house default for the tier.
+    assert round(scorecard_loading(fresh), 4) == 0.30
     db.close()
 
 
@@ -196,3 +198,67 @@ def test_the_scorecard_prices_a_renewal_at_its_own_loading(client):
     case_id = _renewal_case(client)
     resp = client.post(f"/cases/{case_id}/score", json={})
     assert resp.status_code in (200, 400), resp.text
+
+
+# --- the list and the case must quote the same increase ------------------
+
+def test_the_renewal_list_quotes_the_same_increase_as_method_1(client):
+    # The board is where an underwriter decides which case to open. It used
+    # to run its own formula - claims put on a full-year footing, times
+    # trend, over a house target loss ratio - while Method 1 adds inflation
+    # in POINTS, applies no target and floors the ask at 9%. Matching the
+    # arithmetic would not have been enough either: Method 1 reads the
+    # account off the BOOK where it is on it, and the board read the case
+    # ledger. So the board now calls the same function, and this compares
+    # the two ENDPOINTS rather than re-deriving either.
+    case_id = _renewal_case(client, on_the_book=True)
+
+    row = next(r for r in client.get("/cases/renewal-summary").json()["cases"]
+               if r["id"] == case_id)
+    bench = client.get(f"/cases/{case_id}/renewal-rating").json()
+
+    assert row["suggested_increase_pct"] == bench["renewal_increase_pct"]
+    assert row["required_premium"] == bench["required_premium"]
+
+
+def test_the_list_matches_method_1_for_a_case_that_is_not_on_the_book(client):
+    # The fallback path has to agree too - an account off the book is
+    # rated from its own ledger by BOTH screens.
+    case_id = _renewal_case(client)
+
+    row = next(r for r in client.get("/cases/renewal-summary").json()["cases"]
+               if r["id"] == case_id)
+    bench = client.get(f"/cases/{case_id}/renewal-rating").json()
+
+    assert row["suggested_increase_pct"] == bench["renewal_increase_pct"]
+    assert row["required_premium"] == bench["required_premium"]
+
+
+def test_the_list_applies_the_house_floor_like_method_1(client):
+    # A quiet account asking for less than 9% renews at 9% anyway, and the
+    # board has to say the same thing the case does.
+    case_id = _renewal_case(client, premium=100_000_000.0)   # a trivial loss ratio
+    row = next(r for r in client.get("/cases/renewal-summary").json()["cases"]
+               if r["id"] == case_id)
+
+    assert row["suggested_increase_pct"] == 9.0
+
+
+def test_the_floor_applies_on_both_of_method_1s_paths(client):
+    # It did not. The book path floored at 9% and the ledger path did not,
+    # so ONE method quoted +9% on an account read off the book and -97.8%
+    # on the same account read off its own ledger - decided by nothing but
+    # which upload the case happened to match. The floor belongs to the
+    # house, not to a data source.
+    on_book = _renewal_case(client, premium=100_000_000.0, on_the_book=True)
+    off_book = _renewal_case(client, premium=100_000_000.0)
+
+    for case_id in (on_book, off_book):
+        body = client.get(f"/cases/{case_id}/renewal-rating").json()
+        assert body["renewal_increase_pct"] == 9.0, body.get("rating_source")
+        assert body["floor_applied"] is True
+        assert body["minimum_increase_pct"] == 0.09
+        # The account's own ask is still reported beside the floored one -
+        # "needs 9%" and "needs nothing, floored to 9%" are different
+        # conversations and one number cannot tell them apart.
+        assert body["experience_increase_pct"] < 9.0

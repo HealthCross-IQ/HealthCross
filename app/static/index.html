@@ -7050,6 +7050,7 @@ async function loadNewBusinessRating() {
       network: (benefitPlan && benefitPlan.nb_network) || (prior ? prior.network : ''),
       tpa: (benefitPlan && benefitPlan.nb_tpa) || (prior ? prior.tpa : ''),
       commission_pct: prior && prior.commission_pct != null ? prior.commission_pct * 100 : '',
+      loading_pct: prior && prior.loading_pct != null ? prior.loading_pct * 100 : '',
       variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
       previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
       variantOptions: null,
@@ -7671,6 +7672,12 @@ function nbCategoryCardHtml(cat, idx) {
           <input type="number" step="0.1" value="${cat.commission_pct}" onchange="nbSetCommission(${idx}, this.value)">
         </div>
         <div>
+          <label>Actual loading % (optional)</label>
+          <input type="number" step="0.1" value="${cat.loading_pct}"
+                 placeholder="${_nbDefaultLoadingPct(cat.product)}"
+                 onchange="nbSetLoading(${idx}, this.value)">
+        </div>
+        <div>
           <label>Preview variant options for region</label>
           <select onchange="nbSetPreviewRegion(${idx}, this.value)">
             ${(nbRateCardOptions.regions || []).map(r => `<option value="${escapeHtml(r)}" ${cat.previewRegion === r ? 'selected' : ''}>${escapeHtml(r)}</option>`).join('')}
@@ -7755,6 +7762,21 @@ async function nbSetCommission(idx, value) {
   if (_nbReadyToAutoCompute()) await nbComputeQuote();
 }
 
+// The house default total loading by product tier - shown as the
+// placeholder so the field says what it will use if left empty, rather
+// than looking like a required entry. Mirrors
+// new_business_rating.DEFAULT_LOADING_BY_PRODUCT.
+function _nbDefaultLoadingPct(product) {
+  const tier = (product || '').trim().toLowerCase();
+  if (tier === 'silver' || tier === 'bronze') return '28';
+  return '30';
+}
+
+async function nbSetLoading(idx, value) {
+  nbCategories[idx].loading_pct = value;
+  if (_nbReadyToAutoCompute()) await nbComputeQuote();
+}
+
 async function nbUploadFile(kind) {
   const input = document.getElementById(kind === 'pricing' ? 'nb-file-pricing' : 'nb-file-variants');
   const statusEl = document.getElementById(kind === 'pricing' ? 'nb-status-pricing' : 'nb-status-variants');
@@ -7779,6 +7801,7 @@ async function nbComputeQuote() {
     network: c.network,
     tpa: c.tpa,
     commission_pct: c.commission_pct !== '' && c.commission_pct != null ? Number(c.commission_pct) / 100 : null,
+    loading_pct: c.loading_pct !== '' && c.loading_pct != null ? Number(c.loading_pct) / 100 : null,
     variant_selections: c.variant_selections,
   }));
   if (!categories.length) { toast('Pick a Product and Network for at least one category', true); return; }

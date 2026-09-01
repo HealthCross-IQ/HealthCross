@@ -256,6 +256,7 @@ def calculate_renewal_rating(
     current_annual_premium: float,
     assumptions: Optional[RenewalRatingAssumptions] = None,
     renewal_base: Optional[float] = None,
+    minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> dict:
     """annualized_incurred_claims is the ALREADY-incurred figure (Paid +
     Outstanding + IBNR) - IBNR is computed upstream by the caller (see
@@ -302,7 +303,21 @@ def calculate_renewal_rating(
     actual_loss_ratio = annualized_incurred_claims / current_annual_premium
     trended_claims = annualized_incurred_claims * (1 + a.inflation_pct)
     credible_claims = trended_claims * a.credibility_pct
-    required_premium = credible_claims / (1 - a.loading_pct)
+    experience_premium = credible_claims / (1 - a.loading_pct)
+    experience_increase_pct = (experience_premium / base - 1) * 100
+
+    # The house floor, the same one the book path applies. It did not
+    # reach here, so Method 1 quoted +9% on an account it had read off the
+    # book and -97.8% on the same account read off its own ledger - one
+    # method, two answers, decided by which upload the case happened to
+    # match. The floor belongs to the house, not to a data source.
+    if minimum_increase_pct is None:
+        floored = False
+        required_premium = experience_premium
+    else:
+        floor_premium = base * (1 + minimum_increase_pct)
+        floored = experience_premium < floor_premium
+        required_premium = max(experience_premium, floor_premium)
     renewal_increase_pct = (required_premium / base - 1) * 100
 
     return {
@@ -314,6 +329,13 @@ def calculate_renewal_rating(
         "credible_claims": round(credible_claims, 2),
         "required_premium": round(required_premium, 2),
         "renewal_increase_pct": round(renewal_increase_pct, 2),
+        # Both asks come back, never one folded into the other: "this
+        # account needs 9%" and "this account needs nothing and the house
+        # floor is 9%" are different conversations.
+        "experience_premium": round(experience_premium, 2),
+        "experience_increase_pct": round(experience_increase_pct, 2),
+        "minimum_increase_pct": minimum_increase_pct,
+        "floor_applied": floored,
         "assumptions_used": {
             "inflation_pct": a.inflation_pct,
             "loading_pct": a.loading_pct,
@@ -330,6 +352,7 @@ def calculate_renewal_rating_two_methods(
     loading_pct: float = DEFAULT_LOADING_PCT,
     credibility_pct: float = DEFAULT_CREDIBILITY_PCT,
     renewal_base: Optional[float] = None,
+    minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> dict:
     """Both renewal scorecard methods side by side, each from ITS OWN
     already-incurred claims base (see calculate_renewal_rating's
@@ -346,12 +369,12 @@ def calculate_renewal_rating_two_methods(
     method_a = calculate_renewal_rating(
         incurred_claims_method_a, current_annual_premium,
         RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=1.0),
-        renewal_base=renewal_base,
+        renewal_base=renewal_base, minimum_increase_pct=minimum_increase_pct,
     )
     method_b = calculate_renewal_rating(
         incurred_claims_method_b, current_annual_premium,
         RenewalRatingAssumptions(inflation_pct=inflation_pct, loading_pct=loading_pct, credibility_pct=credibility_pct),
-        renewal_base=renewal_base,
+        renewal_base=renewal_base, minimum_increase_pct=minimum_increase_pct,
     )
     return {
         "method_a": method_a,

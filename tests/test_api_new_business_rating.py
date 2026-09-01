@@ -129,7 +129,7 @@ def test_compute_new_business_quote_for_a_case(client, rate_card_files):
     # net = 2000 (male) + 2200 (married female, Dubai has no surcharge) = 4200
     # loading = 10% + 5% + 5% + 6.5% (Bronze) = 26.5%
     assert body["result"]["categories"][0]["net_annual_premium"] == 4200.0
-    assert body["case_gross_annual_premium"] == round(4200.0 / (1 - 0.265), 2)
+    assert body["case_gross_annual_premium"] == round(4200.0 / (1 - 0.28), 2)
     assert body["opportunity_assessment"]["verdict"] in {"Good", "Marginal", "Poor"}
 
 
@@ -439,7 +439,7 @@ def test_new_business_quote_by_tier_covers_every_product_and_case_totals(client,
     assert [r["product"] for r in by_tier] == ["Platinum", "Gold", "Silver", "Bronze"]
     bronze = next(r for r in by_tier if r["product"] == "Bronze")
     platinum = next(r for r in by_tier if r["product"] == "Platinum")
-    assert bronze["case_gross_annual_premium"] == pytest.approx(4200.0 / (1 - 0.265), rel=1e-6)
+    assert bronze["case_gross_annual_premium"] == pytest.approx(round(4200.0 / (1 - 0.28), 2), rel=1e-6)
     assert platinum["case_gross_annual_premium"] > bronze["case_gross_annual_premium"]
 
 
@@ -467,7 +467,7 @@ def _insert_stale_quote(client, case_id, category_letter):
         "categories": [
             {
                 "category": category_letter, "product": "Bronze", "network": "Net A", "tpa": "TPA X",
-                "member_count": 2, "net_annual_premium": 4200.0, "loading_pct": 0.265,
+                "member_count": 2, "net_annual_premium": 4200.0, "loading_pct": 0.28,
                 "gross_annual_premium": 5714.29, "member_breakdown": [], "warnings": [],
             }
         ],
@@ -530,7 +530,7 @@ def test_new_business_quote_by_tier_matches_a_stale_un_normalized_category_from_
     resp = client.get(f"/cases/{case_id}/new-business-quote/by-tier")
     assert resp.status_code == 200
     bronze = next(r for r in resp.json() if r["product"] == "Bronze")
-    assert bronze["case_gross_annual_premium"] == pytest.approx(4200.0 / (1 - 0.265), rel=1e-6)
+    assert bronze["case_gross_annual_premium"] == pytest.approx(round(4200.0 / (1 - 0.28), 2), rel=1e-6)
     assert bronze["categories"][0]["member_count"] == 2
 
 

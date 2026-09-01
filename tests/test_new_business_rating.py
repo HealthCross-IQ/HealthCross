@@ -153,11 +153,31 @@ def test_unknown_selected_option_is_flagged_and_falls_back_to_base():
     assert any("No rate found for Annual Limit option" in w for w in result["warnings"])
 
 
-def test_category_loading_pct_matches_platinum_vs_bronze_healthcross_fee():
-    # commission 10% + QIC 5% + TPA 5% + HealthCross fee (5% Platinum/Gold, 6.5% Silver/Bronze)
-    assert category_loading_pct("Platinum") == 0.25
-    assert category_loading_pct("Bronze") == 0.265
-    assert category_loading_pct("Bronze", commission_pct=0.0) == 0.165
+def test_the_house_default_loading_is_by_product_tier():
+    # 30% on Platinum and Gold, 28% on Silver and Bronze. These replaced a
+    # build-up of commission + QIC + TPA + a product HealthCross fee that
+    # summed to 25% and 26.5% - close enough to look deliberate, and not
+    # the house numbers.
+    assert category_loading_pct("Platinum") == 0.30
+    assert category_loading_pct("Gold") == 0.30
+    assert category_loading_pct("Silver") == 0.28
+    assert category_loading_pct("Bronze") == 0.28
+    # An unrecognized product takes the higher default rather than
+    # silently under-pricing the quote.
+    assert category_loading_pct("Titanium") == 0.30
+
+
+def test_a_category_that_names_its_own_commission_moves_the_default():
+    # The default assumes 10%. A broker on 15% costs five points more.
+    assert round(category_loading_pct("Gold", commission_pct=0.15), 4) == 0.35
+    assert round(category_loading_pct("Bronze", commission_pct=0.0), 4) == 0.18
+
+
+def test_an_actual_loading_overrides_the_default_outright():
+    # When the real number is known it is not something to derive - and
+    # it beats the commission adjustment too.
+    assert category_loading_pct("Gold", loading_pct=0.22) == 0.22
+    assert category_loading_pct("Gold", commission_pct=0.15, loading_pct=0.22) == 0.22
 
 
 def test_gross_up_divides_rather_than_multiplies():
