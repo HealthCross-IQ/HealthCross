@@ -120,7 +120,7 @@ def get_renewal_summary(
     Ratio board uses (see ibnr_for_member), so the two boards cannot
     disagree about what a year cost.
     """
-    from app.api.routes_scoring import _case_loading_pct
+    from app.api.case_loading import renewal_loading
 
     cases = (
         db.query(models.Case)
@@ -156,8 +156,13 @@ def get_renewal_summary(
 
         annual_premium = case.current_annual_premium
         premium = annual_premium * earned_fraction if annual_premium else None
-        loading = _case_loading_pct(case)
-        net_premium = premium * (1 - loading) if premium else None
+        # This account's own loading. A board of many accounts must not go
+        # blank because one has no fee split, so the row still reports its
+        # GROSS ratio - which needs no loading - and says its net one is
+        # waiting on the split rather than showing a ratio struck at an
+        # expense level nobody entered.
+        loading, loading_problems = renewal_loading(case)
+        net_premium = premium * (1 - loading) if (premium and loading is not None) else None
         gross_lr = (incurred / premium) if premium else None
         net_lr = (incurred / net_premium) if net_premium else None
 
@@ -165,7 +170,8 @@ def get_renewal_summary(
         # own claims at the target, after trend and its own expenses.
         required_gross = None
         increase_pct = None
-        if incurred and target_net_loss_ratio > 0 and loading < 1 and earned_fraction:
+        if (incurred and target_net_loss_ratio > 0 and earned_fraction
+                and loading is not None and loading < 1):
             # Claims measured over part of a year have to be put on a
             # full-year footing before they can price a full year's
             # premium. Scaling here, at the pricing step, keeps the loss
@@ -194,7 +200,10 @@ def get_renewal_summary(
             "earned_fraction": round(earned_fraction, 4),
             "elapsed_days": elapsed,
             "claim_count": len(case.claims_ledger_entries),
-            "loading_pct": round(loading, 4),
+            "loading_pct": round(loading, 4) if loading is not None else None,
+            # Which accounts are waiting on their fee split, so the board
+            # can point at them rather than just showing a gap.
+            "loading_missing": [p["field"] for p in loading_problems] or None,
             "gross_loss_ratio": round(gross_lr, 4) if gross_lr is not None else None,
             "net_loss_ratio": round(net_lr, 4) if net_lr is not None else None,
             "required_premium": round(required_gross, 2) if required_gross else None,
@@ -344,7 +353,7 @@ def get_renewal_premium(
     members who may deliver. Both appear as their own line in the
     build-up.
     """
-    from app.api.routes_scoring import _case_loading_pct
+    from app.api.case_loading import renewal_loading
     from app.scoring.rules.expected_cost_pricing import renewal_premium_from_experience
     from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
 
@@ -390,11 +399,28 @@ def get_renewal_premium(
     if days is not None:
         days = min(days, FULL_POLICY_TERM_DAYS) if days > 0 else None
 
+    # This account's own loading, or no price. Same gate as the renewal
+    # rating: a quote built on an assumed expense level is part invented,
+    # and this endpoint returns a premium an underwriter sends out.
+    effective_loading = loading_pct
+    if effective_loading is None:
+        effective_loading, loading_problems = renewal_loading(case)
+        if loading_problems:
+            return {
+                "gross_premium": None,
+                "risk_premium": None,
+                "increase_pct": None,
+                "expiring_premium": case.current_annual_premium,
+                "elapsed_days": days,
+                "pricing_blocked": True,
+                "pricing_problems": loading_problems,
+            }
+
     priced = renewal_premium_from_experience(
         continuing_incurred=split["continuing"]["incurred"],
         elapsed_days=days,
         ibnr_tail_days=ACCOUNT_IBNR_TAIL_DAYS,
-        loading_pct=loading_pct if loading_pct is not None else _case_loading_pct(case),
+        loading_pct=effective_loading,
         trend_pct=trend_pct,
         non_recurring_claims=non_recurring_claims,
         forward_provision=forward_provision,

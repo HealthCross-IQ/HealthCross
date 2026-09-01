@@ -5,13 +5,19 @@ app/api/routes_cases.py's get_renewal_summary.
 from datetime import date
 
 
-def _case(client, *, premium, start, renewal, claims):
+# A renewal is priced on the loading entered against that account, so a
+# case under test states its fee split the way a real one does.
+HOUSE_FEES = {"tpa_fee_pct": 0.065, "commission_pct": 0.15,
+              "hc_fee_pct": 0.065, "qic_fee_pct": 0.05}
+
+
+def _case(client, *, premium, start, renewal, claims, fees=HOUSE_FEES):
     from app.models import db_models as models
 
     db = client.db_session_local()
     case = models.Case(broker_name="B", company_name="Safran", industry="aviation",
                        business_type="existing", current_annual_premium=premium,
-                       policy_start_date=start, renewal_date=renewal)
+                       policy_start_date=start, renewal_date=renewal, **(fees or {}))
     db.add(case)
     db.commit()
     db.refresh(case)

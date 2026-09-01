@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.api.case_loading import scorecard_loading
 from app.models import db_models as models
 from app.models import schemas
 from app.scoring.engine import ScoringWeights, compute_scorecard
@@ -18,27 +19,6 @@ from app.book import analysis as book_analysis
 router = APIRouter(prefix="/cases", tags=["scoring"])
 
 
-def _case_loading_pct(case: models.Case) -> float:
-    """This case's own total loading - commission, TPA, HealthCross and
-    QIC fees - as a fraction of gross premium. Uses whatever components
-    the case carries and falls back to the standard defaults for any it
-    doesn't, so a case nobody has set fees on is still priced at a real
-    expense level rather than at zero (which would quote pure risk
-    premium as if it were the price).
-    """
-    from app.scoring.rules.new_business_rating import (
-        DEFAULT_COMMISSION_PCT,
-        QIC_FEE_PCT,
-        TPA_FEE_PCT,
-        _DEFAULT_HEALTHCROSS_FEE_PCT,
-    )
-
-    return (
-        (case.commission_pct if case.commission_pct is not None else DEFAULT_COMMISSION_PCT)
-        + (case.tpa_fee_pct if case.tpa_fee_pct is not None else TPA_FEE_PCT)
-        + (case.hc_fee_pct if case.hc_fee_pct is not None else _DEFAULT_HEALTHCROSS_FEE_PCT)
-        + (case.qic_fee_pct if case.qic_fee_pct is not None else QIC_FEE_PCT)
-    )
 
 
 def _book_results(db: Session) -> Optional[list]:
@@ -222,7 +202,7 @@ def score_case(case_id: int, payload: schemas.ScoreRequest, db: Session = Depend
         weights=weights,
         estimated_annual_premium=payload.estimated_annual_premium,
         cube=_book_cube(db, book_results),
-        loading_pct=_case_loading_pct(case),
+        loading_pct=scorecard_loading(case),
     )
 
     portfolio_reference = _portfolio_reference(db, case, results=book_results)

@@ -1567,6 +1567,12 @@ async function hcRailRenewalBench() {
     const s = byId[c.id] || {};
     const lr = s.net_loss_ratio;
     const inc = s.suggested_increase_pct;
+    // A net ratio needs this account's own loading, and a dash gives the
+    // reader no way to tell "no claims yet" from "nobody has entered the
+    // fee split". The gross ratio is still real either way, so it is
+    // shown instead of a blank.
+    const waiting = s.loading_missing ? 'Needs fee split' : null;
+    const grossLr = s.gross_loss_ratio;
     return `
     <tr style="cursor:pointer;" onclick="selectCaseAndOpenRenewalBench(${c.id})">
       <td>${escapeHtml(c.company_name)}</td>
@@ -1575,7 +1581,9 @@ async function hcRailRenewalBench() {
       <td>${c.status}</td>
       <td style="text-align:right;">${money(c.current_annual_premium)}</td>
       <td style="text-align:right;">${s.incurred_claims ? money(s.incurred_claims) : '-'}</td>
-      <td style="text-align:right;"><span class="tier-pill ${lr == null ? '' : lr > 1 ? 'dir-review' : lr >= 0.7 ? 'dir-same' : 'dir-improved'}">${lr == null ? '-' : (lr * 100).toFixed(0) + '%'}</span></td>
+      <td style="text-align:right;">${waiting
+        ? `<span class="tier-pill dir-review" title="Enter this account's TPA, commission, HealthCross and carrier fees on the case record - a renewal is not priced on an assumed loading.">${grossLr == null ? '' : (grossLr * 100).toFixed(0) + '% gross &middot; '}${waiting}</span>`
+        : `<span class="tier-pill ${lr == null ? '' : lr > 1 ? 'dir-review' : lr >= 0.7 ? 'dir-same' : 'dir-improved'}">${lr == null ? '-' : (lr * 100).toFixed(0) + '%'}</span>`}</td>
       <td style="text-align:right; font-weight:600;">${inc == null ? '-' : (inc > 0 ? '+' : '') + inc.toFixed(0) + '%'}</td>
     </tr>`;
   }).join('');
@@ -1584,7 +1592,7 @@ async function hcRailRenewalBench() {
     <div class="card">
       <h3>Renewal Bench</h3>
       <div class="hint">Pick a renewal case below to open its Renewal Bench tab directly - the Method A/B scorecard, renewal-vs-new-business comparison, large claims insights, and census movement.</div>
-      <div class="hint"><strong>Net LR</strong> is each case's own claims against its own premium after that case's loading. <strong>Suggested increase</strong> is what would bring it back to break-even after ${summary ? (summary.trend_pct * 100).toFixed(0) : 10}% trend - the opening position for the renewal conversation, not the final answer. A case with no claims ledger yet shows "-" rather than a misleading zero.</div>
+      <div class="hint"><strong>Net LR</strong> is each case's own claims against its own premium after <strong>that account's own entered loading</strong> - never an assumed one, so an account whose fee split has not been entered shows its gross ratio and "Needs fee split" instead. <strong>Suggested increase</strong> is what would bring it back to break-even after ${summary ? (summary.trend_pct * 100).toFixed(0) : 10}% trend - the opening position for the renewal conversation, not the final answer. A case with no claims ledger yet shows "-" rather than a misleading zero.</div>
       ${cases.length ? `<table>
         <tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th>
           <th style="text-align:right;">Current premium</th><th style="text-align:right;">Incurred claims</th>
