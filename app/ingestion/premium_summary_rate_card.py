@@ -62,6 +62,36 @@ def parse_age_band_range(label: str) -> Optional[Tuple[int, int]]:
     return None
 
 
+#: Header labels, as insurers actually write them. Only "Category",
+#: "Age Band" and "Gross Premium" were accepted, and a card writing
+#: "Age Group" or "Annual Premium" - the same grid under different
+#: words - reported that it had no rate table at all. All three still
+#: have to appear on one row, which is what keeps a benefits sheet with
+#: a stray "Premium" column from matching.
+_CATEGORY_LABELS = ("category", "categories", "cat", "class", "plan", "tier", "band")
+_AGE_LABELS = ("age band", "age bands", "age group", "age range", "age", "ages")
+_PREMIUM_LABELS = ("gross premium", "annual premium", "premium", "gross rate",
+                   "annual rate", "rate", "gross")
+
+
+def _label_matches(label: str, options: tuple) -> bool:
+    return any(label == o or label.startswith(o + " ") or label.startswith(o + " in ")
+               or label.startswith(o + "(") or label.startswith(o + " (")
+               for o in options)
+
+
+def _is_category_label(label: str) -> bool:
+    return _label_matches(label, _CATEGORY_LABELS)
+
+
+def _is_age_band_label(label: str) -> bool:
+    return _label_matches(label, _AGE_LABELS)
+
+
+def _is_premium_label(label: str) -> bool:
+    return _label_matches(label, _PREMIUM_LABELS)
+
+
 def _find_rate_table_header(df: pd.DataFrame) -> Optional[Tuple[int, int, int, int]]:
     """Scans for the row carrying "Category"/"Age Band"/"Gross Premium"
     column labels - returns (header_row, category_col, age_band_col,
@@ -73,11 +103,11 @@ def _find_rate_table_header(df: pd.DataFrame) -> Optional[Tuple[int, int, int, i
             if pd.isna(cell):
                 continue
             label = _normalize_label(cell)
-            if label == "category":
+            if _is_category_label(label):
                 category_col = col_idx
-            elif label.startswith("age band"):
+            elif _is_age_band_label(label):
                 age_band_col = col_idx
-            elif label.startswith("gross premium"):
+            elif _is_premium_label(label):
                 premium_col = col_idx
         if category_col is not None and age_band_col is not None and premium_col is not None:
             return row_idx, category_col, age_band_col, premium_col
@@ -152,12 +182,28 @@ def parse_premium_summary_rate_card(file: BinaryIO) -> dict:
                      if not pd.isna(c) and str(c).strip()]
             if cells:
                 seen.append(" | ".join(cells[:6]))
+        # Where the grid might be, if it is anywhere. Reporting only the
+        # first five rows is useless on a sheet whose rate table sits
+        # below a page of benefits, so this reports every row that names
+        # a premium or an age - which is what the header row must do.
+        candidates = []
+        for frame in sheets.values():
+            for row_idx in range(len(frame)):
+                labels = [_normalize_label(c) for c in frame.iloc[row_idx].tolist()
+                          if not pd.isna(c)]
+                if any(_is_premium_label(x) or _is_age_band_label(x) for x in labels):
+                    candidates.append(f"row {row_idx + 1}: "
+                                      + " | ".join(x for x in labels if x)[:110])
+                if len(candidates) >= 4:
+                    break
         raise ValueError(
-            "Could not find the rate table on any sheet. This importer looks for a header row "
-            "carrying Category, Age Band and Gross Premium columns (the insurer's Premium "
-            f"Summary layout). Sheets read: {', '.join(map(str, sheets)) or '(none)'}. "
-            f"The first sheet reads: "
-            + (" // ".join(seen[:5]) if seen else "(empty)")
+            "Could not find the rate table on any sheet. This importer needs one row carrying a "
+            "category column, an age-band column and a premium column together. "
+            f"Sheets read: {', '.join(map(str, sheets)) or '(none)'}. "
+            f"The first sheet reads: " + (" // ".join(seen[:5]) if seen else "(empty)")
+            + (". Rows mentioning a premium or an age: " + " // ".join(candidates)
+               if candidates else ". No row anywhere in the file mentions a premium or an age band, "
+               "so this workbook does not appear to contain a rate grid at all.")
         )
     header_row, category_col, age_band_col, premium_col = header
 

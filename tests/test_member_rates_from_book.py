@@ -148,7 +148,7 @@ def test_a_sheet_that_is_not_a_rate_card_names_what_it_found(client):
     )
     assert resp.status_code == 400
     detail = resp.json()["detail"]
-    assert "Category, Age Band and Gross Premium" in detail
+    assert "a category column, an age-band column and a premium column" in detail
     assert "Employee" in detail, "the message must quote what the sheet actually held"
 
 
@@ -243,3 +243,80 @@ def test_the_failure_names_every_sheet_it_looked_at(client):
     assert resp.status_code == 400
     detail = resp.json()["detail"]
     assert "Benefits" in detail and "Census" in detail, "name the sheets that were searched"
+
+
+def test_the_grid_is_found_under_the_words_insurers_actually_use():
+    # Only "Category"/"Age Band"/"Gross Premium" were accepted. The same
+    # grid written "Age Group"/"Annual Premium" reported no rate table at
+    # all - and on MPH's card it sits below a page of benefits on a
+    # single sheet named "Plan Details", so the first rows never showed it.
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Category", "Emirates", "TPA", "Network", "Zone", "Product"],
+        ["A", "AUH", "MSH MENA", "MSH Platinum", "Worldwide Excluding USA", "Silver"],
+        ["Pre-existing & Chronic conditions", "Covered up to policy limit"],
+        [None, None],
+        ["Category", "Age Group", "Annual Premium"],
+        ["Category A - Male", "0-17", 7933],
+        ["Category A - Female", "18-40", 11865],
+    ]).to_excel(buf, sheet_name="Plan Details", index=False, header=False)
+    buf.seek(0)
+
+    rates = parse_premium_summary_rate_card(buf)["rates"]
+    assert len(rates) == 2
+    assert rates[0]["premium"] == 7933.0
+
+
+def test_a_benefits_sheet_with_a_stray_premium_word_is_not_mistaken_for_a_grid():
+    # All three columns must appear on one row, which is what keeps the
+    # widened labels from matching a benefits page.
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Benefit", "Premium"],
+        ["Pre-existing & Chronic conditions", "Covered up to policy limit"],
+    ]).to_excel(buf, index=False, header=False)
+    buf.seek(0)
+
+    try:
+        parse_premium_summary_rate_card(buf)
+        raise AssertionError("a benefits sheet must not parse as a rate grid")
+    except ValueError as e:
+        assert "Could not find the rate table" in str(e)
+
+
+def test_the_failure_reports_rows_that_mention_a_premium_or_an_age():
+    # Five rows off the top is useless on a sheet whose grid sits below a
+    # page of benefits; the message has to say where to look.
+    import io
+
+    import pandas as pd
+
+    from app.ingestion.premium_summary_rate_card import parse_premium_summary_rate_card
+
+    buf = io.BytesIO()
+    pd.DataFrame([
+        ["Plan", "Network"],
+        ["Silver", "MSH Platinum"],
+        [None, None],
+        ["Age Group", "Something Else"],
+    ]).to_excel(buf, index=False, header=False)
+    buf.seek(0)
+
+    try:
+        parse_premium_summary_rate_card(buf)
+        raise AssertionError("should not parse")
+    except ValueError as e:
+        assert "Rows mentioning a premium or an age" in str(e)
+        assert "age group" in str(e)
