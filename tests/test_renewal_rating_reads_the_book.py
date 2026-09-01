@@ -644,3 +644,16 @@ def test_blocking_the_price_does_not_blank_the_rest_of_the_case(client):
     assert body["case_renewal_increase_pct"] is None
 
     assert client.get(f"/cases/{case_id}/renewal-bench-summary").status_code == 200
+
+
+def test_the_new_business_comparison_works_without_a_case_ledger(client):
+    # A renewal priced off the book has no per-case claims ledger, which
+    # is exactly the renewal this comparison is most useful for.
+    _nomada(client)
+    case_id = _case(client)
+    _rate_the_census(client, case_id, [10_801.0] * 5 + [5_498.0] * 9)
+
+    resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["renewal_required_premium"] is not None

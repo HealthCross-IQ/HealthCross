@@ -1520,14 +1520,18 @@ def get_renewal_vs_new_business(case_id: int, db: Session = Depends(get_db)):
     is still useful on its own.
     """
     case = _get_case_or_404(db, case_id)
-    if not case.claims_ledger_entries:
+    # An account priced off the book brings its own claims and its own
+    # premium, so neither a case ledger nor a typed premium is required -
+    # the same guard /renewal-rating already carries. Demanding them here
+    # 404'd the comparison on exactly the renewals it is most useful for.
+    renewal = _case_renewal_rating(case)
+    if renewal is None and not case.claims_ledger_entries:
         raise HTTPException(status_code=404, detail="No claims ledger uploaded for this case")
-    if not case.current_annual_premium:
+    if renewal is None and not case.current_annual_premium:
         raise HTTPException(
             status_code=400,
             detail="Case has no current_annual_premium set - PATCH /cases/{id} with the expiring premium first",
         )
-    renewal = _case_renewal_rating(case)
     if renewal is None:
         raise HTTPException(status_code=400, detail="Not enough full months of claims data to compute a renewal rating")
 
