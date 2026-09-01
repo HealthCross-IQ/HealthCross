@@ -2896,8 +2896,14 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="member-rates">
       <div class="card">
-        <h3>Import existing rates from a rate card</h3>
-        <div class="hint">Upload the insurer's Premium Summary rate card (Category &times; Age Band &times; Gender grid) - each census member's existing rate is filled in automatically by matching their own category/age/gender against it. Members with no matching row are left untouched.</div>
+        <h3>New Business Rate &mdash; import from the insurer's rate card</h3>
+        <div class="hint">The insurer's own rate card, priced as a Category &times; Age Band &times;
+          Gender grid. Each census member is matched on their own category, age and gender, and the
+          rate that applies to them is filled in below. Members with no matching row are left
+          untouched rather than zeroed.
+          <br><br>This is the INSURER'S card, not this account's expiring rates. The expiring rates
+          are what the member table below already holds - importing overwrites them, so import
+          before you adjust rather than after.</div>
         <input type="file" id="file-member-rate-card" accept=".xls,.xlsx">
         <button onclick="importMemberRateCard()">Import rates</button>
         <span id="status-member-rate-card" class="status-pending"></span>
