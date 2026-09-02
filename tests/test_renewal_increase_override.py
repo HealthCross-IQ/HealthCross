@@ -166,3 +166,21 @@ def test_the_new_business_tab_leads_with_the_benefits_import():
     manual = markup.index("Or set each category by hand")
     admin = markup.index("${uploadCard}\n    <div id=\"nb-readiness-area\">")
     assert start < manual < admin, "the import must come before the manual setup and the admin upload"
+
+
+def test_the_renewal_documents_are_all_on_the_renewal_bench():
+    # A renewal's three outputs sat on two different tabs - the Review on
+    # the Renewal Bench, the Internal and External summaries on CLAIMS -
+    # with nothing saying which was which or who each was for.
+    import pathlib
+    markup = (pathlib.Path(__file__).resolve().parent.parent
+              / "app" / "static" / "index.html").read_text()
+
+    bench = markup.index('data-tab="renewal-bench"')
+    for label in ("Renewal Review &mdash; the meeting",
+                  "Internal &mdash; the file",
+                  "External &mdash; the client"):
+        assert markup.index(label) > bench, f"{label} is not on the Renewal Bench"
+    # And not left behind on the claims tab.
+    claims = markup.index('data-tab="claims"')
+    assert markup.index("printRenewalClientSummary('internal')") > bench > claims

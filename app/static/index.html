@@ -2923,10 +2923,10 @@ function renderCaseWorkspace() {
              a "Renewal Summary" on one is an empty document with a
              misleading name. The New Business tab carries its own two
              exports instead. -->
-        <span data-renewal-only>
-          <button onclick="printRenewalClientSummary('internal')">Renewal Summary (Internal)</button>
-          <button onclick="printRenewalClientSummary('external')">Renewal Summary (External)</button>
-        </span>
+        <!-- The two Renewal Summaries moved to the Renewal Bench, where
+             the rest of the renewal's documents are. They were on the
+             CLAIMS tab, so a renewal's three outputs sat on two
+             different tabs with nothing saying which was which. -->
       </div>
       <div id="claims-report-year-area"></div>
       <div id="claims-report-comparison-area"></div>
@@ -3015,9 +3015,20 @@ function renderCaseWorkspace() {
           <div id="renewal-bench-premium-area"></div>
           <div id="renewal-bench-nb-area"></div>
         </div>
-        <div style="text-align:right; margin-top:4px; display:flex; gap:8px; justify-content:flex-end;">
-          <button class="primary" onclick="openRenewalReport()">Renewal Review (one page)</button>
-          <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print this tab</button>
+        <div class="card" style="margin-top:14px;">
+          <h3>Documents</h3>
+          <div class="hint">Three, by who reads them. All price the renewal the same way &mdash;
+            Method A, the figure quoted everywhere in the portal &mdash; so they cannot disagree
+            with each other or with the screens above.</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
+            <button class="primary" onclick="openRenewalReport()"
+                    title="One page: what the account cost, what it therefore needs, and what the claims are made of - in the order the conversation goes.">Renewal Review &mdash; the meeting</button>
+            <button onclick="printRenewalClientSummary('internal')"
+                    title="The underwriting file: the price build-up, the new-business comparison, the opportunity assessment and the experience price.">Internal &mdash; the file</button>
+            <button onclick="printRenewalClientSummary('external')"
+                    title="Client-facing: current versus proposed cover and the premium, without the internal workings.">External &mdash; the client</button>
+            <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print this tab as-is</button>
+          </div>
         </div>
       </div>
     </div>
@@ -3102,7 +3113,12 @@ function _statTileHtml(label, value, sub) {
 
 /* Exports that only mean something on a renewal. A new-business case has
    no expiring premium to renew from, so a "Renewal Summary" printed on
-   one is an empty document with a confident name on it. */
+   one is an empty document with a confident name on it.
+
+   Nothing carries data-renewal-only at the moment: the renewal documents
+   now live on the Renewal Bench, which is itself only shown on a
+   renewal, so the tab does the gating. Kept because the mechanism is the
+   right one for anything renewal-only that lands on a SHARED tab. */
 function applyBusinessTypeVisibility() {
   const isRenewal = currentCase && currentCase.business_type === 'existing';
   document.querySelectorAll('[data-renewal-only]').forEach(el => {
