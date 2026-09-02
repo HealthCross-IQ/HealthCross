@@ -131,3 +131,21 @@ def test_the_card_price_is_reachable_for_a_renewal_case(client):
     case_id = _renewal_case(client, on_the_book=True)
     resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
     assert resp.status_code == 200
+
+
+def test_a_renewal_is_not_offered_a_third_partys_price_grid(client):
+    # That import writes straight into Member Rates and overwrites what is
+    # there - and on a renewal what is there is the account's own expiring
+    # rates off the book or the uploaded census. It was also the box that
+    # kept failing, because the file reached for on a renewal is a Plan
+    # Details export with no premiums in it. HealthCross's own rate card,
+    # which is what a renewal needs, stays.
+    import pathlib
+    markup = (pathlib.Path(__file__).resolve().parent.parent
+              / "app" / "static" / "index.html").read_text()
+    assert "${c.business_type === 'existing' ? '' : `" in markup
+    # The handler survives the input not being on the page.
+    assert "if (!input) return;" in markup
+    # The card itself - the thing that works - is untouched.
+    assert 'id="nb-file-pricing"' in markup
+    assert 'id="nb-file-variants"' in markup

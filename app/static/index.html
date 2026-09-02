@@ -2965,6 +2965,16 @@ function renderCaseWorkspace() {
         <button onclick="openUnderwritingDashboard()">Underwriting Dashboard (Internal)</button>
         <button class="primary" onclick="printNewBusinessSummary('broker')">Quotation (Broker)</button>
       </div>
+      <!-- Importing another insurer's price grid belongs to NEW BUSINESS.
+           It writes straight into Member Rates and overwrites what is
+           there, and on a renewal what is there is the account's own
+           expiring rates off the book or the uploaded census - the one
+           thing that must not be replaced by a third party's grid. It
+           was also the box that kept failing, because the files reached
+           for on a renewal are Plan Details exports with no premiums in
+           them. HealthCross's own rate card, below, is what a renewal
+           actually needs, and it is already loaded. -->
+      ${c.business_type === 'existing' ? '' : `
       <div class="card">
         <h3>New Business Rate &mdash; the insurer's PRICE grid</h3>
         <div class="hint"><strong>Takes prices.</strong> A Category &times; Age Band &times; Gender
@@ -2978,7 +2988,7 @@ function renderCaseWorkspace() {
         <button onclick="importMemberRateCard()">Import rates</button>
         <span id="status-member-rate-card" class="status-pending"></span>
         <div id="member-rate-card-error"></div>
-      </div>
+      </div>`}
       <div id="new-business-rating-area"></div>
     </div>
 
@@ -3537,6 +3547,9 @@ async function loadMemberRates() {
 async function importMemberRateCard() {
   const input = document.getElementById('file-member-rate-card');
   const statusEl = document.getElementById('status-member-rate-card');
+  // Absent on a renewal, where importing a third party's price grid over
+  // the account's own expiring rates is not a thing to offer.
+  if (!input) return;
   if (!input.files.length) { toast('Choose a rate card file first', true); return; }
 
   const form = new FormData();
