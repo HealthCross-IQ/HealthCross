@@ -33,6 +33,10 @@ from app.scoring.rules.benefits_summary import STANDARD_FIELDS
 
 from app.scoring.rules.portfolio_analysis import ACCOUNT_IBNR_TAIL_DAYS, FULL_POLICY_TERM_DAYS
 from app.book import repository as book_repo
+from app.scoring.rules.renewal_rating import (
+    DEFAULT_INFLATION_PCT,
+    MINIMUM_RENEWAL_INCREASE_PCT,
+)
 
 router = APIRouter(prefix="/cases", tags=["cases"])
 
@@ -361,7 +365,12 @@ def upload_census(
 @router.get("/{case_id}/renewal-premium")
 def get_renewal_premium(
     case_id: int,
-    trend_pct: float = Query(0.10, description="Medical inflation between the experience period and the policy period"),
+    trend_pct: float = Query(
+        DEFAULT_INFLATION_PCT,
+        description="Medical inflation between the experience period and the policy period. "
+                    "The house figure, the same one the renewal ladder carries - this panel "
+                    "used to default to 10% while everything else beside it used 7.5%.",
+    ),
     loading_pct: Optional[float] = Query(None, description="Total loading as a fraction. Defaults to the case's own fee components."),
     non_recurring_claims: float = Query(0.0, description="Cost judged not to repeat - a completed maternity, a one-off event on a member who has left"),
     forward_provision: float = Query(0.0, description="Expected but not-yet-incurred exposure to add back - e.g. a maternity provision for the members still on risk"),
@@ -425,7 +434,12 @@ def get_renewal_premium(
     ]
     split = claims_by_member_status(account, group_claims_by_beneficiary(claim_rows))
 
-    reference = as_of or date.today()
+    # The day the DATA runs to, not the day someone opened the page.
+    # Defaulting to today read the year as 132 days where the loss ratio
+    # row read 130, which moves the IBNR tail and every figure built on
+    # it - two panels on one screen disagreeing about how long the year
+    # has been running.
+    reference = as_of or book_repo.measurement_date(db) or date.today()
     start = case.policy_start_date
     days = (min(reference, case.renewal_date or reference) - start).days + 1 if start else None
     # Same elapsed-days convention as the Loss Ratio board (inclusive, and
@@ -464,6 +478,11 @@ def get_renewal_premium(
         # The population being priced is the one still on risk at the
         # term's end - joiners who are staying are already in it.
         member_count=split["continuing"]["member_count"],
+        # With the expiring premium in hand the build-up runs the house
+        # ladder: inflation in POINTS and the 9% floor. Without it, it
+        # would be a second renewal price on the same tab.
+        expiring_annual_premium=case.current_annual_premium,
+        minimum_increase_pct=MINIMUM_RENEWAL_INCREASE_PCT,
     )
 
     expiring_premium = case.current_annual_premium

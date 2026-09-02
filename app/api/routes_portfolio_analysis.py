@@ -1191,10 +1191,17 @@ def renewal_repricing(
 
     current_premium = sum(member_annual_rate(m) or 0.0 for m in active) or None
     effective_loading, loading_source = _account_loading(db, master_client, loading_pct)
+    # The account's OWN loss ratio, off the same row the Loss Ratio screen
+    # and the renewal rating use. This panel used to annualise the claims
+    # itself, off complete months x 12, while the rating annualises by the
+    # exposure actually run - the same book claims came out at 1,048,000
+    # one way and 905,373 the other.
+    experience = _account_experience(db, master_client)
     priced = reprice(
         active, by_beneficiary, windows,
         current_premium=current_premium,
         loading_pct=effective_loading,
+        loss_ratio=(experience or {}).get("loss_ratio"),
         exclude=exclude,
         trend_pct=trend_pct if trend_pct is not None else DEFAULT_TREND_PCT,
         data_to=data_to,
@@ -1207,6 +1214,28 @@ def renewal_repricing(
         "loading_source": loading_source,
         "top_claimants": member_claim_ranking(active, by_beneficiary, windows, top=top),
         **priced,
+    }
+
+
+def _account_experience(db: Session, master_client: str) -> Optional[dict]:
+    """The account's own loss ratio, from the row every other screen
+    reads it off - never derived a second time here.
+
+    The latest policy period, because a renewal is about the year that is
+    running rather than one that closed.
+    """
+    rows = book_analysis.account_loss_ratio_rows_for_book(db)
+    target = (master_client or "").strip().casefold()
+    mine = [r for r in rows if (r.get("master_client") or "").strip().casefold() == target]
+    if not mine:
+        return None
+    row = max(mine, key=lambda r: r["policy_start_date"])
+    return {
+        "loss_ratio": row.get("gross_loss_ratio"),
+        "incurred_claims": row.get("incurred_claims"),
+        "earned_premium": row.get("earned_premium"),
+        "days": row.get("days"),
+        "as_of": row.get("as_of"),
     }
 
 

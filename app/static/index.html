@@ -6195,10 +6195,14 @@ async function loadRenewalBenchRepricing() {
   const a = r.as_priced, e = r.excluding;
   if (!a || !a.member_count) { area.innerHTML = ''; return; }
 
+  // The panel used to show its OWN annualised claims here, and that was
+  // the figure that disagreed with the rating. What is priced is the
+  // account's loss ratio, reduced by the held-out members' share of the
+  // claims - so those are the two columns shown.
   const col = (d, label) => !d ? '' : `
     <td class="num">${aed(d.incurred_to_date)}</td>
-    <td class="num">${aed(d.annualised)}</td>
-    <td class="num">${aed(d.trended_claims)}</td>
+    <td class="num">${d.share_of_claims == null ? '&mdash;' : (d.share_of_claims * 100).toFixed(1) + '%'}</td>
+    <td class="num">${d.loss_ratio == null ? '&mdash;' : (d.loss_ratio * 100).toFixed(1) + '%'}${d.floor_applied ? ' <span class="rb-floor-tag">at floor</span>' : ''}</td>
     <td class="num"><strong>${aed(d.required_premium)}</strong></td>
     <td class="num">${sgn(d.increase_vs_current_pct)}</td>`;
 
@@ -6227,11 +6231,11 @@ async function loadRenewalBenchRepricing() {
         ${a.full_months} complete months${(a.months_dropped || []).length
           ? ` (${a.months_dropped.join(', ')} dropped as part months)` : ''},
         ${r.pricing_blocked
-          ? 'carried ' + pct(r.trend_pct) + ' for trend. <strong>No premium below:</strong> nobody has supplied this account&rsquo;s loading, and a renewal is not priced on the house average. Enter the fee split on the case record, or upload the Client Master sheet.'
-          : 'plus ' + pct(r.trend_pct) + ' of inflation in points, over (1 &minus; ' + pct(r.loading_pct) + ' loading) &mdash; Method 1&rsquo;s own ladder, so this table and the renewal card agree. Loading from ' + escapeHtml(r.loading_source || 'the request') + '.'}</div>
+          ? '. <strong>No premium below:</strong> ' + (r.loading_pct == null ? 'nobody has supplied this account&rsquo;s loading, and a renewal is not priced on the house average. Enter the fee split on the case record, or upload the Client Master sheet.' : 'this account has no loss ratio on the book yet.')
+          : '. Priced off the account&rsquo;s own loss ratio of ' + pct(r.account_loss_ratio) + ' &mdash; the same row the Loss Ratio screen renders &mdash; plus ' + pct(r.trend_pct) + ' of inflation in points, over (1 &minus; ' + pct(r.loading_pct) + ' loading). Holding a member out reduces that ratio by their share of the claims. Loading from ' + escapeHtml(r.loading_source || 'the request') + '.'}</div>
       <div class="scroll"><table style="margin-top:12px;">
         <tr><th></th><th class="num">Members</th><th class="num">Incurred</th>
-            <th class="num">Annualised</th><th class="num">Trended</th>
+            <th class="num">Share of claims</th><th class="num">Loss ratio</th>
             <th class="num">Required premium</th><th class="num">vs current</th></tr>
         <tr><th>Everyone in</th><td class="num">${a.member_count}</td>${col(a)}</tr>
         ${e ? `<tr class="total"><th>Holding ${r.excluded_members.length} out</th>

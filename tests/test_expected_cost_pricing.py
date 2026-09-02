@@ -164,9 +164,42 @@ def test_renewal_price_builds_from_continuing_claims_only():
         forward_provision=10_000.0,
         member_count=18,
     )
-    assert priced["risk_premium"] == pytest.approx(147_463.7, abs=1.0)
-    assert priced["gross_premium"] == pytest.approx(220_095.0, abs=2.0)
-    assert priced["premium_per_member"] == pytest.approx(12_227.5, abs=1.0)
+    # 359 of 365 days have run, so the base is scaled to a full year -
+    # 365/359, a touch over 1. The step is small here and enormous on a
+    # part-year account; see the test below.
+    assert priced["annualisation_factor"] == pytest.approx(365 / 359, abs=1e-4)
+    assert priced["risk_premium"] == pytest.approx(149_928.9, abs=1.0)
+    assert priced["gross_premium"] == pytest.approx(223_774.5, abs=2.0)
+
+
+def test_a_part_year_account_is_priced_for_a_full_year():
+    """The renewal covers twelve months. This priced whatever fraction of
+    a year happened to have run.
+
+    Nomada, 130 days into its term: 262,000 of claims plus IBNR, trended
+    and loaded, came out at AED 441,587 - and was shown on the same tab
+    as the same account's correct 1,384,300. Nothing in the build-up said
+    the figure covered four months; it was simply compared against a full
+    annual premium as though it were one.
+    """
+    part_year = renewal_premium_from_experience(
+        continuing_incurred=262_000.0, elapsed_days=130,
+        loading_pct=0.215, trend_pct=0.075,
+    )
+    assert part_year["annualisation_factor"] == pytest.approx(365 / 130, abs=1e-4)
+    assert "Annualise" in [s["label"] for s in part_year["build_up"]]
+    # Roughly 2.8x what the un-annualised build-up produced.
+    assert part_year["gross_premium"] == pytest.approx(1_239_760.0, abs=2_000.0)
+
+
+def test_a_completed_term_is_not_scaled_at_all():
+    # 365/365 is 1, and a step that changes nothing stays out of the
+    # build-up entirely.
+    full_year = renewal_premium_from_experience(
+        continuing_incurred=100_000.0, elapsed_days=365, loading_pct=0.0, trend_pct=0.0)
+    assert full_year["annualisation_factor"] == 1.0
+    assert "Annualise" not in [s["label"] for s in full_year["build_up"]]
+    assert full_year["risk_premium"] == pytest.approx(100_000.0 * (1 + 30 / 365), abs=1.0)
 
 
 def test_the_two_judgement_inputs_stay_separate_lines_rather_than_netting():

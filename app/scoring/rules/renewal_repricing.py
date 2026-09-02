@@ -187,6 +187,8 @@ def reprice(
     windows: Dict[str, List[Tuple]],
     current_premium: Optional[float],
     loading_pct: Optional[float],
+    loss_ratio: Optional[float] = None,
+    incurred_to_date: Optional[float] = None,
     exclude: Sequence[str] = (),
     trend_pct: float = DEFAULT_TREND_PCT,
     data_to: Optional[date_cls] = None,
@@ -208,34 +210,62 @@ def reprice(
     subject is the DIFFERENCE between two prices, and a difference is
     only readable if both sides were arrived at the same way.
 
-    A loading of None withholds the premium rather than assuming one. The
-    claimant ranking and the run-rate still come back, because what is
-    missing is the fee split, not the account.
+    It also takes the account's OWN loss ratio rather than deriving one.
+    It used to annualise the claims itself, off complete months x 12,
+    while the rating annualises by the exposure actually run - and on
+    Nomada the same book claims came out at 1,048,000 one way and 905,373
+    the other, putting 1,456,375 beside the rating's 1,384,300. Same
+    account, same claims, same loading, two annualisations.
+
+    So the ratio comes in and holding a member out reduces it by that
+    member's SHARE of the account's claims. Share rather than amount
+    because the question here is different from the scenarios panel's: a
+    member who is not renewing takes their whole ongoing cost with them,
+    where a catastrophic admission that is stripped happened once and is
+    not annualised at all.
+
+    A loading or a loss ratio of None withholds the premium rather than
+    assuming one. The claimant ranking and the run-rate still come back,
+    because what is missing is the fee split, not the account.
     """
     held_out = [m for m in members if m.get("beneficiary_id") in set(exclude or ())]
     kept = [m for m in members if m.get("beneficiary_id") not in set(exclude or ())]
 
+    # The share of the account's own claims each subset carries. The
+    # denominator is every member's in-term claims, so holding nobody out
+    # is a share of exactly 1 and prices the account as the rating does.
+    all_claims = (annualise(monthly_totals(members, claims_by_beneficiary, windows),
+                            data_to).get("incurred_to_date") or 0.0)
+
     def price(group: Sequence[dict], excluded: Sequence[str] = ()) -> dict:
         monthly = monthly_totals(members, claims_by_beneficiary, windows, exclude=excluded)
         run_rate = annualise(monthly, data_to)
-        annualised = run_rate["annualised"]
+        subset_claims = run_rate.get("incurred_to_date") or 0.0
+        kept_share = (subset_claims / all_claims) if all_claims else 1.0
         count = len(group)
         priced = (
             renewal_from_loss_ratio(
-                annualised / current_premium, current_premium, trend_pct, loading_pct,
+                loss_ratio * kept_share, current_premium, trend_pct, loading_pct,
                 minimum_increase_pct=minimum_increase_pct,
             )
-            if (annualised and current_premium and loading_pct is not None)
+            if (loss_ratio is not None and current_premium and loading_pct is not None)
             else None
         )
         required = priced["required_premium"] if priced else None
         # The claims the ask is built to fund, in money: the trended loss
-        # ratio against the expiring premium. Reported so the panel can
-        # still show the step it always showed, now on the ladder's terms.
+        # ratio against the expiring premium. The panel used to show its
+        # OWN annualised claims here, which is the figure that disagreed
+        # with the rating - it is not reported at all now, because a
+        # number on screen that nothing is priced from is worse than a
+        # missing column.
         trended = round(priced["trended_loss_ratio"] * current_premium, 2) if priced else None
         return {
             "member_count": count,
-            **run_rate,
+            "incurred_to_date": run_rate.get("incurred_to_date"),
+            "full_months": run_rate.get("full_months"),
+            "months_used": run_rate.get("months_used"),
+            "months_dropped": run_rate.get("months_dropped"),
+            "share_of_claims": round(kept_share, 4),
             "loss_ratio": priced["loss_ratio"] if priced else None,
             "trended_loss_ratio": priced["trended_loss_ratio"] if priced else None,
             "floor_applied": priced["floor_applied"] if priced else None,
@@ -266,8 +296,10 @@ def reprice(
         "trend_pct": trend_pct,
         "loading_pct": loading_pct,
         "minimum_increase_pct": minimum_increase_pct,
-        # No fee split, no price. The account is still worth reading.
-        "pricing_blocked": loading_pct is None,
+        "account_loss_ratio": loss_ratio,
+        # No fee split - or no experience on the book - no price. The
+        # account is still worth reading either way.
+        "pricing_blocked": loading_pct is None or loss_ratio is None,
         # Said on every result, because the number invites being quoted.
         "caveat": (
             "Excluding a member shows what the account would have cost without them. It is only "

@@ -101,7 +101,7 @@ def test_no_claims_gives_no_price():
 def test_holding_the_big_claimant_out_lowers_the_price():
     members, by, windows = _fixture()
     r = reprice(members, by, windows, current_premium=43_650.0,
-                loading_pct=0.265, exclude=["BIG"],
+                loading_pct=0.265, loss_ratio=0.80, exclude=["BIG"],
                 data_to=date(2026, 7, 31))
     assert r["excluding"]["required_premium"] < r["as_priced"]["required_premium"]
     assert r["worth_of_exclusion"] > 0
@@ -113,7 +113,7 @@ def test_the_price_with_everybody_in_is_always_returned_too():
     # though it were.
     members, by, windows = _fixture()
     r = reprice(members, by, windows, current_premium=43_650.0,
-                loading_pct=0.265, exclude=["BIG"],
+                loading_pct=0.265, loss_ratio=0.80, exclude=["BIG"],
                 data_to=date(2026, 7, 31))
     assert r["as_priced"]["required_premium"] is not None
     assert r["excluded_members"] == [{"beneficiary_id": "BIG", "relation": "Main Insured"}]
@@ -121,14 +121,14 @@ def test_the_price_with_everybody_in_is_always_returned_too():
 
 def test_every_exclusion_carries_its_condition_in_writing():
     members, by, windows = _fixture()
-    r = reprice(members, by, windows, 43_650.0, 0.265, exclude=["BIG"],
+    r = reprice(members, by, windows, 43_650.0, 0.265, loss_ratio=0.80, exclude=["BIG"],
                 data_to=date(2026, 7, 31))
     assert "not renewing" in r["caveat"]
 
 
 def test_excluding_nobody_leaves_no_caveat_and_no_second_column():
     members, by, windows = _fixture()
-    r = reprice(members, by, windows, 43_650.0, 0.265, data_to=date(2026, 7, 31))
+    r = reprice(members, by, windows, 43_650.0, 0.265, loss_ratio=0.80, data_to=date(2026, 7, 31))
     assert r["excluding"] is None
     assert r["caveat"] is None
 
@@ -136,7 +136,7 @@ def test_excluding_nobody_leaves_no_caveat_and_no_second_column():
 def test_the_increase_is_measured_against_the_premium_actually_charged():
     members, by, windows = _fixture()
     r = reprice(members, by, windows, current_premium=43_650.0,
-                loading_pct=0.265, data_to=date(2026, 7, 31))
+                loading_pct=0.265, loss_ratio=0.80, data_to=date(2026, 7, 31))
     a = r["as_priced"]
     assert a["increase_vs_current_pct"] == pytest.approx(a["required_premium"] / 43_650.0 - 1, abs=1e-4)
 
@@ -144,7 +144,7 @@ def test_the_increase_is_measured_against_the_premium_actually_charged():
 def test_no_current_premium_gives_no_increase_rather_than_a_wrong_one():
     members, by, windows = _fixture()
     r = reprice(members, by, windows, current_premium=None,
-                loading_pct=0.265, data_to=date(2026, 7, 31))
+                loading_pct=0.265, loss_ratio=0.80, data_to=date(2026, 7, 31))
     assert r["as_priced"]["increase_vs_current_pct"] is None
 
 
@@ -208,7 +208,7 @@ def test_the_endpoint_prices_an_account_and_ranks_who_it_is(client):
     assert r["loading_source"] is None
     assert r["as_priced"]["required_premium"] is None
     assert r["as_priced"]["member_count"] == 3
-    assert r["as_priced"]["annualised"] > 0
+    assert r["as_priced"]["incurred_to_date"] > 0
     assert r["top_claimants"][0]["beneficiary_id"] == "BIG"
     assert r["excluding"] is None
 
@@ -223,10 +223,12 @@ def test_the_endpoint_prices_an_account_and_ranks_who_it_is(client):
 
     from app.scoring.rules.renewal_repricing import DEFAULT_TREND_PCT
     from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+    # Priced off the ACCOUNT'S OWN loss ratio - the row the Loss Ratio
+    # screen renders - not off a second annualisation of the same claims.
     ladder = renewal_from_loss_ratio(
-        priced["as_priced"]["annualised"] / priced["current_premium"],
-        priced["current_premium"], DEFAULT_TREND_PCT, 0.265)
+        priced["account_loss_ratio"], priced["current_premium"], DEFAULT_TREND_PCT, 0.265)
     assert priced["as_priced"]["required_premium"] == ladder["required_premium"]
+    assert priced["as_priced"]["share_of_claims"] == 1.0
 
     held = client.get("/portfolio-analysis/renewal-repricing/Acme",
                       params={"exclude": ["BIG"], "loading_pct": 0.265}).json()

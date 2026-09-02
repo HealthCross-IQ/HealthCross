@@ -29,6 +29,7 @@ from typing import Dict, List, Optional
 
 from app.scoring.rules.burning_cost_cube import build_cube_index, expected_cost_for_member
 from app.scoring.rules.industry import industry_risk
+from app.scoring.rules.portfolio_analysis import FULL_POLICY_TERM_DAYS
 
 #: Annual medical inflation applied between the experience period and the
 #: policy period being priced. A book's own claims are historic by
@@ -203,6 +204,8 @@ def renewal_premium_from_experience(
     non_recurring_claims: float = 0.0,
     forward_provision: float = 0.0,
     member_count: Optional[int] = None,
+    expiring_annual_premium: Optional[float] = None,
+    minimum_increase_pct: Optional[float] = None,
 ) -> dict:
     """The renewal price built from an account's OWN experience rather
     than the book's - the calculation an underwriter does by hand at
@@ -255,13 +258,57 @@ def renewal_premium_from_experience(
         build_up.append(_step("Forward provision", None, running,
                               f"AED {forward_provision:,.0f} for expected but not-yet-incurred exposure"))
 
-    running *= (1 + trend_pct)
-    build_up.append(_step("Medical trend", 1 + trend_pct, running, f"{trend_pct * 100:.1f}%"))
+    # A FULL YEAR, from however much of one has run. This step did not
+    # exist, so an account 130 days into its term was priced on 130 days
+    # of claims and the answer was compared against a full annual
+    # premium - AED 441,587 against a correct 1,384,300, understated by
+    # very nearly the fraction of the year still to come.
+    #
+    # After IBNR and before trend, which is the order the Loss Ratio
+    # board and the renewal rating both use: the tail belongs to the
+    # experience observed, and the whole of it is then scaled to a year.
+    # A completed term scales by 365/365 and is untouched - elapsed_days
+    # is capped at the full term by every caller.
+    annualisation = (FULL_POLICY_TERM_DAYS / elapsed_days) if elapsed_days else 1.0
+    if annualisation > 1:
+        running *= annualisation
+        build_up.append(_step(
+            "Annualise", annualisation, running,
+            f"{elapsed_days} of {FULL_POLICY_TERM_DAYS} days have run - the renewal covers a full year"))
+
+    # Inflation in POINTS of the loss ratio, not as a multiplier on the
+    # claims - the house ladder's rule, and the two agree only at a 100%
+    # loss ratio. Multiplying put this build-up 2.7% away from the
+    # renewal card on the same tab.
+    if expiring_annual_premium:
+        trend_amount = expiring_annual_premium * trend_pct
+        running += trend_amount
+        build_up.append(_step(
+            "Medical trend", None, running,
+            f"{trend_pct * 100:.1f} points of the expiring premium - the house ladder adds "
+            f"inflation to the LOSS RATIO, it does not multiply the claims"))
+    else:
+        running *= (1 + trend_pct)
+        build_up.append(_step("Medical trend", 1 + trend_pct, running, f"{trend_pct * 100:.1f}%"))
 
     risk_premium = running
     gross_premium = risk_premium / (1 - loading_pct)
     build_up.append(_step("Gross up for loading", 1 / (1 - loading_pct), gross_premium,
                           f"{loading_pct * 100:.1f}%"))
+
+    # The house floor, applied to the ask and reported beside the
+    # experience rather than folded into it - the same rule, and the same
+    # reporting, as renewal_from_loss_ratio.
+    experience_premium = gross_premium
+    floored = False
+    if minimum_increase_pct is not None and expiring_annual_premium:
+        floor_premium = expiring_annual_premium * (1 + minimum_increase_pct)
+        if gross_premium < floor_premium:
+            floored = True
+            gross_premium = floor_premium
+            build_up.append(_step(
+                f"House minimum ({minimum_increase_pct * 100:.0f}%)", None, gross_premium,
+                "this account's own experience asks for less than the house floor"))
 
     return {
         "continuing_incurred": round(continuing_incurred, 2),
@@ -270,8 +317,13 @@ def renewal_premium_from_experience(
         "ibnr_tail_days": ibnr_tail_days,
         "non_recurring_claims": round(non_recurring_claims, 2),
         "forward_provision": round(forward_provision, 2),
+        "annualisation_factor": round(annualisation, 4),
         "trend_pct": trend_pct,
         "loading_pct": loading_pct,
+        "expiring_annual_premium": expiring_annual_premium,
+        "minimum_increase_pct": minimum_increase_pct,
+        "experience_premium": round(experience_premium, 2),
+        "floor_applied": floored,
         "risk_premium": round(risk_premium, 2),
         "gross_premium": round(gross_premium, 2),
         "member_count": member_count,
