@@ -1859,6 +1859,43 @@ def account_loss_ratio_rows(
     return rows
 
 
+def top_claimant_by_account(member_results: List[dict]) -> Dict[tuple, dict]:
+    """The single largest claimant on each account policy period, keyed
+    the same way account_loss_ratio_rows keys its rows.
+
+    Built from the SAME member results those rows are built from, so the
+    concentration reading and the incurred it is a share of come from one
+    pass over one set of figures. Deriving it from the raw claims file
+    instead would mean a second date-matching rule, and a member whose
+    enrollment window the two rules disagreed about would appear as a
+    different share of a different total.
+
+    A member renewed into a second policy year appears as a separate
+    result row sharing the same beneficiary id, which is why the totals
+    accumulate per (account, policy period) rather than per id alone.
+    """
+    per_member: Dict[tuple, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for r in member_results:
+        master_client = r.get("master_client")
+        policy_start = r.get("policy_start_date")
+        beneficiary_id = r.get("beneficiary_id")
+        if not master_client or not policy_start or not beneficiary_id:
+            continue
+        incurred = (r.get("actual_claims_paid") or 0.0) + (r.get("actual_claims_outstanding") or 0.0)
+        if incurred:
+            per_member[(master_client, policy_start)][beneficiary_id] += incurred
+
+    top: Dict[tuple, dict] = {}
+    for key, members in per_member.items():
+        beneficiary_id, incurred = max(members.items(), key=lambda kv: kv[1])
+        top[key] = {
+            "beneficiary_id": beneficiary_id,
+            "incurred": round(incurred, 2),
+            "claimant_count": len(members),
+        }
+    return top
+
+
 def account_loss_ratio_totals(rows: List[dict]) -> dict:
     """Book-wide totals across account_loss_ratio_rows - the sheet's own
     bottom line. Loss ratios are recomputed from the summed amounts, not

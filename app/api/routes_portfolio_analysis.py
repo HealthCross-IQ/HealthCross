@@ -505,7 +505,131 @@ def portfolio_renewal_due_list(
         case = cases_by_client.get(_client_key(row["master_client"]))
         row["case_id"] = case.id if case else None
         row["case_status"] = (case.status.value if hasattr(case.status, "value") else case.status) if case else None
+
+    _attach_renewal_risk(db, due, cases_by_client)
+    # Worst first, then soonest. A list ordered by date alone says an
+    # account renewing in twelve days at 62% needs attention before one
+    # renewing in forty-seven at 248%, and the second is the one that
+    # needs a conversation started now.
+    due.sort(key=lambda r: (r.get("severity_rank", 99), r.get("days_until_renewal", 0)))
     return due
+
+
+#: Worst first. Matches underwriting_alerts.SEVERITY_ORDER, with two extra
+#: states the due list needs and a single account's alert panel does not:
+#: an account that cannot be priced at all, and one with nothing to say.
+_DUE_SEVERITY_RANK = {"critical": 0, "high": 1, "blocked": 2, "watch": 3, "clear": 4, "unknown": 5}
+
+
+def _attach_renewal_risk(db: Session, due: List[dict], cases_by_client: Dict[str, models.Case]) -> None:
+    """Add each due account's loss ratio and its worst reading, in place.
+
+    The due list used to carry name, headcount, policy end date and days
+    to go - nothing about whether the account was a problem. An account
+    running at 248% looked exactly like one at 60%, so the only way to
+    find the three that would hurt was to open all twenty.
+
+    Everything here is read, not computed: the loss ratio row the Loss
+    Ratio screen renders, the alerts the account dashboard renders, and
+    the loading block app.api.case_loading imposes. run_analysis is
+    cached on the uploaded data, so the whole book costs one pass however
+    many accounts are due.
+    """
+    from app.api.case_loading import is_renewal, renewal_loading
+    from app.scoring.rules.account_overview import median
+    from app.scoring.rules.underwriting_alerts import alert_counts, underwriting_alerts
+
+    rows = book_analysis.account_loss_ratio_rows_for_book(db)
+    if not rows:
+        for row in due:
+            row.update(_no_risk_reading())
+        return
+
+    top_claimants = book_analysis.top_claimant_for_book(db)
+    latest_by_client: Dict[str, dict] = {}
+    for r in rows:
+        key = (r.get("master_client") or "").strip().casefold()
+        if key and (key not in latest_by_client
+                    or r["policy_start_date"] > latest_by_client[key]["policy_start_date"]):
+            latest_by_client[key] = r
+
+    shares = [
+        r["outstanding"] / r["incurred_claims"]
+        for r in rows if r.get("incurred_claims") and r.get("outstanding") is not None
+    ]
+    book_median_outstanding_share = median(shares)
+
+    for row in due:
+        lr_row = latest_by_client.get((row["master_client"] or "").strip().casefold())
+        if lr_row is None:
+            row.update(_no_risk_reading())
+            continue
+
+        top = top_claimants.get((lr_row["master_client"], date.fromisoformat(lr_row["policy_start_date"])))
+        incurred = lr_row.get("incurred_claims") or 0.0
+        top_share = (top["incurred"] / incurred) if top and incurred else None
+
+        case = cases_by_client.get(_client_key(row["master_client"]))
+        loading_problems = []
+        if case is not None and is_renewal(case):
+            _, loading_problems = renewal_loading(case)
+
+        alerts = underwriting_alerts(
+            lr_row,
+            top_claimant_share=top_share,
+            top_claimant_amount=top["incurred"] if top else None,
+            book_median_outstanding_share=book_median_outstanding_share,
+            loading_problems=loading_problems,
+        )
+        counts = alert_counts(alerts)
+        blocked = bool(loading_problems)
+
+        row.update({
+            "loss_ratio": lr_row.get("gross_loss_ratio"),
+            "loading_is_default": lr_row.get("loading_is_default"),
+            "incurred_claims": lr_row.get("incurred_claims"),
+            "earned_premium": lr_row.get("earned_premium"),
+            "days_elapsed": lr_row.get("days"),
+            "alert_counts": counts,
+            "alert_count": len(alerts),
+            "blocked": blocked,
+            # The one line the row shows. The worst alert is the reason
+            # this account is where it is in the list, so it is the one
+            # worth the space.
+            "top_alert": ({"title": alerts[0]["title"], "severity": alerts[0]["severity"],
+                           "message": alerts[0]["message"], "action": alerts[0]["action"]}
+                          if alerts else None),
+            "severity": _due_severity(alerts, blocked),
+        })
+        row["severity_rank"] = _DUE_SEVERITY_RANK[row["severity"]]
+
+
+def _due_severity(alerts: List[dict], blocked: bool) -> str:
+    """An account nobody can price outranks a merely noisy one, unless
+    something critical is already true of it: "we cannot quote this" and
+    "this should not be quoted" are both worth interrupting for, and the
+    second is the one that changes the answer."""
+    if alerts and alerts[0]["severity"] == "critical" and not blocked:
+        return "critical"
+    if blocked:
+        return "blocked"
+    if not alerts:
+        return "clear"
+    return alerts[0]["severity"]
+
+
+def _no_risk_reading() -> dict:
+    """An account with no premium or claims on the book yet. Reported as
+    unknown rather than clear - nothing has been read, which is not the
+    same as nothing being wrong."""
+    return {
+        "loss_ratio": None, "loading_is_default": None, "incurred_claims": None,
+        "earned_premium": None, "days_elapsed": None,
+        "alert_counts": {"critical": 0, "high": 0, "watch": 0}, "alert_count": 0,
+        "blocked": False, "top_alert": None,
+        "severity": "unknown", "severity_rank": _DUE_SEVERITY_RANK["unknown"],
+    }
+
 
 
 def _client_key(name: Optional[str]) -> str:
@@ -780,6 +904,7 @@ def account_overview(
     share of the claims actually filed.
     """
     from app.api.case_loading import is_renewal, renewal_loading
+    from app.scoring.rules.account_overview import median
     from app.scoring.rules.account_overview import (
         book_position,
         claims_by_month,

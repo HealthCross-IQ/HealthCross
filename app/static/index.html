@@ -776,7 +776,9 @@
   .ad-pill.high { color: var(--serious); background: var(--serious-bg); border-color: transparent; }
   .ad-pill.critical { color: var(--critical); background: var(--critical-bg); border-color: transparent; }
 
-  .ad-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  /* Six cards, so the minimum is set to fit all six on one row of a
+     normal screen rather than wrapping four and two. */
+  .ad-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(172px, 1fr)); gap: 12px; margin-bottom: 16px; }
   .ad-kpi { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
             padding: 12px 14px 11px 17px; overflow: hidden; }
   .ad-kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-strong); }
@@ -840,6 +842,37 @@
   .ad-scroll table { min-width: 100%; }
   .ad-assumed { font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.07em; text-transform: uppercase;
                 font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--warning-bg); color: var(--warning); }
+
+  /* ---------------- renewal due list ----------------
+     Severity carried in form as well as colour - a rail down the left of
+     the row - so the account that needs attention reads at a glance
+     rather than only to someone already scanning the loss ratio column. */
+  .rdl-sev { display: inline-block; width: 4px; height: 30px; border-radius: 2px; margin-right: 10px;
+             vertical-align: middle; background: var(--border-strong); }
+  .rdl-sev.critical { background: var(--critical); }
+  .rdl-sev.high { background: var(--serious); }
+  .rdl-sev.blocked { background: var(--warning); }
+  .rdl-sev.watch { background: var(--warning); opacity: 0.6; }
+  .rdl-sev.clear { background: var(--good); }
+  .rdl-sev.unknown { background: var(--border-strong); }
+  .rdl-name { font-weight: 600; color: var(--deep); cursor: pointer; border-bottom: 1px solid var(--accent); }
+  .rdl-name:hover { color: var(--accent); }
+  .rdl-alert { display: block; font-size: 11.5px; color: var(--ink-muted); margin: 3px 0 0 14px; line-height: 1.45; }
+  .rdl-alert.critical { color: var(--critical); }
+  .rdl-alert.high { color: var(--serious); }
+  /* Two lines is enough to say what is wrong; the full text is on the
+     account's own dashboard, and a nine-line blocker in a table row
+     pushes every other account off the screen. */
+  .rdl-alert { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+  /* dir-review is amber - right for "look at this", wrong for a loss
+     ratio at 207%. Severity gets its own three. */
+  .rdl-pill { display: inline-flex; padding: 3px 10px; border-radius: 999px; font-size: 12px;
+              font-weight: 600; white-space: nowrap; }
+  .rdl-pill.critical { background: var(--critical-bg); color: var(--critical); }
+  .rdl-pill.high { background: var(--serious-bg); color: var(--serious); }
+  .rdl-pill.watch { background: var(--warning-bg); color: var(--warning); }
+  .rdl-pill.clear { background: var(--good-bg); color: var(--good); }
+  .rdl-pill.none { background: var(--surface-2); color: var(--ink-2); }
 </style>
 </head>
 <body>
@@ -867,27 +900,27 @@
 
       <div class="hc-rail-group">
         <div class="hc-rail-label">New Business</div>
-        <button class="hc-rail-item" id="hc-rail-new-quote" onclick="hcRailNewQuote()">New Quote<span class="hc-rail-tag nb">NB</span></button>
-        <button class="hc-rail-item" id="hc-rail-card-calibration" onclick="hcRailRateCardCalibration()">Rate Card Calibration<span class="hc-rail-tag nb">NB</span></button>
-        <button class="hc-rail-item" id="hc-rail-rate-cards" onclick="hcRailRateCards()">Rate Cards<span class="hc-rail-tag nb">NB</span></button>
-        <button class="hc-rail-item" id="hc-rail-intl-comparison" onclick="hcRailIntlComparison()">International Comparison<span class="hc-rail-tag nb">NB</span></button>
+        <button class="hc-rail-item" id="hc-rail-new-quote" onclick="hcRailNewQuote()">New Quote</button>
+        <button class="hc-rail-item" id="hc-rail-card-calibration" onclick="hcRailRateCardCalibration()">Rate Card Calibration</button>
+        <button class="hc-rail-item" id="hc-rail-rate-cards" onclick="hcRailRateCards()">Rate Cards</button>
+        <button class="hc-rail-item" id="hc-rail-intl-comparison" onclick="hcRailIntlComparison()">International Comparison</button>
       </div>
 
       <div class="hc-rail-group">
         <div class="hc-rail-label">Renewal</div>
-        <button class="hc-rail-item" id="hc-rail-renewal-due" onclick="hcRailRenewalDueList()">Renewal Due List<span class="hc-rail-tag rn">RN</span></button>
-        <button class="hc-rail-item" id="hc-rail-renewal-bench" onclick="hcRailRenewalBench()">Renewal Bench<span class="hc-rail-tag rn">RN</span></button>
-        <button class="hc-rail-item" id="hc-rail-renewal-history" onclick="hcRailRenewalHistory()">Renewal History<span class="hc-rail-tag rn">RN</span></button>
+        <button class="hc-rail-item" id="hc-rail-renewal-due" onclick="hcRailRenewalDueList()">Renewal Due List</button>
+        <button class="hc-rail-item" id="hc-rail-renewal-bench" onclick="hcRailRenewalBench()">Renewal Bench</button>
+        <button class="hc-rail-item" id="hc-rail-renewal-history" onclick="hcRailRenewalHistory()">Renewal History</button>
       </div>
 
       <div class="hc-rail-group">
         <div class="hc-rail-label">Claims Analysis</div>
-        <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio<span class="hc-rail-tag cl">CL</span></button>
-        <button class="hc-rail-item" id="hc-rail-nationality" onclick="hcRailNationalityRisk()">Nationality Risk<span class="hc-rail-tag cl">CL</span></button>
-        <button class="hc-rail-item" id="hc-rail-burning-cost" onclick="hcRailBurningCostCube()">Burning Cost Cube<span class="hc-rail-tag cl">CL</span></button>
-        <button class="hc-rail-item" id="hc-rail-lr-tips" onclick="hcRailLossRatioTips()">Tips to Improve LR<span class="hc-rail-tag cl">CL</span></button>
-        <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer<span class="hc-rail-tag cl">CL</span></button>
-        <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend<span class="hc-rail-tag cl">CL</span></button>
+        <button class="hc-rail-item" id="hc-rail-loss-ratio" onclick="hcRailLossRatio()">Loss Ratio</button>
+        <button class="hc-rail-item" id="hc-rail-nationality" onclick="hcRailNationalityRisk()">Nationality Risk</button>
+        <button class="hc-rail-item" id="hc-rail-burning-cost" onclick="hcRailBurningCostCube()">Burning Cost Cube</button>
+        <button class="hc-rail-item" id="hc-rail-lr-tips" onclick="hcRailLossRatioTips()">Tips to Improve LR</button>
+        <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer</button>
+        <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend</button>
       </div>
 
       <div class="hc-rail-group">
@@ -1468,6 +1501,36 @@ function _adKpis(data) {
           &middot; net of ${_adPct(k.loading_pct, 1)} loading <code>${_adPct(k.net_loss_ratio)}</code>
           ${k.loading_is_default ? ' <span class="ad-assumed" title="Nobody supplied this account&rsquo;s loading - the house average is standing in, so the net loss ratio beside it is partly assumed. Upload the Client Master sheet, or enter the fee split on the case.">assumed</span>' : ''}</span>
       </div>
+      ${_adOutstandingKpi(data)}
+      ${_adConcentrationKpi(data)}
+    </div>`;
+}
+
+/* The two figures the alerts actually fire on. They were readable only
+   inside the alert that explained them, which is backwards: the number
+   should be on the strip and the alert should be the reading of it. */
+function _adOutstandingKpi(data) {
+  const k = data.kpis || {};
+  const share = k.incurred_claims ? k.outstanding / k.incurred_claims : null;
+  const book = (data.book_position || {}).book_median_outstanding_share;
+  const severity = share == null ? '' : share > 0.35 ? 'high' : 'good';
+  return `
+    <div class="ad-kpi ${severity}">
+      <span class="k">Outstanding share</span>
+      <span class="v">${_adPct(share)}</span>
+      <span class="f">${_adMoney(k.outstanding)} not yet settled${book != null ? ` &middot; book median <code>${_adPct(book)}</code>` : ''}</span>
+    </div>`;
+}
+
+function _adConcentrationKpi(data) {
+  const top = (data.top_claimants || [])[0];
+  const share = data.top_claimant_share;
+  const severity = share == null ? '' : share > 0.35 ? 'critical' : share > 0.20 ? 'high' : 'good';
+  return `
+    <div class="ad-kpi ${severity}">
+      <span class="k">Top claimant</span>
+      <span class="v">${_adPct(share)}</span>
+      <span class="f">${top ? `${escapeHtml(top.beneficiary_id || '-')} &middot; ${_adMoney(top.incurred)}` : 'No claims on this term'}</span>
     </div>`;
 }
 
@@ -1560,6 +1623,7 @@ function renderAccountDashboard(data) {
           &middot; <b>${data.policy.days_elapsed == null ? '-' : data.policy.days_elapsed}</b> days elapsed
           &middot; <b>${data.policy.member_count == null ? '-' : data.policy.member_count}</b> lives
           ${window.from ? `&middot; claims ${escapeHtml(window.from)} to ${escapeHtml(window.to)}` : ''}
+          ${data.as_of ? `&middot; measured to <b>${escapeHtml(data.as_of)}</b>` : ''}
         </div>
       </div>
       <div class="right">
@@ -1934,6 +1998,28 @@ function _hcCaseTableHtml(cases, emptyText) {
   return `<table><tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th><th style="text-align:right;">Current premium</th></tr>${rows}</table>`;
 }
 
+/* The due list used to be a calendar: name, headcount, policy end date,
+   days to go. An account running at 248% looked exactly like one running
+   at 60%, so the only way to find the three that would hurt was to open
+   all twenty. These render the risk reading the endpoint now carries -
+   the same loss ratio the Loss Ratio screen shows and the same alerts
+   the account dashboard shows, not a third opinion. */
+function _rdlLossRatio(d) {
+  if (d.loss_ratio == null) return '<span class="hint" style="margin:0;">&mdash;</span>';
+  const cls = d.loss_ratio > 1.6 ? 'critical' : d.loss_ratio > 0.95 ? 'high' : 'clear';
+  return `<span class="rdl-pill ${cls}">${(d.loss_ratio * 100).toFixed(1)}%</span>`;
+}
+
+function _rdlStatus(d) {
+  if (d.blocked) return '<span class="rdl-pill watch">blocked</span>';
+  const c = d.alert_counts || {};
+  if (c.critical) return `<span class="rdl-pill critical">${c.critical} critical</span>`;
+  if (c.high) return `<span class="rdl-pill high">${c.high} high</span>`;
+  if (c.watch) return `<span class="rdl-pill watch">${c.watch} watch</span>`;
+  if (d.severity === 'unknown') return '<span class="rdl-pill none">not on the book</span>';
+  return '<span class="rdl-pill clear">clear</span>';
+}
+
 async function hcRailRenewalDueList() {
   _hcRailSetActive('hc-rail-renewal-due');
   currentCase = null;
@@ -1941,31 +2027,47 @@ async function hcRailRenewalDueList() {
   try {
     const due = await api(`/portfolio-analysis/renewal-due-list?within_days=${daysInput}`);
     const rows = due.map(d => {
-      const urgency = d.days_until_renewal <= 14 ? 'dir-review' : d.days_until_renewal <= 30 ? 'dir-same' : '';
       const action = d.case_id
         ? `<button onclick="hcOpenRenewalFromBook(${escapeHtml(JSON.stringify(d.master_client))})">Open renewal</button>
            <span class="tier-pill dir-improved">Case #${d.case_id}</span>`
         : `<button onclick="hcOpenRenewalFromBook(${escapeHtml(JSON.stringify(d.master_client))})">Start renewal</button>`;
+      // The account name opens its dashboard; the button opens its
+      // renewal file. Reading an account and working it are different
+      // jobs and the row should not make you choose between them.
+      const name = `<a class="rdl-name" onclick="openAccountDashboard(${escapeHtml(JSON.stringify(d.master_client))})">${escapeHtml(d.master_client)}</a>`;
       return `
       <tr>
-        <td>${escapeHtml(d.master_client)}</td>
+        <td><span class="rdl-sev ${escapeHtml(d.severity || 'unknown')}"></span>${name}
+          ${d.top_alert ? `<span class="rdl-alert ${escapeHtml(d.top_alert.severity)}">${escapeHtml(d.top_alert.title)} &mdash; ${escapeHtml(d.top_alert.message)}</span>`
+            : d.severity === 'clear' ? '<span class="rdl-alert">Within tolerance &middot; nothing above threshold</span>'
+            : '<span class="rdl-alert">No premium or claims on the book for this account yet</span>'}</td>
         <td style="text-align:right;">${d.member_count}</td>
+        <td style="text-align:right;">${_rdlLossRatio(d)}</td>
         <td>${d.policy_end_date}</td>
-        <td style="text-align:right;"><span class="tier-pill ${urgency}">${d.days_until_renewal}</span></td>
+        <td style="text-align:right;"><span class="tier-pill ${d.days_until_renewal <= 14 ? 'dir-review' : d.days_until_renewal <= 30 ? 'dir-same' : ''}">${d.days_until_renewal}</span></td>
+        <td style="text-align:right;">${_rdlStatus(d)}</td>
         <td style="text-align:right; white-space:nowrap;">${action}</td>
       </tr>`;
     }).join('');
+    const counts = due.reduce((acc, d) => { acc[d.severity] = (acc[d.severity] || 0) + 1; return acc; }, {});
+    const summaryBits = [
+      counts.critical ? `<span class="rdl-pill critical">${counts.critical} critical</span>` : '',
+      counts.high ? `<span class="rdl-pill high">${counts.high} high</span>` : '',
+      counts.blocked ? `<span class="rdl-pill watch">${counts.blocked} cannot be priced</span>` : '',
+      counts.clear ? `<span class="rdl-pill clear">${counts.clear} clear</span>` : '',
+    ].filter(Boolean).join(' ');
     document.getElementById('main').innerHTML = `
       <div class="card">
         <h3>Renewal Due List</h3>
-        <div class="hint">Real accounts from the booked Membership export whose own policy end date falls within the window below - not a manually-set date on a case record. Soonest first.</div>
+        <div class="hint">Real accounts from the booked Membership export whose own policy end date falls within the window below - not a manually-set date on a case record. Worst first, then soonest: an account renewing in forty-seven days that needs restructuring wants a conversation started before one renewing in twelve that will renew at the floor. Click an account name to read it; click Start renewal to work it.</div>
         <div class="hint">Opening a renewal here builds the case straight from the book - company, policy term, headcount, category mix and each member's own existing annual rate are all carried across, so nothing is re-typed and no "New Case" form is needed. The only documents left to upload are the ones the book genuinely doesn't hold: the expiring table of benefits, the renewal quote, and any broker correspondence.</div>
         <div class="row" style="align-items:flex-end; margin-bottom:14px;">
           <div><label>Within (days)</label><input type="number" id="renewal-due-window" value="${daysInput}" style="width:90px;"></div>
           <button onclick="hcRailRenewalDueList()">Refresh</button>
         </div>
         <div id="renewal-intake-status" class="hint"></div>
-        ${due.length ? `<table><tr><th>Master client</th><th style="text-align:right;">Members</th><th>Policy end date</th><th style="text-align:right;">Days to renewal</th><th style="text-align:right;">Renewal file</th></tr>${rows}</table>` : `<div class="hint">No accounts due for renewal in the next ${daysInput} days.</div>`}
+        ${summaryBits ? `<div style="margin-bottom:12px;display:flex;gap:7px;flex-wrap:wrap;align-items:center;"><span class="hint" style="margin:0;">${due.length} due &middot;</span>${summaryBits}</div>` : ''}
+        ${due.length ? `<table><tr><th>Account</th><th style="text-align:right;">Lives</th><th style="text-align:right;">Loss ratio</th><th>Policy end</th><th style="text-align:right;">Days</th><th style="text-align:right;">Status</th><th style="text-align:right;">Renewal file</th></tr>${rows}</table>` : `<div class="hint">No accounts due for renewal in the next ${daysInput} days.</div>`}
       </div>
     `;
   } catch (err) {
@@ -6524,7 +6626,7 @@ function _lrTableHtml() {
   }
   const body = rows.map(r => `
     <tr>
-      <td class="lr-acct">${escapeHtml(r.master_client)}${r.expired ? `<span class="lr-exp">${lrState.yearBasis === 'calendar' ? 'closed' : 'expired'}</span>` : ''}<span class="yr">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
+      <td class="lr-acct"><a class="rdl-name" onclick="openAccountDashboard(${escapeHtml(JSON.stringify(r.master_client))})">${escapeHtml(r.master_client)}</a>${r.expired ? `<span class="lr-exp">${lrState.yearBasis === 'calendar' ? 'closed' : 'expired'}</span>` : ''}<span class="yr">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
       <td class="num">${_lrMoney(r.paid)}</td>
       <td class="num">${_lrMoney(r.outstanding)}</td>
       <td class="num">${_lrMoney(r.ibnr)}</td>
@@ -6902,7 +7004,7 @@ function printLossRatioReport() {
 
   const bodyRows = rows.map(r => `
     <tr>
-      <td class="acct">${escapeHtml(r.master_client)}
+      <td class="acct"><a class="rdl-name" onclick="openAccountDashboard(${escapeHtml(JSON.stringify(r.master_client))})">${escapeHtml(r.master_client)}</a>
         <span class="sub">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives${r.expired ? (calendar ? ' &middot; closed' : ' &middot; expired') : ''}</span></td>
       <td class="num">${_lrMoney(r.paid)}</td>
       <td class="num">${_lrMoney(r.outstanding)}</td>

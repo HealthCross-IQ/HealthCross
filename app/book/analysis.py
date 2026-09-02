@@ -24,6 +24,7 @@ from app.book import repository as book
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_EXPENSE_RATIO_PCT,
     account_loss_ratio_rows,
+    top_claimant_by_account,
     analyze_portfolio_member,
     group_claims_by_beneficiary,
 )
@@ -198,3 +199,26 @@ def account_loss_ratio_rows_for_book(
     for row in rows:
         row["as_of"] = effective_as_of.isoformat()
     return rows
+
+
+def top_claimant_for_book(
+    db: Session,
+    as_of: Optional[date] = None,
+) -> dict:
+    """The largest claimant on every account policy period, keyed the
+    same way account_loss_ratio_rows_for_book's rows are.
+
+    A separate call rather than a second return value because most
+    callers of the rows do not need it - and it costs nothing extra:
+    run_analysis is cached on the uploaded data, so this walks the same
+    member results the rows were built from rather than re-pricing the
+    book.
+    """
+    if not book.has_members(db):
+        return {}
+    effective_as_of = as_of or book.stored_as_of(db) or book.covered_to(db) or date.today()
+    try:
+        results = run_analysis(db, as_of=effective_as_of, require_rate_card=False)
+    except HTTPException:
+        return {}
+    return top_claimant_by_account(results) if results else {}

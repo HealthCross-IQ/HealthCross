@@ -74,7 +74,10 @@ def claims_by_month(
     return rows[-months:] if months else rows
 
 
-def _median(values: Sequence[float]) -> Optional[float]:
+def median(values: Sequence[float]) -> Optional[float]:
+    """The middle value, or the mean of the middle two. Public because the
+    renewal due list needs the book's median outstanding share too, and a
+    second copy of four lines is still a second copy."""
     ordered = sorted(values)
     if not ordered:
         return None
@@ -136,11 +139,11 @@ def book_position(row: Optional[dict], book_rows: Sequence[dict]) -> Optional[di
             if row.get("gross_loss_ratio") is not None
             else None
         ),
-        "book_median_loss_ratio": _median(loss_ratios),
+        "book_median_loss_ratio": median(loss_ratios),
         "outstanding_share": (outstanding / incurred) if incurred and outstanding is not None else None,
-        "book_median_outstanding_share": _median(outstanding_shares),
+        "book_median_outstanding_share": median(outstanding_shares),
         "premium_per_life": (row["gross_premium"] / members) if members and row.get("gross_premium") else None,
-        "book_median_premium_per_life": _median(premium_per_life),
+        "book_median_premium_per_life": median(premium_per_life),
         "claims_per_life": (incurred / members) if members else None,
     }
 
