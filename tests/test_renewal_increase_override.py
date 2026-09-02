@@ -149,3 +149,20 @@ def test_a_renewal_is_not_offered_a_third_partys_price_grid(client):
     # The card itself - the thing that works - is untouched.
     assert 'id="nb-file-pricing"' in markup
     assert 'id="nb-file-variants"' in markup
+
+
+def test_the_new_business_tab_leads_with_the_benefits_import():
+    # "Drop the benefits export and get a price" configures every category
+    # and prices it in one step. It used to sit at the BOTTOM of the tab,
+    # under the admin rate-card uploads and the manual dropdowns, so the
+    # page opened on the two things a user does least and buried the one
+    # they came for - which is how a Plan Details file kept being fed to
+    # the price-grid box at the top instead.
+    import pathlib
+    markup = (pathlib.Path(__file__).resolve().parent.parent
+              / "app" / "static" / "index.html").read_text()
+
+    start = markup.index("Start here &mdash; price the uploaded benefits")
+    manual = markup.index("Or set each category by hand")
+    admin = markup.index("${uploadCard}\n    <div id=\"nb-readiness-area\">")
+    assert start < manual < admin, "the import must come before the manual setup and the admin upload"

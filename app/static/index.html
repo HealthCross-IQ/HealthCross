@@ -7204,10 +7204,33 @@ async function nbRenderArea() {
 
   const categoryCards = nbCategories.map((cat, idx) => nbCategoryCardHtml(cat, idx)).join('');
 
+  // Order matters here. The primary path is "drop the benefits export and
+  // get a price" - it configures every category and prices it in one
+  // step, with nothing to re-key. It used to sit at the BOTTOM, under the
+  // admin rate-card uploads and the manual dropdowns, so the page opened
+  // on the two things a user does least and buried the one they came
+  // for. Now: import, then adjust by hand if you want to, then the
+  // card-data upload last - it is done once, by an admin, not per case.
   area.innerHTML = `
-    ${uploadCard}
     <div class="card">
-      <h3>Quote by category</h3>
+      <h3>Start here &mdash; price the uploaded benefits</h3>
+      <div class="hint"><strong>Takes benefits, not prices.</strong> Drop the pricing tool's own
+        <strong>Plan Details</strong> export here and every category is configured and priced
+        against the HealthCross rate card - product, network, TPA, Emirates and every benefit
+        selection, exactly as decided in the tool. The file itself carries no premiums; the price
+        is computed here. Nothing to re-key, and nothing to disagree with the tool that produced
+        it. Each category's own Emirates value sets its region &mdash; DXB Dubai, AUH Abu Dhabi,
+        NE Northern Emirates.</div>
+      <div class="dropzone" id="dropzone-hc-plan-details">
+        <span class="kind-label">Plan Details</span>
+        <input type="file" id="file-hc-plan-details" accept=".xlsx,.xls,.csv">
+        <button class="primary" onclick="nbUploadPlanDetails()">Import and quote</button>
+        <span id="status-hc-plan-details" class="status-pending"></span>
+      </div>
+      <div id="nb-plan-details-result"></div>
+    </div>
+    <div class="card">
+      <h3>Or set each category by hand</h3>
       <div class="hint">Each category's own Product/Network/TPA is set on its Benefits tab category card - pre-filled here from there. Each category's benefit-variant choices apply to every member in it; HealthCross's own rate card resolves each member's own Region/age/gender automatically.</div>
       ${nbCensusUncategorized ? `<div class="hint">${nbCensusUncategorized} census member(s) have no Category set and won't be priced.</div>` : ''}
     </div>
@@ -7216,21 +7239,7 @@ async function nbRenderArea() {
       <button class="primary" onclick="nbComputeQuote()">Compute quote</button>
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
-    <div class="card">
-      <h3>Plan Details &mdash; the benefits spec, priced here</h3>
-      <div class="hint"><strong>Takes benefits, not prices.</strong> Drop the pricing tool's own
-        <strong>Plan Details</strong> export here and every category is configured and priced
-        against the HealthCross rate card - product, network, TPA and every benefit selection,
-        exactly as decided in the tool. The file itself carries no premiums; the price is computed
-        here. Nothing to re-key, and nothing to disagree with the tool that produced it.</div>
-      <div class="dropzone" id="dropzone-hc-plan-details">
-        <span class="kind-label">Plan Details</span>
-        <input type="file" id="file-hc-plan-details" accept=".xlsx,.xls,.csv">
-        <button onclick="nbUploadPlanDetails()">Import and quote</button>
-        <span id="status-hc-plan-details" class="status-pending"></span>
-      </div>
-      <div id="nb-plan-details-result"></div>
-    </div>
+    ${uploadCard}
     <div id="nb-readiness-area"></div>
     <div id="nb-price-comparison-area"></div>
     <div id="nb-opportunity-area"></div>
