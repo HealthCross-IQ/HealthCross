@@ -1303,15 +1303,37 @@ def resolve_client_opex_pct(
     needed" (the common case - most clients won't have renewal-by-
     renewal loading changes on file).
     """
+    on_file = client_opex_pct_on_file(master_client, policy_start_date, opex_records_by_client)
+    return default_opex_pct if on_file is None else on_file
+
+
+def client_opex_pct_on_file(
+    master_client: Optional[str],
+    policy_start_date: Optional[date_cls],
+    opex_records_by_client: Optional[Dict[str, List[dict]]],
+) -> Optional[float]:
+    """This client's own loading from the uploaded Client Master sheet, or
+    None where the sheet has nothing that applies.
+
+    Split out from resolve_client_opex_pct so a caller can tell a real
+    loading from the house default WITHOUT re-deriving the lookup - the
+    two answers now come from one walk of the records rather than from
+    two functions that could drift apart on which record wins.
+
+    The distinction matters on screen: 33% shown flat reads as this
+    account's loading, and a reader has no way to see that nobody
+    supplied it. Every figure resting on it is then partly assumed, and
+    nothing says which part.
+    """
     if not master_client or not opex_records_by_client:
-        return default_opex_pct
+        return None
     records = opex_records_by_client.get(master_client)
     if not records:
-        return default_opex_pct
+        return None
     if len(records) == 1 and records[0].get("start_date") is None and records[0].get("end_date") is None:
         return records[0]["opex_pct"]
     if not policy_start_date:
-        return default_opex_pct
+        return None
     for record in records:
         start = record.get("start_date")
         end = record.get("end_date")
@@ -1320,7 +1342,7 @@ def resolve_client_opex_pct(
         if end is not None and policy_start_date > end:
             continue
         return record["opex_pct"]
-    return default_opex_pct
+    return None
 
 
 def executive_portfolio_summary(
@@ -1802,9 +1824,8 @@ def account_loss_ratio_rows(
         else:
             earned_premium = 0.0
 
-        loading_pct = resolve_client_opex_pct(
-            master_client, policy_start, opex_records_by_client, default_loading_pct
-        )
+        on_file = client_opex_pct_on_file(master_client, policy_start, opex_records_by_client)
+        loading_pct = default_loading_pct if on_file is None else on_file
         net_premium = earned_premium * (1 - loading_pct)
 
         rows.append(
@@ -1820,6 +1841,11 @@ def account_loss_ratio_rows(
                 "ibnr": round(ibnr, 2),
                 "incurred_claims": round(incurred_claims, 2),
                 "loading_pct": round(loading_pct, 4),
+                # Whether anyone actually supplied that loading, or the
+                # house average is standing in for one. The net loss ratio
+                # built on it is only as real as this flag says, and a
+                # screen showing 33% flat gives the reader no way to tell.
+                "loading_is_default": on_file is None,
                 "gross_premium": round(gross_premium, 2),
                 "earned_premium": round(earned_premium, 2),
                 "net_premium": round(net_premium, 2),

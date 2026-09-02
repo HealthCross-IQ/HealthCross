@@ -276,3 +276,42 @@ class TestScoping:
     def test_no_book_uploaded_is_a_400_not_a_500(self, client):
         resp = client.get("/portfolio-analysis/account-overview/KAF Holdings")
         assert resp.status_code == 400
+
+
+def _markup():
+    import pathlib
+    return (pathlib.Path(__file__).resolve().parent.parent
+            / "app" / "static" / "index.html").read_text()
+
+
+class TestTheScreen:
+    def test_the_dashboard_is_reachable_from_the_rail(self):
+        markup = _markup()
+        assert 'id="hc-rail-account-dashboard"' in markup
+        assert "function hcRailAccountDashboard()" in markup
+
+    def test_the_browser_never_computes_the_loss_ratio_itself(self):
+        # The one rule this screen lives by. A dashboard that divides its
+        # own numerator by its own denominator is a second implementation
+        # of the figure every other screen reports, and the reader has no
+        # way to know which to believe - so the ratio is rendered, never
+        # derived.
+        markup = _markup()
+        assert "incurred_claims / k.earned_premium" not in markup
+        assert "incurred_claims / k.gross_premium" not in markup
+        assert "_adPct(k.gross_loss_ratio)" in markup
+
+    def test_a_loading_nobody_supplied_is_labelled_on_the_face_of_the_card(self):
+        # 33% shown flat reads as this account's own loading. The net loss
+        # ratio printed beside it is then partly assumed, and without this
+        # tag nothing on the screen says so.
+        markup = _markup()
+        assert "k.loading_is_default" in markup
+        assert "ad-assumed" in markup
+
+    def test_two_clicks_in_a_row_cannot_paint_the_wrong_account(self):
+        # The slower response would otherwise win, putting one account's
+        # figures under another account's name.
+        markup = _markup()
+        assert "++_adState.requestToken" in markup
+        assert "if (token !== _adState.requestToken) return;" in markup

@@ -682,6 +682,92 @@
   .rb-driver-block .lbl { font-size: 10px; color: var(--rb-muted); margin-top: 4px; line-height: 1.3; }
   .rb-driver-block.total .lbl { color: inherit; opacity: 0.85; }
   .rb-driver-op { font-size: 15px; font-weight: 600; color: var(--rb-muted); flex-shrink: 0; }
+
+  /* ---------------- account dashboard ----------------
+     The landing screen for one account: what it is, what its numbers
+     mean, and what to do about them. Severity is carried in FORM as
+     well as colour - a stripe, a tag, an ordering - so the thing that
+     needs attention reads at a glance rather than only to a reader who
+     already knows which number is the bad one. */
+  .ad-head { display: flex; align-items: flex-start; gap: 16px; flex-wrap: wrap; margin-bottom: 16px; }
+  .ad-head h2 { font-family: var(--font-display); font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 5px; }
+  .ad-head .meta { font-family: var(--font-mono); font-size: 11.5px; color: var(--ink-muted); }
+  .ad-head .meta b { color: var(--ink-2); font-weight: 600; }
+  .ad-head .right { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  .ad-pill { display: inline-flex; align-items: center; gap: 5px; font-family: var(--font-mono); font-size: 10px;
+             font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; padding: 4px 9px;
+             border-radius: 999px; border: 1px solid var(--border-strong); color: var(--ink-2); }
+  .ad-pill::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .ad-pill.good { color: var(--good); background: var(--good-bg); border-color: transparent; }
+  .ad-pill.watch { color: var(--warning); background: var(--warning-bg); border-color: transparent; }
+  .ad-pill.high { color: var(--serious); background: var(--serious-bg); border-color: transparent; }
+  .ad-pill.critical { color: var(--critical); background: var(--critical-bg); border-color: transparent; }
+
+  .ad-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .ad-kpi { position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+            padding: 12px 14px 11px 17px; overflow: hidden; }
+  .ad-kpi::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--border-strong); }
+  .ad-kpi.critical::before { background: var(--critical); }
+  .ad-kpi.high::before { background: var(--serious); }
+  .ad-kpi.good::before { background: var(--good); }
+  .ad-kpi .k { display: block; font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.09em;
+               text-transform: uppercase; color: var(--ink-muted); margin-bottom: 6px; }
+  .ad-kpi .v { display: block; font-family: var(--font-mono); font-size: 22px; font-weight: 600;
+               letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.1; }
+  .ad-kpi.critical .v { color: var(--critical); }
+  .ad-kpi .f { display: block; font-size: 11px; color: var(--ink-muted); margin-top: 5px; line-height: 1.45; }
+  .ad-kpi .f code { font-family: var(--font-mono); font-size: 10.5px; color: var(--ink-2); }
+
+  .ad-grid { display: grid; gap: 14px; align-items: start; margin-bottom: 14px; }
+  .ad-grid.two { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  .ad-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  @media (max-width: 1100px) { .ad-grid.two, .ad-grid.three { grid-template-columns: 1fr; } }
+  /* Each side of the dashboard is its own stack. The alerts panel is
+     usually much taller than the chart, and a flat grid would leave a
+     void beside it; stacking each column lets the shorter cards fill
+     the space the taller one creates. */
+  .ad-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+  .ad-col > .card { margin-bottom: 0; }
+
+  .ad-alert { display: grid; grid-template-columns: auto 1fr; gap: 11px; padding: 13px 0; border-bottom: 1px solid var(--border); }
+  .ad-alert:last-child { border-bottom: 0; padding-bottom: 0; }
+  .ad-alert:first-child { padding-top: 0; }
+  .ad-alert .sev { width: 4px; border-radius: 3px; background: var(--warning); }
+  .ad-alert.critical .sev { background: var(--critical); }
+  .ad-alert.high .sev { background: var(--serious); }
+  .ad-alert .t { font-weight: 600; font-size: 13px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .ad-alert .t .tag { font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.09em; text-transform: uppercase;
+                      font-weight: 700; padding: 2px 6px; border-radius: 3px; background: var(--warning-bg); color: var(--warning); }
+  .ad-alert.critical .t .tag { background: var(--critical-bg); color: var(--critical); }
+  .ad-alert.high .t .tag { background: var(--serious-bg); color: var(--serious); }
+  .ad-alert .m { font-size: 12.5px; color: var(--ink-2); margin-top: 3px; line-height: 1.5; }
+  .ad-alert .m b { font-family: var(--font-mono); color: var(--ink); font-weight: 600; }
+  .ad-alert .rule { font-family: var(--font-mono); font-size: 10px; color: var(--ink-muted); margin-top: 5px; }
+  .ad-alert .act { margin-top: 7px; font-size: 12.5px; color: var(--ink); background: var(--surface-2);
+                   border-left: 2px solid var(--accent); padding: 6px 10px; border-radius: 0 6px 6px 0; line-height: 1.5; }
+  .ad-alert .act b { font-weight: 700; }
+  .ad-quiet { color: var(--ink-muted); font-size: 12.5px; padding: 6px 0; }
+
+  .ad-stat { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0;
+             border-bottom: 1px solid var(--border); font-size: 12.5px; }
+  .ad-stat:last-child { border-bottom: 0; }
+  .ad-stat b { font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .ad-note { font-size: 11.5px; color: var(--ink-muted); line-height: 1.6; margin: 12px 0 0;
+             border-left: 2px solid var(--border-strong); padding-left: 11px; }
+  .ad-note b { color: var(--ink-2); }
+
+  .ad-picker { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 16px; }
+  .ad-picker select, .ad-picker input { font: inherit; font-size: 13px; padding: 8px 10px;
+             border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); }
+  .ad-picker select { min-width: 280px; }
+
+  /* A three-up row is narrow, and a table inside one must scroll on its
+     own rather than push the page sideways or clip its last column. */
+  .ad-scroll { overflow-x: auto; }
+  .ad-scroll table { min-width: 100%; }
+  .ad-assumed { font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.07em; text-transform: uppercase;
+                font-weight: 700; padding: 1px 5px; border-radius: 3px; background: var(--warning-bg); color: var(--warning); }
 </style>
 </head>
 <body>
@@ -700,6 +786,11 @@
           <div class="name">HealthCross</div>
           <div class="sub">Underwriting Portal</div>
         </div>
+      </div>
+
+      <div class="hc-rail-group">
+        <div class="hc-rail-label">Account</div>
+        <button class="hc-rail-item" id="hc-rail-account-dashboard" onclick="hcRailAccountDashboard()">Account Dashboard</button>
       </div>
 
       <div class="hc-rail-group">
@@ -940,6 +1031,78 @@ function svgLineChart(points, opts) {
   `;
 }
 
+/* Stacked columns over time - a monthly total that is made of two parts
+   worth telling apart.
+
+   Claims per month are the case it exists for. A single-colour column
+   says an account's recent months got worse; split paid from
+   outstanding and the same columns often say the TPA has not settled
+   them yet, which is a completely different thing to tell a client. The
+   segments are ordered settled-first from the baseline so the growing
+   unsettled part reads as the part sitting on top.
+
+   `reference` draws a dashed horizontal line (monthly earned premium,
+   in practice), so a column above the line loses money that month
+   without the reader doing any arithmetic. */
+function svgStackedColumnChart(items, opts) {
+  opts = opts || {};
+  const series = opts.series || [
+    { key: 'paid', label: 'Paid', color: 'var(--series-1)' },
+    { key: 'outstanding', label: 'Outstanding', color: 'var(--series-2)' },
+  ];
+  const formatValue = opts.formatValue || (v => Math.round(v).toLocaleString());
+  const w = 720, h = 210, padL = 64, padB = 26, padT = 16, padR = 12;
+  const plotW = w - padL - padR, plotH = h - padT - padB;
+  const totals = items.map(i => series.reduce((sum, s) => sum + (i[s.key] || 0), 0));
+  const maxVal = Math.max(...totals, opts.reference || 0, 1);
+  const y = v => padT + plotH - (v / maxVal) * plotH;
+  const slot = items.length ? plotW / items.length : plotW;
+  const barW = Math.max(6, Math.min(46, slot * 0.55));
+
+  const gridlines = [0, 0.5, 1].map(f => `
+    <line x1="${padL}" y1="${y(maxVal * f).toFixed(1)}" x2="${w - padR}" y2="${y(maxVal * f).toFixed(1)}" class="chart-grid"/>
+    <text x="${padL - 8}" y="${(y(maxVal * f) + 4).toFixed(1)}" class="chart-axis-label" text-anchor="end">${Math.round(maxVal * f).toLocaleString()}</text>
+  `).join('');
+
+  const reference = opts.reference
+    ? `<line x1="${padL}" y1="${y(opts.reference).toFixed(1)}" x2="${w - padR}" y2="${y(opts.reference).toFixed(1)}"
+             stroke="var(--ink-muted)" stroke-width="1.5" stroke-dasharray="5 4" opacity="0.6"/>`
+    : '';
+
+  const columns = items.map((item, i) => {
+    const cx = padL + slot * i + slot / 2;
+    let base = 0;
+    const segments = series.map(s => {
+      const value = item[s.key] || 0;
+      if (value <= 0) { return ''; }
+      const top = y(base + value), bottom = y(base);
+      base += value;
+      return `<rect x="${(cx - barW / 2).toFixed(1)}" y="${top.toFixed(1)}" width="${barW.toFixed(1)}"
+                    height="${Math.max(1, bottom - top).toFixed(1)}" fill="${s.color}" class="chart-row"
+                    data-tooltip="${escapeHtml(item.label)} &middot; ${escapeHtml(s.label)}: ${escapeHtml(formatValue(value))}"/>`;
+    }).join('');
+    const total = totals[i];
+    const cap = total > 0
+      ? `<text x="${cx.toFixed(1)}" y="${(y(total) - 6).toFixed(1)}" class="chart-axis-label" text-anchor="middle">${escapeHtml(formatValue(total))}</text>`
+      : '';
+    return `${segments}${cap}
+      <text x="${cx.toFixed(1)}" y="${h - 6}" class="chart-axis-label" text-anchor="middle">${escapeHtml(item.label)}</text>`;
+  }).join('');
+
+  const legend = series.map(s => `
+    <span class="swatch"><span class="dot" style="background:${s.color};"></span>${escapeHtml(s.label)}</span>
+  `).join('') + (opts.referenceLabel
+    ? `<span class="swatch"><span class="dot" style="background:var(--ink-muted);opacity:.6;"></span>${escapeHtml(opts.referenceLabel)}</span>`
+    : '');
+
+  return `
+    <svg viewBox="0 0 ${w} ${h}" class="chart-svg" style="width:100%; height:${h}px;">
+      ${gridlines}${reference}${columns}
+    </svg>
+    <div class="chart-legend">${legend}</div>
+  `;
+}
+
 // Horizontal meter - a single score against fixed tier thresholds.
 /* The price, shown as the build-up that produced it.
    A scorecard's headline used to be a 0-100 composite and a "suggested
@@ -1115,6 +1278,259 @@ function hcRailNationalityRisk() {
 function hcRailClaimsExplorer() {
   _hcRailSetActive('hc-rail-claims-explorer');
   showPortfolioAnalysis();
+}
+
+/* ---------------- account dashboard ----------------
+
+   One account, on one screen: what it is, what its numbers mean, and
+   what to do about them before pricing.
+
+   Every figure here comes from /portfolio-analysis/account-overview,
+   which assembles them from the loss ratio row, the encounter split and
+   the claimant ranking the other screens already render. Nothing on
+   this screen is computed in the browser - a dashboard that does its
+   own arithmetic is a second implementation of every number on it, and
+   the reader has no way to know which screen to believe.
+
+   The one thing worth reading twice is the loss ratio card. It divides
+   by EARNED premium, and the card says so on its face. Against annual
+   premium a 130-day account reads comfortable while it is running at
+   two and a half times its premium. */
+let _adState = { masterClient: null, requestToken: 0 };
+
+const _adMoney = v => v == null ? '&mdash;' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+const _adPct = (v, dp) => v == null ? '&mdash;' : (v * 100).toFixed(dp == null ? 1 : dp) + '%';
+
+function _adSeverityClass(alerts) {
+  if (!alerts || !alerts.length) return 'good';
+  return alerts[0].severity;
+}
+
+async function hcRailAccountDashboard() {
+  _hcRailSetActive('hc-rail-account-dashboard');
+  currentCase = null;
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><h3>Account Dashboard</h3><div class="hint">Loading accounts&hellip;</div></div>';
+  try {
+    const accounts = await api('/portfolio-analysis/master-clients');
+    if (!accounts.length) {
+      main.innerHTML = '<div class="card"><h3>Account Dashboard</h3><div class="hint">No portfolio members uploaded yet. Upload the membership export in Claims Explorer first.</div></div>';
+      return;
+    }
+    const options = accounts.map(a => `<option value="${escapeHtml(a)}">${escapeHtml(a)}</option>`).join('');
+    main.innerHTML = `
+      <div class="ad-picker">
+        <label style="font-size:12.5px;color:var(--ink-muted);">Account</label>
+        <select id="adAccount" onchange="openAccountDashboard(this.value)">
+          <option value="">Choose an account&hellip;</option>
+          ${options}
+        </select>
+        <span class="hint" style="margin:0;">${accounts.length} accounts on the book</span>
+      </div>
+      <div id="adBody"></div>`;
+    if (_adState.masterClient && accounts.includes(_adState.masterClient)) {
+      document.getElementById('adAccount').value = _adState.masterClient;
+      openAccountDashboard(_adState.masterClient);
+    }
+  } catch (e) {
+    main.innerHTML = `<div class="card"><h3>Account Dashboard</h3><div class="status-err">${escapeHtml(e.message)}</div></div>`;
+  }
+}
+
+/* Opened from the rail's own picker and from any board that lists
+   accounts, so the entry point takes the name and does the rest. */
+async function openAccountDashboard(masterClient) {
+  if (!masterClient) { return; }
+  _adState.masterClient = masterClient;
+  // Two clicks in quick succession would otherwise race, and the slower
+  // response would win - painting one account's figures under another
+  // account's name.
+  const token = ++_adState.requestToken;
+  let body = document.getElementById('adBody');
+  if (!body) {
+    await hcRailAccountDashboard();
+    body = document.getElementById('adBody');
+    if (!body) return;
+  }
+  body.innerHTML = '<div class="card"><div class="hint">Reading the book&hellip;</div></div>';
+  try {
+    const data = await api(`/portfolio-analysis/account-overview/${encodeURIComponent(masterClient)}`);
+    if (token !== _adState.requestToken) return;
+    body.innerHTML = renderAccountDashboard(data);
+    bindChartTooltips(body);
+  } catch (e) {
+    if (token !== _adState.requestToken) return;
+    body.innerHTML = `<div class="card"><div class="status-err">${escapeHtml(e.message)}</div></div>`;
+  }
+}
+
+function _adKpis(data) {
+  const k = data.kpis;
+  if (!k) {
+    return '<div class="card"><div class="hint">No premium or claims on the book for this account&rsquo;s current policy period.</div></div>';
+  }
+  const lrSeverity = k.gross_loss_ratio == null ? ''
+    : k.gross_loss_ratio > 1.6 ? 'critical'
+    : k.gross_loss_ratio > 0.95 ? 'high' : 'good';
+  return `
+    <div class="ad-kpis">
+      <div class="ad-kpi">
+        <span class="k">Lives</span>
+        <span class="v">${_adMoney(k.member_count)}</span>
+        <span class="f">${data.policy.days_elapsed == null ? '' : `${data.policy.days_elapsed} of 365 days run`}</span>
+      </div>
+      <div class="ad-kpi">
+        <span class="k">Annual premium</span>
+        <span class="v">${_adMoney(k.gross_premium)}</span>
+        <span class="f">Earned to date <code>${_adMoney(k.earned_premium)}</code></span>
+      </div>
+      <div class="ad-kpi">
+        <span class="k">Incurred claims</span>
+        <span class="v">${_adMoney(k.incurred_claims)}</span>
+        <span class="f">Paid ${_adMoney(k.paid)} &middot; O/S ${_adMoney(k.outstanding)} &middot; IBNR ${_adMoney(k.ibnr)}</span>
+      </div>
+      <div class="ad-kpi ${lrSeverity}">
+        <span class="k">Loss ratio (earned)</span>
+        <span class="v">${_adPct(k.gross_loss_ratio)}</span>
+        <span class="f"><code>${_adMoney(k.incurred_claims)} &divide; ${_adMoney(k.earned_premium)}</code>
+          &middot; net of ${_adPct(k.loading_pct, 1)} loading <code>${_adPct(k.net_loss_ratio)}</code>
+          ${k.loading_is_default ? ' <span class="ad-assumed" title="Nobody supplied this account&rsquo;s loading - the house average is standing in, so the net loss ratio beside it is partly assumed. Upload the Client Master sheet, or enter the fee split on the case.">assumed</span>' : ''}</span>
+      </div>
+    </div>`;
+}
+
+function _adAlerts(alerts) {
+  if (!alerts.length) {
+    return '<div class="ad-quiet">Nothing above threshold. The account is priced and running within tolerance.</div>';
+  }
+  return alerts.map(a => `
+    <div class="ad-alert ${escapeHtml(a.severity)}">
+      <div class="sev"></div>
+      <div>
+        <div class="t">${escapeHtml(a.title)} <span class="tag">${escapeHtml(a.severity)}</span></div>
+        <div class="m">${escapeHtml(a.message)}</div>
+        <div class="rule">rule: ${escapeHtml(a.rule)}</div>
+        <div class="act"><b>Action</b> &mdash; ${escapeHtml(a.action)}</div>
+      </div>
+    </div>`).join('');
+}
+
+function _adClaimants(data) {
+  if (!data.top_claimants.length) {
+    return '<div class="ad-quiet">No claims on this account&rsquo;s current term.</div>';
+  }
+  const incurred = (data.kpis || {}).incurred_claims;
+  const rows = data.top_claimants.map(c => `
+    <tr>
+      <td>${escapeHtml(c.beneficiary_id || '-')}</td>
+      <td>${escapeHtml([c.age, c.gender].filter(v => v != null && v !== '').join(' '))}</td>
+      <td>${escapeHtml(c.top_diagnosis || '-')}</td>
+      <td class="num">${_adMoney(c.incurred)}</td>
+      <td class="num">${incurred ? _adPct(c.incurred / incurred) : '&mdash;'}</td>
+    </tr>`).join('');
+  return `
+    <div class="ad-scroll"><table>
+      <thead><tr><th>Member</th><th>Age/sex</th><th>Top diagnosis</th><th class="num">Incurred</th><th class="num">Share</th></tr></thead>
+      <tbody>${rows}</tbody>
+    </table></div>
+    <p class="ad-note">Share is against the account&rsquo;s incurred, so it reconciles with the figure above.
+      Incurred includes IBNR, which has no claimant, so each share is marginally conservative.</p>`;
+}
+
+function _adBookPosition(position) {
+  if (!position) { return '<div class="ad-quiet">No book to compare against.</div>'; }
+  const worse = position.loss_ratio != null && position.book_median_loss_ratio != null
+    && position.loss_ratio > position.book_median_loss_ratio;
+  return `
+    <div class="ad-stat"><span>Loss ratio percentile</span><b>${position.loss_ratio_percentile == null ? '&mdash;' : position.loss_ratio_percentile + 'th'}</b></div>
+    <div class="ad-stat"><span>Book median loss ratio</span><b>${_adPct(position.book_median_loss_ratio)}</b></div>
+    <div class="ad-stat"><span>Outstanding share</span><b>${_adPct(position.outstanding_share)} vs ${_adPct(position.book_median_outstanding_share)}</b></div>
+    <div class="ad-stat"><span>Premium per life</span><b>${_adMoney(position.premium_per_life)}</b></div>
+    <div class="ad-stat"><span>Book median per life</span><b>${_adMoney(position.book_median_premium_per_life)}</b></div>
+    <div class="ad-stat"><span>Claims per life</span><b>${_adMoney(position.claims_per_life)}</b></div>
+    <p class="ad-note">Measured against all ${position.accounts} accounts on the book, this one included &mdash;
+      ${worse ? 'it sits above the median.' : 'it sits at or below the median.'}</p>`;
+}
+
+function renderAccountDashboard(data) {
+  const k = data.kpis || {};
+  const severity = _adSeverityClass(data.alerts);
+  const window = data.claims_window || {};
+  const monthly = (data.claims_by_month || []).map(m => ({
+    label: m.month.slice(2).replace('-', '/'),
+    paid: m.paid,
+    outstanding: m.outstanding,
+  }));
+  // The reference line is the account's own earned premium per elapsed
+  // month, so a column standing above it is a month that lost money.
+  const monthsElapsed = data.policy.days_elapsed ? data.policy.days_elapsed / 30.44 : null;
+  const perMonth = monthsElapsed && k.earned_premium ? k.earned_premium / monthsElapsed : null;
+
+  // The API title-cases each claim line's own IP_OP_MATERNITY code, which
+  // every other screen renders as-is. Spelled out here for reading rather
+  // than changed at the source, so this screen shows the same rows the
+  // Utilization view does - only in words.
+  const ENCOUNTER_LABELS = { Ip: 'Inpatient', Op: 'Outpatient', Maternity: 'Maternity' };
+  const encounterRows = (data.encounter_split || []).map(r => `
+    <tr>
+      <td>${escapeHtml(ENCOUNTER_LABELS[r.encounter_type] || r.encounter_type)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td class="num">${_adMoney(r.total_value)}</td>
+      <td class="num">${r.pct_of_total == null ? '&mdash;' : r.pct_of_total.toFixed(1) + '%'}</td>
+    </tr>`).join('');
+
+  return `
+    <div class="ad-head">
+      <div>
+        <h2>${escapeHtml(data.master_client)}</h2>
+        <div class="meta">
+          Policy from <b>${escapeHtml(data.policy.start_date || '-')}</b>
+          &middot; <b>${data.policy.days_elapsed == null ? '-' : data.policy.days_elapsed}</b> days elapsed
+          &middot; <b>${data.policy.member_count == null ? '-' : data.policy.member_count}</b> lives
+          ${window.from ? `&middot; claims ${escapeHtml(window.from)} to ${escapeHtml(window.to)}` : ''}
+        </div>
+      </div>
+      <div class="right">
+        <span class="ad-pill ${data.policy.expired ? '' : 'good'}">${data.policy.expired ? 'Expired' : 'In force'}</span>
+        ${data.alerts.length ? `<span class="ad-pill ${escapeHtml(severity)}">${data.alerts.length} alert${data.alerts.length === 1 ? '' : 's'}</span>` : ''}
+        ${data.case_id ? `<button class="rb-hero-btn" style="background:var(--deep);color:var(--deep-ink);border-color:var(--deep);" onclick="selectCaseAndOpenRenewalBench(${data.case_id})">Open renewal bench</button>` : ''}
+      </div>
+    </div>
+
+    ${_adKpis(data)}
+
+    <div class="ad-grid two">
+      <div class="ad-col">
+        <div class="card">
+          <h3>Claims by month</h3>
+          <div class="hint">Settled and unsettled told apart &mdash; a month that is mostly outstanding will still move.</div>
+          ${monthly.length
+            ? svgStackedColumnChart(monthly, { reference: perMonth, referenceLabel: 'Earned premium / month' })
+            : '<div class="ad-quiet">No dated claims on this account&rsquo;s current term.</div>'}
+        </div>
+        <div class="card">
+          <h3>Top claimants</h3>
+          ${_adClaimants(data)}
+        </div>
+        <div class="card">
+          <h3>Where the money went</h3>
+          ${encounterRows
+            ? `<div class="ad-scroll"><table><thead><tr><th>Encounter</th><th class="num">Claims</th><th class="num">Value</th><th class="num">Share</th></tr></thead><tbody>${encounterRows}</tbody></table></div>`
+            : '<div class="ad-quiet">No claims to split.</div>'}
+        </div>
+      </div>
+      <div class="ad-col">
+        <div class="card">
+          <h3>Underwriting alerts</h3>
+          <div class="hint">${data.alerts.length ? `${data.alerts.length} open` : 'Nothing above threshold'}</div>
+          ${_adAlerts(data.alerts)}
+        </div>
+        <div class="card">
+          <h3>Against the book</h3>
+          ${_adBookPosition(data.book_position)}
+        </div>
+      </div>
+    </div>`;
 }
 
 /* Is the rate card charging what the book actually costs?

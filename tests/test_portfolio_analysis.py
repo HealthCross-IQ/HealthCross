@@ -500,6 +500,42 @@ def test_resolve_client_opex_pct_uses_the_single_undated_record_regardless_of_po
     assert resolve_client_opex_pct("Acme Holdings", None, records, DEFAULT_EXPENSE_RATIO_PCT) == 0.25
 
 
+def test_client_opex_pct_on_file_tells_a_real_loading_from_the_house_default():
+    # 33% shown flat reads as this account's own loading, and nothing on
+    # the screen lets a reader see that nobody supplied it. Every figure
+    # resting on it is then partly assumed. The two answers come from one
+    # walk of the records, so they cannot drift on which record wins.
+    from app.scoring.rules.portfolio_analysis import client_opex_pct_on_file
+
+    records = {"Acme Holdings": [{"start_date": None, "end_date": None, "opex_pct": 0.25}]}
+    assert client_opex_pct_on_file("Acme Holdings", date(2026, 6, 1), records) == 0.25
+    assert client_opex_pct_on_file("Nobody Ltd", date(2026, 6, 1), records) is None
+    assert client_opex_pct_on_file("Acme Holdings", date(2026, 6, 1), None) is None
+    assert client_opex_pct_on_file(None, date(2026, 6, 1), records) is None
+
+    dated = {"Acme Holdings": [
+        {"start_date": date(2025, 1, 1), "end_date": date(2025, 12, 31), "opex_pct": 0.22},
+    ]}
+    # Outside every window is not on file, however many records exist.
+    assert client_opex_pct_on_file("Acme Holdings", date(2026, 6, 1), dated) is None
+    assert client_opex_pct_on_file("Acme Holdings", date(2025, 6, 1), dated) == 0.22
+
+
+def test_account_loss_ratio_rows_flag_a_loading_nobody_supplied():
+    members = [_lr_member("Acme Holdings", date(2025, 1, 1),
+                          paid=50_000.0, outstanding=10_000.0, gross=200_000.0)]
+
+    rows = account_loss_ratio_rows(members, as_of=date(2025, 6, 30))
+    assert rows[0]["loading_pct"] == DEFAULT_EXPENSE_RATIO_PCT
+    assert rows[0]["loading_is_default"] is True
+
+    on_file = {"Acme Holdings": [{"start_date": None, "end_date": None, "opex_pct": 0.21}]}
+    rows = account_loss_ratio_rows(members, as_of=date(2025, 6, 30),
+                                   opex_records_by_client=on_file)
+    assert rows[0]["loading_pct"] == 0.21
+    assert rows[0]["loading_is_default"] is False
+
+
 def test_summarize_by_group_size_band_pools_groups_by_headcount():
     # "Small Co" has 2 members (band 1-10), "Big Co" has 3 members split
     # across two subgroups sharing the same master_contract (band 1-10
