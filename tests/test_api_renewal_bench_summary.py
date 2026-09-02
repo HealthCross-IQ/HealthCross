@@ -111,13 +111,32 @@ def test_renewal_bench_summary_drivers_reconcile_to_total_pct(client):
     body = resp.json()
     drivers = body["drivers"]
 
-    assert drivers["claims_experience_pct"] == -20.62
-    assert drivers["medical_trend_pct"] == 5.96
+    assert drivers["claims_experience_pct"] == -20.61
+    assert drivers["medical_trend_pct"] == 11.19
     assert drivers["census_change_pct"] is None  # no prior census snapshot on this case
     assert drivers["underwriter_adjustment_pct"] == 0.0
-    assert drivers["total_pct"] == -14.66
-    assert round(drivers["claims_experience_pct"] + drivers["medical_trend_pct"], 2) == drivers["total_pct"]
+
+    # This account's own experience asks for a decrease, so the house
+    # floor decides the ask - and gets its own bar rather than being
+    # folded back into experience.
+    assert drivers["floor_applied"] is True
+    assert drivers["floor_pct"] == 18.42
+    assert drivers["total_pct"] == 9.0
+    assert round(
+        drivers["claims_experience_pct"] + drivers["medical_trend_pct"] + drivers["floor_pct"], 2
+    ) == drivers["total_pct"]
     assert drivers["within_authority"] is True
+
+    # And the hero is Method 1's own premium, not a second one beside it.
+    # The two used to disagree on the same screen - the bigger the loss
+    # ratio, the wider the gap - because this waterfall multiplied the
+    # CLAIMS by inflation while the ladder adds it to the LOSS RATIO in
+    # points. Checked against the rating endpoint itself, so the two
+    # screens an underwriter actually compares must agree.
+    assert drivers["recommended_premium"] == drivers["method_1_required_premium"]
+    rating = client.get(f"/cases/{case_id}/renewal-rating").json()
+    assert drivers["recommended_premium"] == rating["required_premium"]
+    assert drivers["total_pct"] == rating["renewal_increase_pct"]
 
 
 def test_renewal_bench_summary_underwriter_adjustment_is_overridable(client):
@@ -131,7 +150,9 @@ def test_renewal_bench_summary_underwriter_adjustment_is_overridable(client):
     drivers = body["drivers"]
 
     assert drivers["underwriter_adjustment_pct"] == -20.0
-    assert drivers["total_pct"] == -34.66
+    # 20 points off Method 1's floored +9% ask, not off an unfloored
+    # experience figure the portal never quotes.
+    assert drivers["total_pct"] == -11.0
     assert drivers["within_authority"] is False
 
 

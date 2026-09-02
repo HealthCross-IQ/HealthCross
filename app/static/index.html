@@ -5500,9 +5500,12 @@ function _rbRecommendedPremiumHtml(r) {
   const d = r.drivers;
   return `
     <div class="rb-hero">
-      <div class="lbl">Recommended renewal premium</div>
+      <div class="lbl">Recommended renewal premium &middot; Method 1</div>
       <div class="amt">AED ${Math.round(d.recommended_premium).toLocaleString()}</div>
       <div class="sub">${d.total_pct > 0 ? '+' : ''}${d.total_pct}% vs. current annual premium &middot; ${d.within_authority ? 'within underwriter authority' : `outside authority (&plusmn;${d.authority_threshold_pct}pt)`}</div>
+      ${d.method_1_required_premium != null && Math.round(d.method_1_required_premium) !== Math.round(d.recommended_premium)
+        ? `<div class="sub">Method 1 asks AED ${Math.round(d.method_1_required_premium).toLocaleString()} (${d.method_1_increase_pct > 0 ? '+' : ''}${d.method_1_increase_pct}%) before the census and underwriter adjustments below.</div>`
+        : ''}
       <div class="rb-hero-row">
         <div class="rb-hero-input">
           <label>Underwriter adjustment %</label>
@@ -5517,11 +5520,18 @@ function _rbRecommendedPremiumHtml(r) {
     </div>
     <div class="rb-card">
       <div class="rb-card-title">Renewal drivers</div>
-      <div class="rb-card-sub">How the ${d.total_pct}% total technical movement breaks down, each an additive percentage-point contribution against current premium.</div>
+      <div class="rb-card-sub">How the ${d.total_pct}% breaks down. Each bar is a slice of Method 1's own ladder
+        &mdash; loss ratio ${d.loss_ratio == null ? '&ndash;' : (d.loss_ratio * 100).toFixed(1) + '%'}
+        plus ${d.inflation_pts == null ? '&ndash;' : (d.inflation_pts * 100).toFixed(1)} points of inflation,
+        over (1 &minus; ${d.loading_pct == null ? '&ndash;' : (d.loading_pct * 100).toFixed(1) + '%'} loading)
+        &mdash; not a second price built beside it, so they add up to the figure above.</div>
       <div class="rb-driver-row">
         ${_rbDriverBlockHtml('Claims experience', d.claims_experience_pct)}
         <div class="rb-driver-op">+</div>
         ${_rbDriverBlockHtml('Medical trend', d.medical_trend_pct)}
+        ${d.floor_applied ? `
+        <div class="rb-driver-op">+</div>
+        ${_rbDriverBlockHtml(`House floor (${(d.minimum_increase_pct * 100).toFixed(0)}%)`, d.floor_pct)}` : ''}
         <div class="rb-driver-op">+</div>
         ${_rbDriverBlockHtml('Census change', d.census_change_pct)}
         <div class="rb-driver-op">+</div>
@@ -5529,6 +5539,10 @@ function _rbRecommendedPremiumHtml(r) {
         <div class="rb-driver-op">=</div>
         ${_rbDriverBlockHtml('Total movement', d.total_pct, true)}
       </div>
+      ${d.floor_applied ? `<div class="rb-card-sub" style="margin:12px 0 0;">This account&rsquo;s own experience asks for
+        ${(d.claims_experience_pct + d.medical_trend_pct).toFixed(2)}%. The house minimum of
+        ${(d.minimum_increase_pct * 100).toFixed(0)}% is what is being quoted &mdash; shown as its own bar rather than
+        folded into the experience, because they are different conversations.</div>` : ''}
     </div>
   `;
 }

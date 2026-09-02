@@ -7,6 +7,10 @@ one opaque percentage - matching the approved Renewal Bench mockup.
 """
 from typing import List, Optional
 
+#: Distinguishes "caller said None" from "caller said nothing" for the
+#: house floor, which None deliberately switches OFF for a what-if.
+_UNSET = object()
+
 
 def existing_premium_breakdown(members: List[dict]) -> dict:
     """Total existing premium built bottom-up from the CURRENT active/
@@ -128,67 +132,115 @@ def census_change_pct_from_snapshots(
 
 
 def renewal_drivers(
-    annualized_incurred_claims: float,
-    trended_claims: float,
-    current_annual_premium: float,
+    loss_ratio: float,
+    expiring_annual_premium: float,
     loading_pct: float,
+    inflation_pts: Optional[float] = None,
     census_change_pct: Optional[float] = None,
     underwriter_adjustment_pct: float = 0.0,
     authority_threshold_pct: float = 15.0,
+    minimum_increase_pct: Optional[float] = _UNSET,
 ) -> dict:
-    """Decomposes the total renewal movement into named contributing
-    factors, each an additive percentage-point contribution against
-    current_annual_premium (so they sum exactly to total_pct, unlike a
-    multiplicative build-up):
+    """The Renewal Bench waterfall: Method 1's price, broken into the
+    named factors that produced it.
 
-      claims_experience_pct: what the increase would be from this case's
-      own incurred claims LEVEL alone (Method A's annualized_incurred_claims,
-      grossed up by the same loading), before any inflation trend.
+    It used to build its own price, and the two disagreed. The ladder
+    (renewal_from_loss_ratio) adds inflation to the LOSS RATIO in points
+    and this decomposition multiplied the CLAIMS by it, so the same
+    account had two renewal premiums on the same screen - K A F at a
+    248.6% loss ratio came out +226.2% under Method 1 and +240.4% here,
+    a gap of AED 140,739. The gap widens with the loss ratio, which is
+    exactly backwards: the worse the account, the further the headline
+    drifted from the number the house actually quotes.
 
-      medical_trend_pct: the INCREMENTAL effect of applying inflation on
-      top of that same claims level - isolates trend from experience.
+    So this no longer computes a price. It calls the same ladder twice -
+    once with the trend switched off, once with it on - and reports the
+    difference. Every component is therefore a real slice of Method 1's
+    own ask, and their sum IS Method 1's ask:
+
+      claims_experience_pct: the increase this account's own loss ratio
+      asks for with no inflation at all.
+
+      medical_trend_pct: what adding the inflation points on top costs,
+      isolated from the experience underneath it.
+
+      floor_pct: the extra points the house minimum adds when the
+      account's own experience asks for less than it. Reported as its
+      own bar rather than folded into experience, because "this account
+      needs 9%" and "this account needs 2% and the floor is 9%" are
+      different conversations.
 
       census_change_pct: the census-movement premium impact (see
-      census_change_pct_from_snapshots) as a % of current premium - None
-      (shown as "not available") when there's no prior census snapshot.
+      census_change_pct_from_snapshots) as a % of expiring premium -
+      None (shown as "not available") with no prior census snapshot.
 
-      underwriter_adjustment_pct: a manual override, 0 by default - the
-      Recommended Renewal Premium hero card's own editable field.
+      underwriter_adjustment_pct: the hero card's own editable field.
 
-    recommended_premium is current_annual_premium grossed up by exactly
-    total_pct, so the hero card's own number always reconciles with the
-    waterfall shown alongside it. within_authority flags whether
-    |underwriter_adjustment_pct| stays inside authority_threshold_pct - a
-    visible, overridable assumption (like inflation_pct/loading_pct
-    elsewhere in this module), not a hidden business rule.
+    recommended_premium is Method 1's required_premium plus the census
+    and underwriter adjustments in premium terms, so with both at zero
+    it is Method 1's number to the cent - not a rounding of it.
     """
-    if current_annual_premium <= 0:
-        raise ValueError("current_annual_premium must be positive.")
+    from app.scoring.rules.renewal_rating import (
+        DEFAULT_INFLATION_PCT,
+        MINIMUM_RENEWAL_INCREASE_PCT,
+        renewal_from_loss_ratio,
+    )
+
+    if expiring_annual_premium <= 0:
+        raise ValueError("expiring_annual_premium must be positive.")
     if not (0 <= loading_pct < 1):
         raise ValueError("loading_pct must be between 0 and 1 (exclusive of 1).")
 
-    required_premium_no_trend = annualized_incurred_claims / (1 - loading_pct)
-    required_premium_with_trend = trended_claims / (1 - loading_pct)
+    if inflation_pts is None:
+        inflation_pts = DEFAULT_INFLATION_PCT
+    if minimum_increase_pct is _UNSET:
+        minimum_increase_pct = MINIMUM_RENEWAL_INCREASE_PCT
 
-    claims_experience_pct = round((required_premium_no_trend / current_annual_premium - 1) * 100, 2)
-    medical_trend_pct = round(
-        (required_premium_with_trend / current_annual_premium - 1) * 100 - claims_experience_pct, 2
-    )
+    # The ladder itself, three times over: no trend, trend, and the ask
+    # actually quoted. Nothing here re-derives what any of them mean.
+    no_trend = renewal_from_loss_ratio(
+        loss_ratio, expiring_annual_premium, 0.0, loading_pct, minimum_increase_pct=None)
+    with_trend = renewal_from_loss_ratio(
+        loss_ratio, expiring_annual_premium, inflation_pts, loading_pct, minimum_increase_pct=None)
+    quoted = renewal_from_loss_ratio(
+        loss_ratio, expiring_annual_premium, inflation_pts, loading_pct,
+        minimum_increase_pct=minimum_increase_pct)
+
+    claims_experience_pct = no_trend["renewal_increase_pct"]
+    medical_trend_pct = round(with_trend["renewal_increase_pct"] - claims_experience_pct, 2)
+    floor_pct = round(quoted["renewal_increase_pct"] - with_trend["renewal_increase_pct"], 2)
+
     effective_census_change_pct = census_change_pct if census_change_pct is not None else 0.0
     underwriter_adjustment_pct = round(underwriter_adjustment_pct, 2)
+    adjustment_pct = effective_census_change_pct + underwriter_adjustment_pct
 
-    total_pct = round(
-        claims_experience_pct + medical_trend_pct + effective_census_change_pct + underwriter_adjustment_pct, 2
-    )
-    recommended_premium = round(current_annual_premium * (1 + total_pct / 100), 2)
+    # Method 1's own premium, then the named adjustments on top of it in
+    # premium terms. Adding percentage points to a premium the ladder
+    # already rounded would leave the hero a few dirhams off the figure
+    # the rest of the portal quotes.
+    recommended_premium = round(
+        quoted["required_premium"] + expiring_annual_premium * adjustment_pct / 100, 2)
+    total_pct = round((recommended_premium / expiring_annual_premium - 1) * 100, 2)
 
     return {
         "claims_experience_pct": claims_experience_pct,
         "medical_trend_pct": medical_trend_pct,
+        "floor_pct": floor_pct,
+        "floor_applied": quoted["floor_applied"],
+        "minimum_increase_pct": minimum_increase_pct,
         "census_change_pct": census_change_pct,
         "underwriter_adjustment_pct": underwriter_adjustment_pct,
         "total_pct": total_pct,
         "recommended_premium": recommended_premium,
+        # Method 1's own ask, carried through untouched so a screen can
+        # show what the adjustments were applied TO.
+        "method_1_required_premium": quoted["required_premium"],
+        "method_1_increase_pct": quoted["renewal_increase_pct"],
+        "loss_ratio": quoted["loss_ratio"],
+        "trended_loss_ratio": quoted["trended_loss_ratio"],
+        "inflation_pts": inflation_pts,
+        "loading_pct": loading_pct,
+        "expiring_annual_premium": round(expiring_annual_premium, 2),
         "authority_threshold_pct": authority_threshold_pct,
         "within_authority": abs(underwriter_adjustment_pct) <= authority_threshold_pct,
     }

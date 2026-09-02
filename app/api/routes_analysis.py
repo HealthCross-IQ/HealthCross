@@ -1803,15 +1803,24 @@ def get_renewal_bench_summary(
         current_relation_counts[rel] = current_relation_counts.get(rel, 0) + 1
     census_change_pct = census_change_pct_from_snapshots(snapshots, current_relation_counts, case.current_annual_premium)
 
-    loading_pct = case_loading_pct(case.tpa_fee_pct, case.commission_pct, case.hc_fee_pct, case.qic_fee_pct)
+    # This account's own entered fee split, never case_loading_pct's
+    # defaults. The rating already blocks on a missing one, so this could
+    # only ever have defaulted through a future refactor - which is
+    # precisely how the last assumed loading got in.
+    account_loading, loading_problems = _renewal_loading(case, None)
     # No drivers when the price is withheld: a waterfall of contributions
     # to a number that does not exist is not a partial answer, it is a
     # crash waiting for the first arithmetic step.
-    drivers = None if renewal.get("pricing_blocked") else renewal_drivers(
-        annualized_incurred_claims=renewal.get("annualized_incurred_claims"),
-        trended_claims=renewal.get("trended_claims"),
-        current_annual_premium=case.current_annual_premium,
-        loading_pct=loading_pct,
+    blocked = renewal.get("pricing_blocked") or bool(loading_problems)
+    drivers = None if blocked else renewal_drivers(
+        # The waterfall decomposes Method 1's own ladder rather than
+        # building a second price beside it. It used to do the latter,
+        # and on K A F the hero card read +240.4% while Method 1 on the
+        # same screen read +226.2%.
+        loss_ratio=renewal.get("actual_loss_ratio"),
+        expiring_annual_premium=renewal.get("renewal_base_premium") or case.current_annual_premium,
+        loading_pct=account_loading,
+        inflation_pts=(renewal.get("assumptions_used") or {}).get("inflation_pct"),
         census_change_pct=census_change_pct,
         underwriter_adjustment_pct=underwriter_adjustment_pct,
         authority_threshold_pct=authority_threshold_pct,

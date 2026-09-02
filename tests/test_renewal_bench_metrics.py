@@ -1,3 +1,5 @@
+import pytest
+
 from app.scoring.rules.renewal_bench_metrics import (
     case_claim_kpis,
     census_change_pct_from_snapshots,
@@ -53,53 +55,97 @@ def test_census_change_pct_from_snapshots_returns_none_without_current_premium()
     assert census_change_pct_from_snapshots(snapshots, {"employee": 10}, None) is None
 
 
+def _ladder(loss_ratio, expiring=500_000.0, loading=0.30, inflation=0.075, floor=None):
+    from app.scoring.rules.renewal_rating import (
+        MINIMUM_RENEWAL_INCREASE_PCT, renewal_from_loss_ratio,
+    )
+    return renewal_from_loss_ratio(
+        loss_ratio, expiring, inflation, loading,
+        minimum_increase_pct=MINIMUM_RENEWAL_INCREASE_PCT if floor is None else floor)
+
+
+def test_renewal_drivers_are_a_decomposition_of_method_1_not_a_second_price():
+    # The whole reason this function was rewritten. It used to multiply
+    # the CLAIMS by inflation while the ladder adds inflation to the LOSS
+    # RATIO in points, so the Renewal Bench hero and Method 1 quoted
+    # different premiums for the same account on the same screen - and
+    # the gap widened with the loss ratio, so the worse the account, the
+    # further the headline drifted from what the house actually quotes.
+    for loss_ratio in (0.40, 0.80, 1.30, 2.486):
+        drivers = renewal_drivers(loss_ratio=loss_ratio, expiring_annual_premium=991_265.0,
+                                  loading_pct=0.215)
+        ladder = _ladder(loss_ratio, expiring=991_265.0, loading=0.215)
+        assert drivers["recommended_premium"] == ladder["required_premium"]
+        assert drivers["total_pct"] == pytest.approx(ladder["renewal_increase_pct"], abs=0.01)
+
+
 def test_renewal_drivers_reconciles_exactly_to_total_pct():
     result = renewal_drivers(
-        annualized_incurred_claims=392_000,
-        trended_claims=392_000 * 1.075,
-        current_annual_premium=500_000,
+        loss_ratio=0.784,           # 392,000 of claims against 500,000 of premium
+        expiring_annual_premium=500_000,
         loading_pct=0.30,
         census_change_pct=4.3,
         underwriter_adjustment_pct=-2.0,
     )
 
+    # Experience alone: 78.4% / 0.70 = 112.0% of expiring.
     assert result["claims_experience_pct"] == 12.0
-    assert result["medical_trend_pct"] == 8.4
+    # With trend: (78.4% + 7.5) / 0.70 = 122.71%, so trend adds 10.71 -
+    # NOT the 8.4 the old multiply-the-claims version reported.
+    assert result["medical_trend_pct"] == 10.71
     assert result["census_change_pct"] == 4.3
     assert result["underwriter_adjustment_pct"] == -2.0
-    assert result["total_pct"] == 22.7
-    # The four components must sum exactly to total_pct - the whole point
-    # of the additive design (a mockup-matching waterfall must reconcile).
+
+    # Every component must still sum to total_pct - the whole point of an
+    # additive waterfall is that the reader can add it up.
     assert round(
         result["claims_experience_pct"]
         + result["medical_trend_pct"]
+        + result["floor_pct"]
         + result["census_change_pct"]
         + result["underwriter_adjustment_pct"],
         2,
-    ) == result["total_pct"]
-    assert result["recommended_premium"] == 613_500.0
+    ) == pytest.approx(result["total_pct"], abs=0.01)
     assert result["within_authority"] is True
+
+
+def test_the_house_floor_gets_its_own_bar_rather_than_hiding_in_experience():
+    # An account whose own experience asks for less than the floor. "This
+    # account needs 9%" and "this account needs 2% and the house floor is
+    # 9%" are different conversations, and one bar cannot tell them apart.
+    result = renewal_drivers(loss_ratio=0.40, expiring_annual_premium=500_000,
+                             loading_pct=0.30)
+    assert result["floor_applied"] is True
+    assert result["floor_pct"] > 0
+    assert result["total_pct"] == pytest.approx(9.0, abs=0.01)
+    # And the experience underneath it is still reported honestly.
+    assert result["claims_experience_pct"] < 0
+
+
+def test_a_floor_that_does_not_bite_contributes_nothing():
+    result = renewal_drivers(loss_ratio=1.30, expiring_annual_premium=500_000,
+                             loading_pct=0.30)
+    assert result["floor_applied"] is False
+    assert result["floor_pct"] == 0.0
 
 
 def test_renewal_drivers_treats_missing_census_change_as_zero_but_keeps_it_reported_as_none():
     result = renewal_drivers(
-        annualized_incurred_claims=392_000,
-        trended_claims=392_000 * 1.075,
-        current_annual_premium=500_000,
+        loss_ratio=0.784,
+        expiring_annual_premium=500_000,
         loading_pct=0.30,
         census_change_pct=None,
         underwriter_adjustment_pct=0.0,
     )
 
     assert result["census_change_pct"] is None
-    assert result["total_pct"] == 20.4  # claims_experience + medical_trend only
+    assert result["total_pct"] == pytest.approx(22.71, abs=0.01)
 
 
 def test_renewal_drivers_flags_outside_authority_when_adjustment_exceeds_threshold():
     result = renewal_drivers(
-        annualized_incurred_claims=392_000,
-        trended_claims=392_000 * 1.075,
-        current_annual_premium=500_000,
+        loss_ratio=0.784,
+        expiring_annual_premium=500_000,
         loading_pct=0.30,
         underwriter_adjustment_pct=-20.0,
         authority_threshold_pct=15.0,
@@ -108,18 +154,24 @@ def test_renewal_drivers_flags_outside_authority_when_adjustment_exceeds_thresho
     assert result["within_authority"] is False
 
 
-def test_renewal_drivers_rejects_non_positive_premium():
-    import pytest
+def test_renewal_drivers_carry_the_method_1_figure_they_were_applied_to():
+    # So a screen can show what the adjustments moved the price FROM.
+    result = renewal_drivers(loss_ratio=1.30, expiring_annual_premium=500_000,
+                             loading_pct=0.30, underwriter_adjustment_pct=-5.0)
+    ladder = _ladder(1.30)
+    assert result["method_1_required_premium"] == ladder["required_premium"]
+    assert result["recommended_premium"] == pytest.approx(
+        ladder["required_premium"] - 500_000 * 0.05, abs=0.01)
 
+
+def test_renewal_drivers_rejects_non_positive_premium():
     with pytest.raises(ValueError):
-        renewal_drivers(100_000, 107_500, 0, 0.30)
+        renewal_drivers(loss_ratio=0.80, expiring_annual_premium=0, loading_pct=0.30)
 
 
 def test_renewal_drivers_rejects_loading_pct_out_of_range():
-    import pytest
-
     with pytest.raises(ValueError):
-        renewal_drivers(100_000, 107_500, 500_000, 1.0)
+        renewal_drivers(loss_ratio=0.80, expiring_annual_premium=500_000, loading_pct=1.0)
 
 
 def test_existing_premium_breakdown_sums_rates_by_category():
