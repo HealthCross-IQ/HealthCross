@@ -1141,7 +1141,6 @@ def renewal_repricing(
     renewing or their condition is excluded on the renewal terms, and
     showing it on its own invites it to be quoted as though it were.
     """
-    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
     from app.scoring.rules.renewal_intake import (
         continuing_and_leaving,
         current_term_members,
@@ -1191,11 +1190,11 @@ def renewal_repricing(
     data_to = book_repo.measurement_date(db) or (max(treated) if treated else None)
 
     current_premium = sum(member_annual_rate(m) or 0.0 for m in active) or None
+    effective_loading, loading_source = _account_loading(db, master_client, loading_pct)
     priced = reprice(
         active, by_beneficiary, windows,
         current_premium=current_premium,
-        loading_pct=loading_pct if loading_pct is not None else DEFAULT_EXPENSE_RATIO_PCT,
-        target_loss_ratio=target_loss_ratio if target_loss_ratio is not None else HOUSE_TARGET_LOSS_RATIO,
+        loading_pct=effective_loading,
         exclude=exclude,
         trend_pct=trend_pct if trend_pct is not None else DEFAULT_TREND_PCT,
         data_to=data_to,
@@ -1205,9 +1204,54 @@ def renewal_repricing(
         "as_at": cut_date,
         "warning": warning,
         "data_to": data_to,
+        "loading_source": loading_source,
         "top_claimants": member_claim_ranking(active, by_beneficiary, windows, top=top),
         **priced,
     }
+
+
+def _account_loading(db: Session, master_client: str,
+                     override: Optional[float] = None) -> tuple:
+    """This account's real loading, and where it came from.
+
+    Never the house average. It used to default to DEFAULT_EXPENSE_RATIO_PCT
+    silently, so an account whose fee split was entered at 21.5% was
+    repriced at 33% and the panel's own subtitle said so in words nobody
+    reads - "priced at a 33.0% loading" beside a case record holding a
+    different number.
+
+    Three sources, in order, and None when none of them answer:
+
+      an explicit override, which is the what-if query param;
+      the renewal case's own fee split, where a case is open;
+      the Client Master sheet's OPEX for this account, which is the same
+      figure the Loss Ratio screen divides by.
+    """
+    from app.api.case_loading import is_renewal, renewal_loading
+    from app.scoring.rules.portfolio_analysis import client_opex_pct_on_file
+
+    if override is not None:
+        return override, "the loading passed on the request"
+
+    case = _portfolio_cases_by_client(db).get(_client_key(master_client))
+    if case is not None and is_renewal(case):
+        loading, problems = renewal_loading(case)
+        if loading is not None:
+            return loading, "this account's own fee split on the case"
+
+    records = book_repo.opex_records_by_client(db)
+    rows = book_analysis.account_loss_ratio_rows_for_book(db, client=None)
+    policy_start = None
+    for row in rows:
+        if (row.get("master_client") or "").strip().casefold() == (master_client or "").strip().casefold():
+            candidate = date.fromisoformat(row["policy_start_date"])
+            if policy_start is None or candidate > policy_start:
+                policy_start = candidate
+    on_file = client_opex_pct_on_file(master_client, policy_start, records)
+    if on_file is not None:
+        return on_file, "the Client Master sheet's OPEX for this account"
+
+    return None, None
 
 
 @router.post("/renewal-intake")

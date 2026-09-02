@@ -852,6 +852,25 @@
              border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); }
   .ad-picker select { min-width: 280px; }
 
+  /* ---------------- case uploads ----------------
+     Roughly 400px of drop zone and accordion opened every case, on every
+     visit, forever - right on day one and wrong on every day after, when
+     the files are in and the work is reading the numbers. Collapsed once
+     nothing required is missing; opened by itself when something is. */
+  .case-uploads { margin-bottom: 16px; }
+  .case-uploads > summary { list-style: none; cursor: pointer; display: flex; align-items: center;
+    gap: 10px; flex-wrap: wrap; padding: 10px 15px; border: 1px solid var(--border);
+    border-radius: 10px; background: var(--surface-2); font-size: 12.5px; color: var(--ink-2); }
+  .case-uploads > summary::-webkit-details-marker { display: none; }
+  .case-uploads > summary::after { content: "Open"; margin-left: auto; font-weight: 600;
+    color: var(--deep); border-bottom: 1px solid var(--accent); }
+  .case-uploads[open] > summary { margin-bottom: 12px; }
+  .case-uploads[open] > summary::after { content: "Hide"; }
+  .case-uploads .u-ok { font-family: var(--font-mono); font-size: 11.5px; color: var(--good); }
+  .case-uploads .u-missing { font-family: var(--font-mono); font-size: 11.5px; color: var(--warning); }
+  .case-uploads .u-chip { font-size: 11.5px; padding: 3px 9px; border-radius: 999px;
+    background: var(--surface); border: 1px solid var(--border); color: var(--ink-2); }
+
   /* A three-up row is narrow, and a table inside one must scroll on its
      own rather than push the page sideways or clip its last column. */
   .ad-scroll { overflow-x: auto; }
@@ -2112,6 +2131,8 @@ async function hcOpenRenewalFromBook(masterClient) {
     // only the TOB and quote are actually still outstanding.
     renewalIntakeNotice = result;
     await selectCase(result.case.id);
+    const uploads = document.getElementById('case-uploads');
+    if (uploads) uploads.open = true;
     const zone = document.getElementById('quick-upload-zone');
     if (zone) zone.scrollIntoView({ behavior: 'smooth', block: 'center' });
   } catch (err) {
@@ -3099,6 +3120,11 @@ function renderCaseWorkspace() {
 
     ${renewalIntakeNoticeHtml()}
 
+    <details class="case-uploads" id="case-uploads">
+    <!-- A click is the user; toggle fires on our own steering too, and
+         would mark every automatic open as a decision they made. -->
+    <summary id="case-uploads-summary"
+             onclick="document.getElementById('case-uploads').dataset.userToggled = '1'">Uploads</summary>
     <div class="card">
       <h3>Quick upload</h3>
       <div class="hint">Drop every file for this case at once (census, benefits, claims, quote) - we'll guess which is which from each file's own content, then let you confirm or correct before anything is actually uploaded.</div>
@@ -3167,6 +3193,7 @@ function renderCaseWorkspace() {
         ` : ''}
       </details>
     </div>
+    </details>
 
     <div class="tab-bar">
       ${TABS.filter(t => {
@@ -3487,8 +3514,46 @@ async function loadCaseCompleteness() {
       <div class="hint">${s.ready_to_score ? 'Census and benefits are both in - ready to score.' : 'Upload Census and Benefits to compute a scorecard.'}</div>
       <div style="margin-top:8px;">${pills}</div>
     `;
+    _renderUploadsSummary(s, isRenewal);
   } catch (err) {
     card.innerHTML = '';
+  }
+}
+
+/* The upload block collapses once nothing REQUIRED is missing, and opens
+   by itself when something is. The drop zone earns its space on exactly
+   the day it is needed and gets out of the way on all the others.
+
+   Required means required to price: census and benefits always, and the
+   claims ledger on a renewal. Claims, quote and scorecard are useful and
+   their absence is not a reason to keep 400px of upload UI open. */
+function _renderUploadsSummary(s, isRenewal) {
+  const block = document.getElementById('case-uploads');
+  const summary = document.getElementById('case-uploads-summary');
+  if (!block || !summary) return;
+
+  const required = [
+    { label: 'Census', has: s.has_census, count: `${s.census_count} members` },
+    { label: 'Benefits', has: s.has_benefits, count: `${s.existing_benefit_plan_count} plans` },
+  ];
+  if (isRenewal) {
+    required.push({ label: 'Claims ledger', has: s.has_claims_ledger,
+                    count: `${s.claims_ledger_entry_count} entries` });
+  }
+  const missing = required.filter(r => !r.has);
+  const chips = required.filter(r => r.has)
+    .map(r => `<span class="u-chip">${escapeHtml(r.label.toLowerCase())} ${escapeHtml(r.count)}</span>`)
+    .join('');
+
+  summary.innerHTML = missing.length
+    ? `<span class="u-missing">&#9888; ${missing.map(m => escapeHtml(m.label)).join(', ')} still needed</span>${chips}`
+    : `<span class="u-ok">&check; Everything required is on file</span>${chips}`;
+
+  // Only steered while the user has not touched it themselves - toggling
+  // a block open under someone who just closed it is worse than leaving
+  // it shut.
+  if (!block.dataset.userToggled) {
+    block.open = missing.length > 0;
   }
 }
 
@@ -6161,8 +6226,9 @@ async function loadRenewalBenchRepricing() {
       <div class="hint">Claims to ${escapeHtml(String(r.data_to || ''))} annualised off
         ${a.full_months} complete months${(a.months_dropped || []).length
           ? ` (${a.months_dropped.join(', ')} dropped as part months)` : ''},
-        carried ${pct(r.trend_pct)} for trend, priced to a ${pct(r.target_loss_ratio)} loss ratio
-        at a ${pct(r.loading_pct)} loading.</div>
+        ${r.pricing_blocked
+          ? 'carried ' + pct(r.trend_pct) + ' for trend. <strong>No premium below:</strong> nobody has supplied this account&rsquo;s loading, and a renewal is not priced on the house average. Enter the fee split on the case record, or upload the Client Master sheet.'
+          : 'plus ' + pct(r.trend_pct) + ' of inflation in points, over (1 &minus; ' + pct(r.loading_pct) + ' loading) &mdash; Method 1&rsquo;s own ladder, so this table and the renewal card agree. Loading from ' + escapeHtml(r.loading_source || 'the request') + '.'}</div>
       <div class="scroll"><table style="margin-top:12px;">
         <tr><th></th><th class="num">Members</th><th class="num">Incurred</th>
             <th class="num">Annualised</th><th class="num">Trended</th>

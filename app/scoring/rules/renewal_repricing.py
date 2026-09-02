@@ -28,9 +28,18 @@ import calendar
 from datetime import date as date_cls
 from typing import Dict, List, Optional, Sequence, Tuple
 
-#: The claims inflation carried onto the expiring year's experience.
-#: A house figure, and the one most worth arguing with here.
-DEFAULT_TREND_PCT = 0.075
+from app.scoring.rules.renewal_rating import (
+    DEFAULT_INFLATION_PCT,
+    MINIMUM_RENEWAL_INCREASE_PCT,
+    renewal_from_loss_ratio,
+)
+
+#: The claims inflation carried onto the expiring year's experience, in
+#: POINTS added to the loss ratio - taken from the rating rather than
+#: written again, because this panel and the renewal card sit on the same
+#: screen and a second 7.5 that could drift from the first is exactly how
+#: two premiums for one account get onto one page.
+DEFAULT_TREND_PCT = DEFAULT_INFLATION_PCT
 
 
 def monthly_totals(
@@ -177,11 +186,11 @@ def reprice(
     claims_by_beneficiary: Dict[str, List[dict]],
     windows: Dict[str, List[Tuple]],
     current_premium: Optional[float],
-    loading_pct: float,
-    target_loss_ratio: float,
+    loading_pct: Optional[float],
     exclude: Sequence[str] = (),
     trend_pct: float = DEFAULT_TREND_PCT,
     data_to: Optional[date_cls] = None,
+    minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> dict:
     """The renewal price with a set of members held out, beside the price
     with everybody in.
@@ -190,6 +199,18 @@ def reprice(
     only a price if that member is genuinely not renewing or their
     condition is genuinely excluded, and showing it alone invites it to
     be quoted as though it were.
+
+    Priced by the HOUSE LADDER, the same one the renewal card and the
+    scenarios table use. It used to run its own formula - claims x (1 +
+    trend), over a target loss ratio, over (1 - loading) - which is a
+    third route to a renewal premium, and on Nomada it put 1,769,992 on
+    the screen directly beside Method 1's 1,456,375. The panel's real
+    subject is the DIFFERENCE between two prices, and a difference is
+    only readable if both sides were arrived at the same way.
+
+    A loading of None withholds the premium rather than assuming one. The
+    claimant ranking and the run-rate still come back, because what is
+    missing is the fee split, not the account.
     """
     held_out = [m for m in members if m.get("beneficiary_id") in set(exclude or ())]
     kept = [m for m in members if m.get("beneficiary_id") not in set(exclude or ())]
@@ -198,12 +219,26 @@ def reprice(
         monthly = monthly_totals(members, claims_by_beneficiary, windows, exclude=excluded)
         run_rate = annualise(monthly, data_to)
         annualised = run_rate["annualised"]
-        trended = round(annualised * (1 + trend_pct), 2) if annualised else None
-        required = premium_for(trended, loading_pct, target_loss_ratio)
         count = len(group)
+        priced = (
+            renewal_from_loss_ratio(
+                annualised / current_premium, current_premium, trend_pct, loading_pct,
+                minimum_increase_pct=minimum_increase_pct,
+            )
+            if (annualised and current_premium and loading_pct is not None)
+            else None
+        )
+        required = priced["required_premium"] if priced else None
+        # The claims the ask is built to fund, in money: the trended loss
+        # ratio against the expiring premium. Reported so the panel can
+        # still show the step it always showed, now on the ladder's terms.
+        trended = round(priced["trended_loss_ratio"] * current_premium, 2) if priced else None
         return {
             "member_count": count,
             **run_rate,
+            "loss_ratio": priced["loss_ratio"] if priced else None,
+            "trended_loss_ratio": priced["trended_loss_ratio"] if priced else None,
+            "floor_applied": priced["floor_applied"] if priced else None,
             "trended_claims": trended,
             "claims_per_member": round(trended / count, 2) if (trended and count) else None,
             "required_premium": required,
@@ -229,8 +264,10 @@ def reprice(
         ),
         "current_premium": current_premium,
         "trend_pct": trend_pct,
-        "target_loss_ratio": target_loss_ratio,
         "loading_pct": loading_pct,
+        "minimum_increase_pct": minimum_increase_pct,
+        # No fee split, no price. The account is still worth reading.
+        "pricing_blocked": loading_pct is None,
         # Said on every result, because the number invites being quoted.
         "caveat": (
             "Excluding a member shows what the account would have cost without them. It is only "

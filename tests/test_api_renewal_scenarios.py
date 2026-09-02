@@ -355,3 +355,42 @@ class TestTheStepBar:
         claims = next(s for s in body["workflow"] if s["key"] == "claims")
         assert claims["state"] == "done"
         assert "ledger" in claims["detail"]
+
+
+class TestTheUploadBlock:
+    """Roughly 400px of drop zone and accordion opened every case, on
+    every visit, forever - right on day one and wrong on every day after,
+    when the files are in and the work is reading the numbers."""
+
+    def _markup(self):
+        import pathlib
+        return (pathlib.Path(__file__).resolve().parent.parent
+                / "app" / "static" / "index.html").read_text()
+
+    def test_the_uploads_collapse_behind_one_summary_line(self):
+        markup = self._markup()
+        assert '<details class="case-uploads" id="case-uploads">' in markup
+        assert 'id="case-uploads-summary"' in markup
+        assert "function _renderUploadsSummary(" in markup
+
+    def test_it_opens_by_itself_only_when_something_required_is_missing(self):
+        markup = self._markup()
+        assert "block.open = missing.length > 0;" in markup
+        # Claims, quote and scorecard are useful; their absence is not a
+        # reason to keep the upload UI open.
+        assert "s.has_claims_ledger" in markup
+
+    def test_a_click_is_the_user_but_a_toggle_is_not(self):
+        # toggle fires on our own steering too, and would mark every
+        # automatic open as a decision the user made.
+        markup = self._markup()
+        assert "onclick=\"document.getElementById('case-uploads').dataset.userToggled = '1'\"" in markup
+        assert "if (!block.dataset.userToggled)" in markup
+
+    def test_opening_a_renewal_from_the_book_still_reaches_the_drop_zone(self):
+        # scrollIntoView on an element inside a closed <details> does
+        # nothing, so the block is opened first.
+        markup = self._markup()
+        i = markup.find("const uploads = document.getElementById('case-uploads');")
+        j = markup.find("zone.scrollIntoView", i)
+        assert i != -1 and j != -1 and j > i
