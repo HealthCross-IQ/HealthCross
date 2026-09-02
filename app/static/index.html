@@ -6227,10 +6227,9 @@ async function loadRenewalBenchRepricing() {
   area.innerHTML = `
     <div class="card">
       <h3>Renewal price &mdash; and what one member is worth to it</h3>
-      <div class="hint">Claims to ${escapeHtml(String(r.data_to || ''))} annualised off
-        ${a.full_months} complete months${(a.months_dropped || []).length
-          ? ` (${a.months_dropped.join(', ')} dropped as part months)` : ''},
-        ${r.pricing_blocked
+      <div class="hint">Claims to ${escapeHtml(String(r.data_to || ''))}${a.full_months
+          ? `, ${a.full_months} complete month${a.full_months === 1 ? '' : 's'} of experience` : ''}${(a.months_dropped || []).length
+          ? ` (${a.months_dropped.join(', ')} still a part month)` : ''}${r.pricing_blocked
           ? '. <strong>No premium below:</strong> ' + (r.loading_pct == null ? 'nobody has supplied this account&rsquo;s loading, and a renewal is not priced on the house average. Enter the fee split on the case record, or upload the Client Master sheet.' : 'this account has no loss ratio on the book yet.')
           : '. Priced off the account&rsquo;s own loss ratio of ' + pct(r.account_loss_ratio) + ' &mdash; the same row the Loss Ratio screen renders &mdash; plus ' + pct(r.trend_pct) + ' of inflation in points, over (1 &minus; ' + pct(r.loading_pct) + ' loading). Holding a member out reduces that ratio by their share of the claims. Loading from ' + escapeHtml(r.loading_source || 'the request') + '.'}</div>
       <div class="scroll"><table style="margin-top:12px;">
