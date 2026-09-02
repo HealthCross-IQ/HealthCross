@@ -190,6 +190,30 @@ def _identity(payload: dict, today: date) -> str:
     )
 
 
+def _net_ratio_note(book: dict, rating: dict) -> str:
+    """Which loading the net ratio is net OF, and whether anybody
+    supplied it.
+
+    Two different loadings can legitimately appear in one document: the
+    net loss ratio is a BOOK figure and uses the book's own expense
+    allowance, while the ask is priced on the account's entered fee
+    split. A reader who sees 33.0% here and 21.5% in the ladder three
+    inches below has no way to tell that from an error - so the note
+    says which is which, and says out loud when the 33 is the house
+    average standing in for a figure nobody has supplied.
+    """
+    loading = book.get("loading_pct")
+    quoted = (rating.get("assumptions_used") or {}).get("loading_pct")
+    if book.get("loading_is_default"):
+        note = (f'net of the house-average {pct(loading)} expense allowance &mdash; '
+                f'this account&rsquo;s own has not been supplied')
+    else:
+        note = f'net of this account&rsquo;s own {pct(loading)} expense allowance'
+    if quoted is not None and loading is not None and abs(quoted - loading) > 0.0005:
+        note += f'. The ask below is priced on the {pct(quoted)} entered on the case'
+    return note
+
+
 def _headline(payload: dict) -> str:
     book, rating = payload["book"], payload["rating"]
     inc = rating.get("renewal_increase_pct")
@@ -199,7 +223,7 @@ def _headline(payload: dict) -> str:
                f'{aed(book.get("incurred_claims"))} &divide; {aed(book.get("earned_premium"))} earned',
                _ratio_tone(book.get("gross_loss_ratio")))
         + _kpi("Net earned loss ratio", pct(book.get("net_loss_ratio")),
-               f'net of the {pct(book.get("loading_pct"))} book expense allowance',
+               _net_ratio_note(book, rating),
                _ratio_tone(book.get("net_loss_ratio")))
         # The share footnote is the LADDER's, which is the experience's -
         # so beside an overridden premium it described a different number

@@ -1068,6 +1068,11 @@ def _account_rating_from_book(case: models.Case) -> Optional[dict]:
         "earned_premium": row["earned_premium"],
         "net_premium": row["net_premium"],
         "loading_pct": row["loading_pct"],
+        # Whether anybody supplied that loading. The printed report shows
+        # the net loss ratio net OF it, three inches above an ask priced
+        # on the account's own entered split - two loadings on one page,
+        # and without this nothing said which was assumed.
+        "loading_is_default": row.get("loading_is_default"),
         "gross_loss_ratio": row["gross_loss_ratio"],
         "net_loss_ratio": row["net_loss_ratio"],
     }

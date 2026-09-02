@@ -69,3 +69,27 @@ def test_the_html_endpoint_serves_a_document(client):
     resp = client.get(f"/cases/{case_id}/renewal-report.html")
     assert resp.status_code == 200
     assert resp.text.lstrip().startswith("<!doctype html>")
+
+
+def test_the_document_says_which_loading_each_figure_is_net_of():
+    """Two different loadings can legitimately appear in one document -
+    the net loss ratio is a BOOK figure and uses the book's expense
+    allowance, while the ask is priced on the account's entered fee
+    split. A reader who saw 33.0% in the KPI strip and 21.5% in the
+    ladder three inches below had no way to tell that from an error.
+    """
+    from app.reports.renewal_report import _net_ratio_note
+
+    assumed = _net_ratio_note(
+        {"loading_pct": 0.33, "loading_is_default": True},
+        {"assumptions_used": {"loading_pct": 0.215}})
+    assert "house-average" in assumed
+    assert "has not been supplied" in assumed
+    assert "21.5%" in assumed
+
+    on_file = _net_ratio_note(
+        {"loading_pct": 0.215, "loading_is_default": False},
+        {"assumptions_used": {"loading_pct": 0.215}})
+    assert "own 21.5% expense allowance" in on_file
+    # The two agree, so there is nothing to explain.
+    assert "The ask below" not in on_file
