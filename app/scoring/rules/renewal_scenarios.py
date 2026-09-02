@@ -27,16 +27,20 @@ wrong in.
 """
 from typing import List, Optional, Sequence
 
+from app.scoring.rules.portfolio_analysis import DEFAULT_LARGE_CLAIM_THRESHOLDS
 from app.scoring.rules.renewal_rating import (
     DEFAULT_INFLATION_PCT,
     MINIMUM_RENEWAL_INCREASE_PCT,
     renewal_from_loss_ratio,
 )
 
-#: A claim line at or above this is a "large claim" for the purpose of
-#: the adjustments panel - the same threshold Portfolio Analysis's own
-#: large-loss analysis leads with (DEFAULT_LARGE_CLAIM_THRESHOLDS[0]).
-DEFAULT_LARGE_CLAIM_THRESHOLD = 50_000.0
+#: AED 50,000 - confirmed house policy, not an inherited default.
+#:
+#: Taken FROM Portfolio Analysis's own large-loss line rather than
+#: written again here, so the two screens that use the phrase "large
+#: claim" cannot come to mean different amounts. A copied literal agrees
+#: right up until somebody changes one of them.
+DEFAULT_LARGE_CLAIM_THRESHOLD = DEFAULT_LARGE_CLAIM_THRESHOLDS[0]
 
 
 def price_scenario(

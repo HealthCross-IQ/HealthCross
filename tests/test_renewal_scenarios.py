@@ -212,7 +212,14 @@ class TestWhatCanBeStripped:
         assert result["beneficiary_ids"] == ["A"]
 
     def test_the_threshold_is_the_books_own_large_loss_line(self):
+        # AED 50,000, confirmed house policy - and taken FROM Portfolio
+        # Analysis's own large-loss line rather than written again, so
+        # the two screens that say "large claim" cannot come to mean
+        # different amounts.
+        from app.scoring.rules.portfolio_analysis import DEFAULT_LARGE_CLAIM_THRESHOLDS
+
         assert DEFAULT_LARGE_CLAIM_THRESHOLD == 50_000.0
+        assert DEFAULT_LARGE_CLAIM_THRESHOLD == DEFAULT_LARGE_CLAIM_THRESHOLDS[0]
 
     def test_a_claim_exactly_on_the_threshold_counts(self):
         result = large_claim_total([{"patient_id": "A", "final_amount": 50_000.0}])
