@@ -61,6 +61,7 @@ from app.scoring.rules.renewal_rating import (
 )
 from app.book import repository as book_repo
 from app.api.census_ages import renewal_term_looks_wrong, stale_age_basis
+from app.api.case_loading import renewal_loading
 from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -843,10 +844,22 @@ def get_claims_ledger_analysis(
     result["full_months_used"] = full_months
     if full_months:
         defaults = RenewalRatingAssumptions()
+        # This account's own entered loading, never the flat house default.
+        # It is a renewal working - it divides by (1 - loading) to reach an
+        # expected annual premium - so an assumed loading makes part of
+        # that premium invented, the same as everywhere else.
+        account_loading, loading_problems = renewal_loading(case)
+        effective_loading = loading_pct if loading_pct is not None else account_loading
         assumptions = RenewalRatingAssumptions(
             inflation_pct=inflation_pct if inflation_pct is not None else defaults.inflation_pct,
-            loading_pct=loading_pct if loading_pct is not None else defaults.loading_pct,
+            loading_pct=effective_loading if effective_loading is not None else defaults.loading_pct,
         )
+        result["loading_pct_source"] = (
+            "query override" if loading_pct is not None
+            else "this account's own fee split" if account_loading is not None
+            else "house default - no fee split entered on this case"
+        )
+        result["loading_problems"] = loading_problems or None
         avg_month = sum(m["final_amount"] for m in full_months) / len(full_months)
         annualized = avg_month * 12
         trended = annualized * (1 + assumptions.inflation_pct)

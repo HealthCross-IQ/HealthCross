@@ -4605,7 +4605,8 @@ async function loadClaimsLedgerAnalysis(inflationOverride, loadingOverride) {
       ${pmpmBlock}
       <div class="row" style="margin-top:12px; align-items:flex-end;">
         <div><label>Inflation %</label><input type="number" id="ledger-inflation-override" step="0.1" value="${(a.assumptions_used.inflation_pct*100).toFixed(1)}"></div>
-        <div><label>Loading %</label><input type="number" id="ledger-loading-override" step="0.1" value="${(a.assumptions_used.loading_pct*100).toFixed(1)}"></div>
+        <div><label>Loading %</label><input type="number" id="ledger-loading-override" step="0.1" value="${(a.assumptions_used.loading_pct*100).toFixed(1)}"
+             title="${escapeHtml(a.loading_pct_source || '')}"></div>
         <button onclick="recomputeClaimsLedgerAnalysis()">Recompute</button>
       </div>
     ` : `<div class="hint">Not enough full months of claims data yet for an annualized projection.</div>`;

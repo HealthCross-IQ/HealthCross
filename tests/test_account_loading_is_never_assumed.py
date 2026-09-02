@@ -276,3 +276,33 @@ def test_the_scorecard_tab_is_new_business_only(client):
     index = pathlib.Path(__file__).resolve().parent.parent / "app" / "static" / "index.html"
     markup = index.read_text()
     assert "if (t.id === 'scorecard') return c.business_type !== 'existing';" in markup
+
+
+def test_the_claims_ledger_analysis_uses_the_accounts_own_loading(client):
+    # "Method 1: average month-wise claims" divides by (1 - loading) to
+    # reach an expected annual premium, so it is a renewal working - and
+    # it was the one screen the loading sweep missed. KIKO's fee split is
+    # 10 + 5 + 6.5 + 6.5 = 28%; the panel showed the flat house 33%.
+    case_id = _renewal_case(client, fees={"commission_pct": 0.10, "qic_fee_pct": 0.05,
+                                          "tpa_fee_pct": 0.065, "hc_fee_pct": 0.065})
+
+    body = client.get(f"/cases/{case_id}/claims-ledger-analysis").json()
+    assert round(body["assumptions_used"]["loading_pct"], 4) == 0.28
+    assert body["loading_pct_source"] == "this account's own fee split"
+
+
+def test_the_ledger_analysis_says_when_it_fell_back(client):
+    case_id = _renewal_case(client, fees=None)
+
+    body = client.get(f"/cases/{case_id}/claims-ledger-analysis").json()
+    assert "no fee split entered" in body["loading_pct_source"]
+    assert body["loading_problems"]
+
+
+def test_an_explicit_loading_still_overrides_the_ledger_analysis(client):
+    case_id = _renewal_case(client)
+
+    body = client.get(f"/cases/{case_id}/claims-ledger-analysis",
+                      params={"loading_pct": 0.23}).json()
+    assert body["assumptions_used"]["loading_pct"] == 0.23
+    assert body["loading_pct_source"] == "query override"
