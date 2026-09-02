@@ -1374,6 +1374,41 @@ def _why_no_book_figures(case: models.Case) -> dict:
     }
 
 
+def _apply_increase_override(result: Optional[dict], case: models.Case) -> Optional[dict]:
+    """The increase an underwriter is actually quoting, where they have
+    said it differs from the one the experience produces.
+
+    A renewal is a negotiation. An account can be held below what its
+    claims ask for to keep a relationship, or pushed above it - and the
+    portal quoting only the arithmetic means the figure on the renewal
+    list, the member rates and the printed review is not the figure being
+    sent to the client.
+
+    The override REPLACES the ask everywhere, because a number that is
+    quoted on one screen and not another is the bug this whole session
+    has been about. It never touches the computed one: both come back,
+    with increase_source saying which is being quoted, exactly as the 9%
+    floor reports experience_increase_pct beside renewal_increase_pct.
+    "This account needs 18%" and "we are asking 12%" are different facts
+    and one number cannot carry both.
+    """
+    if result is None or result.get("pricing_blocked"):
+        return result
+    override = case.renewal_increase_override_pct
+    if override is None:
+        result["increase_source"] = "computed"
+        return result
+
+    base = result.get("renewal_base_premium")
+    result["computed_increase_pct"] = result.get("renewal_increase_pct")
+    result["computed_required_premium"] = result.get("required_premium")
+    result["renewal_increase_pct"] = round(override, 2)
+    result["required_premium"] = round(base * (1 + override / 100), 2) if base else None
+    result["increase_source"] = "override"
+    result["increase_override_pct"] = round(override, 2)
+    return result
+
+
 def _case_renewal_rating(
     case: models.Case,
     inflation_pct: Optional[float] = None,
@@ -1411,8 +1446,8 @@ def _case_renewal_rating(
     # case that is not on the book at all.
     from_book = _account_rating_from_book(case)
     if from_book:
-        return _rating_from_book_figures(
-            case, from_book, inflation_pct, loading_pct, ibnr_pct, credibility_pct)
+        return _apply_increase_override(_rating_from_book_figures(
+            case, from_book, inflation_pct, loading_pct, ibnr_pct, credibility_pct), case)
 
     entries = case.claims_ledger_entries
     if not entries or not case.current_annual_premium:
@@ -1527,7 +1562,7 @@ def _case_renewal_rating(
     # the latest upload, and the reader has no way to tell them apart.
     result["rating_source"] = "case claims ledger"
     result["from_book_unavailable"] = _why_no_book_figures(case)
-    return result
+    return _apply_increase_override(result, case)
 
 
 @router.get("/{case_id}/renewal-rating")
@@ -2149,6 +2184,11 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
     )
     response = {
         "case_renewal_increase_pct": renewal_increase_pct,
+        # Whether that increase is the experience's own or one an
+        # underwriter is quoting instead - the grid says which, so a
+        # negotiated number is never mistaken for a computed one.
+        "increase_source": (renewal or {}).get("increase_source"),
+        "computed_increase_pct": (renewal or {}).get("computed_increase_pct"),
         "members": members,
         "existing_premium": existing_premium,
         # Whether these members' ages were struck at a different date to

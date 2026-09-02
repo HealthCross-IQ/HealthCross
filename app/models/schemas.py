@@ -60,6 +60,7 @@ class CaseOut(BaseModel):
     commission_pct: Optional[float] = None
     hc_fee_pct: Optional[float] = None
     qic_fee_pct: Optional[float] = None
+    renewal_increase_override_pct: Optional[float] = None
 
 
 class CensusRecordOut(BaseModel):
@@ -228,6 +229,8 @@ class CaseUpdate(BaseModel):
     commission_pct: Optional[float] = None
     hc_fee_pct: Optional[float] = None
     qic_fee_pct: Optional[float] = None
+    #: In PERCENT (15.0, not 0.15) - see Case.
+    renewal_increase_override_pct: Optional[float] = None
 
 
 class ClaimsReportOut(BaseModel):

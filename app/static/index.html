@@ -2775,6 +2775,12 @@ function renderCaseWorkspace() {
           <label>QIC Fee % (of renewal premium)</label>
           <input type="number" step="0.1" id="case-qic-fee-pct" value="${c.qic_fee_pct != null ? (c.qic_fee_pct * 100).toFixed(1) : ''}" placeholder="e.g. 5">
         </div>
+        <div>
+          <label>Quoted increase % (override)</label>
+          <input type="number" step="0.1" id="case-renewal-increase-override"
+                 value="${c.renewal_increase_override_pct != null ? c.renewal_increase_override_pct : ''}"
+                 placeholder="leave blank to quote the experience">
+        </div>
         <button onclick="saveCaseDetails()">Save</button>
       </div>
       ${_missingFeeFields(c).length ? `
@@ -2785,7 +2791,7 @@ function renderCaseWorkspace() {
         value yet, so the renewal is not being quoted - a renewal is not priced on an assumed
         loading. Enter <strong>0</strong> for a fee this account genuinely does not pay.
       </div>` : ''}
-      <div class="hint" style="margin-top:8px;">These four sum to the renewal premium's actual gross-up % - Risk Premium (the pure claims-funding cost) is whatever's left over, not set here. All four are required on a renewal: the loading is the whole difference between the claims the account generates and the premium it is asked for, so an assumed one would make part of the ask invented. Enter 0 for a fee that isn't paid. Drives both the required premium itself and the Renewal Client Summary's premium breakdown.</div>
+      <div class="hint" style="margin-top:8px;">These four sum to the renewal premium's actual gross-up % - Risk Premium (the pure claims-funding cost) is whatever's left over, not set here. All four are required on a renewal: the loading is the whole difference between the claims the account generates and the premium it is asked for, so an assumed one would make part of the ask invented. Enter 0 for a fee that isn't paid. Drives both the required premium itself and the Renewal Client Summary's premium breakdown. <strong>Quoted increase %</strong> is what you are actually asking for when it differs from what the experience produces - leave it blank to quote the experience. It replaces the ask on every screen, and the computed figure is always reported beside it so the two are never confused.</div>
       ` : ''}
       <div class="hint" style="margin-top:8px;">Policy start date is used to work out member ages as of the scheme's own start, not today - only needed if the census file doesn't already carry its own effective-date column. Target premium is the broker's ask for a new-business case - compared against HealthCross's own rated price in the New Business Rating tab.</div>
     </div>
@@ -3189,6 +3195,7 @@ async function saveCaseDetails() {
   const commissionEl = document.getElementById('case-commission-pct');
   const hcFeeEl = document.getElementById('case-hc-fee-pct');
   const qicFeeEl = document.getElementById('case-qic-fee-pct');
+  const overrideEl = document.getElementById('case-renewal-increase-override');
   // The case this save is for. If the user opens another case while the
   // PATCH is in flight, assigning the reply to currentCase would put the
   // OLD case back on screen under the new case's name - so the reply is
@@ -3208,6 +3215,10 @@ async function saveCaseDetails() {
         commission_pct: commissionEl && commissionEl.value !== '' ? Number(commissionEl.value) / 100 : null,
         hc_fee_pct: hcFeeEl && hcFeeEl.value !== '' ? Number(hcFeeEl.value) / 100 : null,
         qic_fee_pct: qicFeeEl && qicFeeEl.value !== '' ? Number(qicFeeEl.value) / 100 : null,
+        // In PERCENT, unlike the fee fields - it is the same unit the
+        // renewal increase is quoted in everywhere else (+18.3%, not 0.183).
+        renewal_increase_override_pct: overrideEl && overrideEl.value !== ''
+          ? Number(overrideEl.value) : null,
       }),
     });
     if (!currentCase || currentCase.id !== savingCaseId) return;
@@ -3429,7 +3440,9 @@ function renderMemberRatesTable(data) {
   // field that cannot be right, or is simply broken - and those are
   // three different actions.
   const increaseNote = data.case_renewal_increase_pct != null
-    ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills every member's new rate once a cell's existing rate is applied below.`
+    ? (data.increase_source === 'override'
+        ? `Quoted renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> &mdash; an override you have set${data.computed_increase_pct != null ? `, against <strong>${data.computed_increase_pct > 0 ? '+' : ''}${data.computed_increase_pct}%</strong> from this account's own experience` : ''}. Clear it on the case record to quote the experience instead.`
+        : `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills every member's new rate once a cell's existing rate is applied below.`)
     : escapeHtml(data.no_increase_reason
         || 'No case-level renewal increase computed yet - set rates individually below in the meantime.');
   // The ages behind these bands were struck at a different date to the

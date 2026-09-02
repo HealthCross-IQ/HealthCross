@@ -82,6 +82,18 @@ class Case(Base):
     hc_fee_pct = Column(Float, nullable=True)
     qic_fee_pct = Column(Float, nullable=True)
 
+    #: The increase an underwriter is actually quoting, in PERCENT (e.g.
+    #: 15.0), when it differs from the one the experience produces.
+    #:
+    #: A renewal is a negotiation, not only an arithmetic result: an
+    #: account may be held to less than it needs for a relationship, or
+    #: pushed above it. Stored beside the computed figure and never folded
+    #: into it - every screen reports both and says which is being quoted,
+    #: the same way the 9% floor does, because "this account needs 18%"
+    #: and "we are asking 12%" are different facts and one number cannot
+    #: carry both. NULL means quote what the experience says.
+    renewal_increase_override_pct = Column(Float, nullable=True)
+
     census_records = relationship("CensusRecord", back_populates="case", cascade="all, delete-orphan")
     benefit_plans = relationship("BenefitPlan", back_populates="case", cascade="all, delete-orphan")
     claims_records = relationship("ClaimsRecord", back_populates="case", cascade="all, delete-orphan")
