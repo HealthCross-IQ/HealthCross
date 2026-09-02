@@ -14,6 +14,8 @@ from app.scoring.rules.account_overview import (
     book_position,
     claims_by_month,
     data_window,
+    loss_ratio_by_period,
+    monthly_burning_cost,
 )
 
 PAID = "Paid Claims"
@@ -175,3 +177,110 @@ class TestDataWindow:
 
     def test_no_dated_claims_is_two_nones(self):
         assert data_window([]) == {"from": None, "to": None}
+
+
+# --- an account with more than one year on the book ---------------------
+
+def period(start, loss_ratio, members=100, incurred=500_000.0, expired=True):
+    return {
+        "policy_start_date": start, "days": 365 if expired else 130, "expired": expired,
+        "member_count": members, "paid": incurred * 0.8, "outstanding": incurred * 0.15,
+        "ibnr": incurred * 0.05, "incurred_claims": incurred,
+        "gross_premium": 1_000_000.0, "earned_premium": 1_000_000.0 if expired else 356_164.0,
+        "gross_loss_ratio": loss_ratio,
+        "net_loss_ratio": (loss_ratio / 0.785) if loss_ratio is not None else None,
+        "loading_pct": 0.215, "loading_is_default": False,
+    }
+
+
+class TestLossRatioByPeriod:
+    def test_oldest_first_however_the_rows_arrive(self):
+        rows = loss_ratio_by_period([period("2026-04-24", 2.41), period("2025-04-24", 0.68)])
+        assert [r["policy_start_date"] for r in rows] == ["2025-04-24", "2026-04-24"]
+
+    def test_the_move_is_in_points_not_a_percentage_of_a_percentage(self):
+        # "Up 173 points" is a fact about the account. "Up 254%" is a fact
+        # about the arithmetic and reads as a premium change.
+        rows = loss_ratio_by_period([period("2025-04-24", 0.68), period("2026-04-24", 2.41)])
+        assert rows[1]["change_pts"] == pytest.approx(173.0, abs=0.1)
+
+    def test_the_first_year_has_nothing_to_move_against(self):
+        rows = loss_ratio_by_period([period("2025-04-24", 0.68)])
+        assert rows[0]["change_pts"] is None
+
+    def test_an_improving_account_moves_down(self):
+        rows = loss_ratio_by_period([period("2025-04-24", 1.20), period("2026-04-24", 0.85)])
+        assert rows[1]["change_pts"] == pytest.approx(-35.0, abs=0.1)
+
+    def test_a_year_with_no_loss_ratio_does_not_become_the_baseline(self):
+        # An account with no earned premium in one year would otherwise
+        # make the following year's move meaningless.
+        rows = loss_ratio_by_period([
+            period("2024-04-24", 0.68), period("2025-04-24", None), period("2026-04-24", 0.90)])
+        assert rows[1]["change_pts"] is None
+        assert rows[2]["change_pts"] == pytest.approx(22.0, abs=0.1)
+
+    def test_a_running_year_is_flagged_as_a_part_year(self):
+        rows = loss_ratio_by_period([period("2026-04-24", 2.41, expired=False)])
+        assert rows[0]["part_year"] is True
+        assert loss_ratio_by_period([period("2025-04-24", 0.68)])[0]["part_year"] is False
+
+    def test_no_rows_is_an_empty_list(self):
+        assert loss_ratio_by_period([]) == []
+
+
+class TestMonthlyBurningCost:
+    def _members(self, n, start=date(2026, 4, 24), end=date(2027, 4, 23)):
+        return [{"member_start_date": start, "member_end_date": end} for _ in range(n)]
+
+    def test_claims_over_the_exposure_actually_carried(self):
+        rows = monthly_burning_cost(
+            [claim(date(2026, 5, 10), 12_000.0)],
+            self._members(10), date(2026, 4, 24), date(2027, 4, 23),
+            up_to=date(2026, 5, 31))
+        may = next(r for r in rows if r["month"] == "2026-05")
+        assert may["erp"] == pytest.approx(10.0)
+        assert may["burning_cost"] == pytest.approx(1_200.0)
+
+    def test_a_mid_month_joiner_is_a_fraction_of_a_life_not_a_whole_one(self):
+        # Dividing by the closing headcount flatters the early months,
+        # which is the shape that makes a deteriorating account look
+        # steady.
+        members = self._members(9) + [{"member_start_date": date(2026, 5, 21),
+                                       "member_end_date": date(2027, 4, 23)}]
+        rows = monthly_burning_cost([claim(date(2026, 5, 10), 12_000.0)], members,
+                                    date(2026, 4, 24), date(2027, 4, 23),
+                                    up_to=date(2026, 5, 31))
+        may = next(r for r in rows if r["month"] == "2026-05")
+        assert 9.0 < may["erp"] < 10.0
+        assert may["burning_cost"] > 1_200.0
+
+    def test_months_the_data_does_not_reach_are_dropped_not_shown_at_nil(self):
+        rows = monthly_burning_cost([claim(date(2026, 5, 10), 1_000.0)], self._members(5),
+                                    date(2026, 4, 24), date(2027, 4, 23),
+                                    up_to=date(2026, 6, 30))
+        assert [r["month"] for r in rows] == ["2026-04", "2026-05", "2026-06"]
+
+    def test_a_quiet_month_inside_the_window_is_a_real_zero(self):
+        rows = monthly_burning_cost([claim(date(2026, 4, 25), 1_000.0)], self._members(5),
+                                    date(2026, 4, 24), date(2027, 4, 23),
+                                    up_to=date(2026, 6, 30))
+        june = next(r for r in rows if r["month"] == "2026-06")
+        assert june["incurred"] == 0.0
+        assert june["burning_cost"] == 0.0
+
+    def test_paid_and_outstanding_are_still_told_apart(self):
+        rows = monthly_burning_cost([
+            claim(date(2026, 5, 10), 8_000.0, PAID),
+            claim(date(2026, 5, 20), 4_000.0, OUTSTANDING),
+        ], self._members(10), date(2026, 4, 24), date(2027, 4, 23), up_to=date(2026, 5, 31))
+        may = next(r for r in rows if r["month"] == "2026-05")
+        assert may["paid"] == 8_000.0
+        assert may["outstanding"] == 4_000.0
+        assert may["burning_cost"] == pytest.approx(1_200.0)
+
+    def test_no_exposure_gives_no_burning_cost_rather_than_a_division(self):
+        rows = monthly_burning_cost([claim(date(2026, 5, 10), 1_000.0)], [],
+                                    date(2026, 4, 24), date(2027, 4, 23),
+                                    up_to=date(2026, 5, 31))
+        assert all(r["burning_cost"] is None for r in rows)

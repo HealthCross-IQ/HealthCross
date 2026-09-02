@@ -74,6 +74,102 @@ def claims_by_month(
     return rows[-months:] if months else rows
 
 
+def loss_ratio_by_period(rows: Sequence[dict]) -> List[dict]:
+    """One row per policy year, oldest first, with the move against the
+    year before it.
+
+    An account that has renewed has a row per period on the book, and the
+    dashboard showed only the latest - so a group that went from 68% to
+    241% looked exactly like one that has always run at 241%. Those are
+    completely different conversations: the first is a year that went
+    wrong and may be one event, the second is an account that is
+    structurally underpriced.
+
+    The move is in POINTS, not as a percentage of a percentage. "Up 173
+    points" is a fact about the account; "up 254%" is a fact about the
+    arithmetic and invites being read as the premium change.
+    """
+    ordered = sorted(rows, key=lambda r: r.get("policy_start_date") or "")
+    out: List[dict] = []
+    previous: Optional[float] = None
+    for row in ordered:
+        loss_ratio = row.get("gross_loss_ratio")
+        change = (
+            round((loss_ratio - previous) * 100, 1)
+            if (loss_ratio is not None and previous is not None) else None
+        )
+        out.append({
+            "policy_start_date": row.get("policy_start_date"),
+            "days": row.get("days"),
+            "expired": row.get("expired"),
+            "member_count": row.get("member_count"),
+            "paid": row.get("paid"),
+            "outstanding": row.get("outstanding"),
+            "ibnr": row.get("ibnr"),
+            "incurred_claims": row.get("incurred_claims"),
+            "gross_premium": row.get("gross_premium"),
+            "earned_premium": row.get("earned_premium"),
+            "loss_ratio": loss_ratio,
+            "net_loss_ratio": row.get("net_loss_ratio"),
+            "loading_pct": row.get("loading_pct"),
+            "loading_is_default": row.get("loading_is_default"),
+            "change_pts": change,
+            # A part year is not comparable with a full one on its face -
+            # a term four months in has four months of claims against
+            # four months of premium, which is a real ratio, but one
+            # admission moves it in a way it cannot move a closed year.
+            "part_year": bool(row.get("days")) and not row.get("expired"),
+        })
+        if loss_ratio is not None:
+            previous = loss_ratio
+    return out
+
+
+def monthly_burning_cost(
+    claims: Sequence[dict],
+    members: Sequence[dict],
+    policy_start: date_cls,
+    policy_end: date_cls,
+    up_to: Optional[date_cls] = None,
+) -> List[dict]:
+    """Claims per member per month, on the exposure actually carried.
+
+    The denominator is the month's Exposed Risk Population, not a flat
+    headcount: a member who joined on the 20th contributes a third of a
+    life to that month, and a group that grew from 96 to 140 over its
+    term did not carry 140 lives in month one. Dividing by the closing
+    headcount flatters the early months and understates the later ones,
+    which is the shape that makes a deteriorating account look steady.
+
+    Months after `up_to` are dropped rather than shown at zero. A month
+    the data does not reach has no claims in it, and a burning cost of
+    nil is a statement about the account rather than about the export.
+    """
+    from app.scoring.rules.exposed_risk_population import monthly_exposed_risk_population
+
+    by_month = {row["month"]: row for row in claims_by_month(claims)}
+    limit = up_to or policy_end
+    rows = []
+    for erp_row in monthly_exposed_risk_population(members, policy_start, policy_end):
+        year, month = erp_row["year"], erp_row["month"]
+        if (year, month) > (limit.year, limit.month):
+            continue
+        key = f"{year}-{month:02d}"
+        claimed = by_month.get(key, {})
+        incurred = claimed.get("total", 0.0) or 0.0
+        erp = erp_row["erp"]
+        rows.append({
+            "month": key,
+            "erp": erp,
+            "paid": claimed.get("paid", 0.0) or 0.0,
+            "outstanding": claimed.get("outstanding", 0.0) or 0.0,
+            "incurred": round(incurred, 2),
+            "claim_count": claimed.get("claim_count", 0),
+            "burning_cost": round(incurred / erp, 2) if erp else None,
+        })
+    return rows
+
+
 def median(values: Sequence[float]) -> Optional[float]:
     """The middle value, or the mean of the middle two. Public because the
     renewal due list needs the book's median outstanding share too, and a

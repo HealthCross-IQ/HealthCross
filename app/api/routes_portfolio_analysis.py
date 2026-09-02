@@ -909,6 +909,8 @@ def account_overview(
         book_position,
         claims_by_month,
         data_window,
+        loss_ratio_by_period,
+        monthly_burning_cost,
     )
     from app.scoring.rules.renewal_repricing import member_claim_ranking
     from app.scoring.rules.underwriting_alerts import alert_counts, underwriting_alerts
@@ -930,8 +932,12 @@ def account_overview(
         if (r.get("master_client") or "").strip().casefold() == target
     ]
     # An account that has already renewed has a row per policy period.
-    # The dashboard is about the one currently running.
+    # The KPI strip is about the one currently running - but the others
+    # are not dropped: an account that went from 68% to 241% looked
+    # exactly like one that has always run at 241%, and those are
+    # different conversations.
     row = max(account_rows, key=lambda r: r["policy_start_date"]) if account_rows else None
+    periods = loss_ratio_by_period(account_rows)
 
     current = current_term_members(account)
     windows = term_member_windows(current)
@@ -980,6 +986,15 @@ def account_overview(
 
     position = book_position(row, book_rows)
 
+    term_start = current[0].get("policy_start_date") if current else None
+    term_end = current[0].get("policy_end_date") if current else None
+    window = data_window(in_term)
+    burning_cost = (
+        monthly_burning_cost(in_term, current, term_start, term_end,
+                             up_to=book_repo.measurement_date(db, as_of) or window["to"])
+        if (term_start and term_end) else []
+    )
+
     case = _portfolio_cases_by_client(db).get(_client_key(master_client))
     loading_problems = []
     if case is not None and is_renewal(case):
@@ -1010,6 +1025,12 @@ def account_overview(
         "alerts": alerts,
         "alert_counts": alert_counts(alerts),
         "claims_by_month": claims_by_month(in_term),
+        # Claims per member per month over the EXPOSED RISK POPULATION -
+        # each member counted for the fraction of the month they were
+        # actually covered, so a group that grew from 96 to 140 over its
+        # term is not credited with 140 lives in month one.
+        "monthly_burning_cost": burning_cost,
+        "policy_periods": periods,
         "encounter_split": utilization_by_encounter_type(in_term),
         "top_claimants": claimants,
         "top_claimant_share": round(top_claimant_share, 4) if top_claimant_share else None,

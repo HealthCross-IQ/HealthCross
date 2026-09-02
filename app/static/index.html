@@ -851,6 +851,17 @@
   .ad-picker select, .ad-picker input { font: inherit; font-size: 13px; padding: 8px 10px;
              border-radius: 8px; border: 1px solid var(--border-strong); background: var(--surface); color: var(--ink); }
   .ad-picker select { min-width: 280px; }
+  .ad-sub { display: block; font-size: 10.5px; color: var(--ink-muted); font-family: var(--font-mono); margin-top: 2px; }
+  .ad-move { font-family: var(--font-mono); font-weight: 600; }
+  .ad-move.up { color: var(--critical); }
+  .ad-move.down { color: var(--good); }
+  .ad-flat { color: var(--ink-muted); }
+  .ad-lr-critical { color: var(--critical); font-weight: 700; }
+  .ad-lr-high { color: var(--serious); font-weight: 700; }
+  .ad-lr-good { color: var(--good); font-weight: 600; }
+  .ad-partyear { font-family: var(--font-mono); font-size: 8.5px; letter-spacing: 0.07em;
+                 text-transform: uppercase; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+                 background: var(--surface-2); color: var(--ink-muted); margin-left: 6px; }
 
   /* ---------------- case uploads ----------------
      Roughly 400px of drop zone and accordion opened every case, on every
@@ -1622,6 +1633,81 @@ function _adBookPosition(position) {
       ${worse ? 'it sits above the median.' : 'it sits at or below the median.'}</p>`;
 }
 
+/* An account that has renewed has a year per policy period on the book,
+   and the strip above shows only the one running. A group that went from
+   68% to 241% looked exactly like one that has always run at 241% - the
+   first is a year that went wrong and may be one event, the second is an
+   account that is structurally underpriced. */
+function _adPeriodsCard(data) {
+  const periods = data.policy_periods || [];
+  if (periods.length < 2) return '';
+  const rows = periods.map(p => {
+    const severity = p.loss_ratio == null ? '' : p.loss_ratio > 1.6 ? 'critical'
+      : p.loss_ratio > 0.95 ? 'high' : 'good';
+    const move = p.change_pts == null ? '<span class="ad-flat">&mdash;</span>'
+      : `<span class="ad-move ${p.change_pts > 0 ? 'up' : p.change_pts < 0 ? 'down' : ''}">${
+          p.change_pts > 0 ? '&uarr; +' : p.change_pts < 0 ? '&darr; ' : ''}${p.change_pts.toFixed(1)} pts</span>`;
+    return `
+      <tr>
+        <td>${escapeHtml(p.policy_start_date || '-')}
+          ${p.part_year ? '<span class="ad-partyear">running</span>' : ''}
+          <span class="ad-sub">${p.member_count == null ? '' : p.member_count + ' lives'}${
+            p.expired ? ' &middot; full term' : (p.days ? ' &middot; ' + p.days + ' of 365 days' : '')}</span></td>
+        <td class="num">${_adMoney(p.incurred_claims)}</td>
+        <td class="num">${_adMoney(p.earned_premium)}</td>
+        <td class="num ${severity ? 'ad-lr-' + severity : ''}">${_adPct(p.loss_ratio)}</td>
+        <td class="num">${move}</td>
+      </tr>`;
+  }).join('');
+  return `
+    <div class="card">
+      <h3>Loss ratio by policy year</h3>
+      <div class="hint">${periods.length} years on the book. The move is in points of loss ratio,
+        not a percentage of a percentage &mdash; &ldquo;up 173 points&rdquo; is a fact about the
+        account, &ldquo;up 254%&rdquo; is a fact about the arithmetic.</div>
+      <div class="ad-scroll"><table>
+        <thead><tr><th>Policy year</th><th class="num">Incurred</th><th class="num">Earned</th>
+          <th class="num">Loss ratio</th><th class="num">Move</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table></div>
+      ${periods.some(p => p.part_year) ? `<p class="ad-note">A year still running has months of
+        claims against months of premium &mdash; a real ratio, but one admission moves it in a way
+        it cannot move a closed year.</p>` : ''}
+    </div>`;
+}
+
+/* Claims per member per month over the EXPOSED RISK POPULATION - each
+   member counted for the fraction of the month they were actually
+   covered. Dividing by the closing headcount flatters the early months
+   and understates the later ones, which is exactly the shape that makes
+   a deteriorating account look steady. */
+function _adBurningCostCard(data) {
+  const rows = (data.monthly_burning_cost || []).filter(r => r.burning_cost != null);
+  if (rows.length < 2) return '';
+  const points = rows.map(r => ({ label: r.month.slice(2).replace('-', '/'), value: r.burning_cost }));
+  const total = rows.reduce((s, r) => s + r.incurred, 0);
+  const erpMonths = rows.reduce((s, r) => s + r.erp, 0);
+  const average = erpMonths ? total / erpMonths : null;
+  return `
+    <div class="card">
+      <h3>Burning cost per member per month</h3>
+      <div class="hint">Each month&rsquo;s claims over that month&rsquo;s exposed risk population &mdash;
+        every member counted for the fraction of the month they were actually covered, not a flat
+        headcount. Average <code>${_adMoney(average)}</code> per member per month across
+        ${erpMonths.toFixed(0)} member-months.</div>
+      ${svgLineChart(points, { formatValue: v => Math.round(v).toLocaleString() })}
+      <div class="ad-scroll"><table>
+        <thead><tr><th>Month</th><th class="num">ERP</th><th class="num">Incurred</th>
+          <th class="num">Per member</th></tr></thead>
+        <tbody>${rows.map(r => `
+          <tr><td>${escapeHtml(r.month)}</td>
+            <td class="num">${r.erp.toFixed(1)}</td>
+            <td class="num">${_adMoney(r.incurred)}</td>
+            <td class="num">${_adMoney(r.burning_cost)}</td></tr>`).join('')}</tbody>
+      </table></div>
+    </div>`;
+}
+
 function renderAccountDashboard(data) {
   const k = data.kpis || {};
   const severity = _adSeverityClass(data.alerts);
@@ -1670,6 +1756,8 @@ function renderAccountDashboard(data) {
 
     ${_adKpis(data)}
 
+    ${_adPeriodsCard(data)}
+
     <div class="ad-grid two">
       <div class="ad-col">
         <div class="card">
@@ -1679,6 +1767,7 @@ function renderAccountDashboard(data) {
             ? svgStackedColumnChart(monthly, { reference: perMonth, referenceLabel: 'Earned premium / month' })
             : '<div class="ad-quiet">No dated claims on this account&rsquo;s current term.</div>'}
         </div>
+        ${_adBurningCostCard(data)}
         <div class="card">
           <h3>Top claimants</h3>
           ${_adClaimants(data)}

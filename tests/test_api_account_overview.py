@@ -315,3 +315,99 @@ class TestTheScreen:
         markup = _markup()
         assert "++_adState.requestToken" in markup
         assert "if (token !== _adState.requestToken) return;" in markup
+
+
+class TestMoreThanOneYearOnTheBook:
+    """An account that has renewed has a row per policy period, and the
+    dashboard showed only the latest - so a group that went from 47% to
+    416% looked exactly like one that has always run at 416%."""
+
+    @pytest.fixture()
+    def two_years(self, client, tmp_path):
+        Y1S, Y1E = "2025-04-24", "2026-04-23"
+        Y2S, Y2E = "2026-04-24", "2027-04-23"
+
+        def member(bid, premium, start, end, member_start=None):
+            return [f"{'Renewed Holdings'} Sub", "Renewed Holdings", "P1", f"QC-{bid}", bid,
+                    "1986-03-04", "M", "Married", "India", "Principal", "Dubai",
+                    "QIC/HC/BR/REN/DXB/A", "PLATINUM", start, end,
+                    member_start or start, end, premium, premium, None, None, 0]
+
+        def claim_row(bid, start, end, treated, amount):
+            return [bid, f"C-{bid}-{treated}", "Paid Claims", "Renewed Holdings Sub",
+                    "Renewed Holdings", f"QC-{bid}", start, end, start, end, treated,
+                    "Main Insured", "IP", "HOSPITALISATION", "Hospital", "A099",
+                    "Acute condition", amount, amount]
+
+        members = [member(f"Y1{i}", 100_000, Y1S, Y1E) for i in range(4)]
+        # Year two grew, and two of them joined part way through - so the
+        # exposed risk population is not a flat headcount.
+        members += [member(f"Y2{i}", 100_000, Y2S, Y2E,
+                           member_start="2026-07-15" if i >= 4 else None) for i in range(6)]
+        claims = [claim_row("Y10", Y1S, Y1E, "2025-09-10", 60_000.0)]
+        claims += [claim_row(f"Y2{i}", Y2S, Y2E, "2026-06-10", 120_000.0) for i in range(4)]
+
+        members_x = _write_xlsx(tmp_path, "m.xlsx", MEMBERS_HEADER, members)
+        claims_x = _write_xlsx(tmp_path, "c.xlsx", CLAIMS_HEADER, claims)
+        for path, endpoint in ((members_x, "members"), (claims_x, "claims")):
+            with open(path, "rb") as f:
+                resp = client.post(f"/portfolio-analysis/{endpoint}/upload",
+                                   files={"file": (path.name, f, "application/octet-stream")})
+            assert resp.status_code == 200, resp.text
+        return client
+
+    def _overview(self, client):
+        resp = client.get("/portfolio-analysis/account-overview/Renewed Holdings",
+                          params={"as_of": "2026-08-31"})
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def test_both_years_come_back_oldest_first(self, two_years):
+        periods = self._overview(two_years)["policy_periods"]
+        assert len(periods) == 2
+        assert [p["policy_start_date"] for p in periods] == ["2025-04-24", "2026-04-24"]
+
+    def test_each_year_carries_its_own_loss_ratio(self, two_years):
+        periods = self._overview(two_years)["policy_periods"]
+        assert periods[0]["loss_ratio"] is not None
+        assert periods[1]["loss_ratio"] is not None
+        assert periods[1]["loss_ratio"] > periods[0]["loss_ratio"]
+
+    def test_the_move_between_them_is_reported_in_points(self, two_years):
+        periods = self._overview(two_years)["policy_periods"]
+        assert periods[0]["change_pts"] is None
+        assert periods[1]["change_pts"] == pytest.approx(
+            (periods[1]["loss_ratio"] - periods[0]["loss_ratio"]) * 100, abs=0.2)
+
+    def test_the_kpi_strip_still_shows_the_year_that_is_running(self, two_years):
+        data = self._overview(two_years)
+        assert data["policy"]["start_date"] == "2026-04-24"
+        assert data["kpis"]["gross_loss_ratio"] == data["policy_periods"][-1]["loss_ratio"]
+
+    def test_the_closed_year_is_marked_closed_and_the_running_one_running(self, two_years):
+        periods = self._overview(two_years)["policy_periods"]
+        assert periods[0]["expired"] is True and periods[0]["part_year"] is False
+        assert periods[1]["expired"] is False and periods[1]["part_year"] is True
+
+    def test_burning_cost_divides_by_exposure_not_headcount(self, two_years):
+        rows = self._overview(two_years)["monthly_burning_cost"]
+        assert rows, "no monthly burning cost returned"
+        by_month = {r["month"]: r for r in rows}
+        # Four members for the whole term, two more from 15 July.
+        assert by_month["2026-06"]["erp"] == pytest.approx(4.0, abs=0.01)
+        assert 4.0 < by_month["2026-07"]["erp"] < 6.0
+        assert by_month["2026-08"]["erp"] == pytest.approx(6.0, abs=0.01)
+
+    def test_burning_cost_is_claims_over_that_months_erp(self, two_years):
+        rows = self._overview(two_years)["monthly_burning_cost"]
+        june = next(r for r in rows if r["month"] == "2026-06")
+        assert june["burning_cost"] == pytest.approx(june["incurred"] / june["erp"], abs=0.01)
+
+    def test_months_past_the_data_are_not_shown_at_nil(self, two_years):
+        rows = self._overview(two_years)["monthly_burning_cost"]
+        assert max(r["month"] for r in rows) == "2026-08"
+
+    def test_a_single_year_account_still_returns_its_one_period(self, book):
+        data = overview(book)
+        assert len(data["policy_periods"]) == 1
+        assert data["policy_periods"][0]["change_pts"] is None
