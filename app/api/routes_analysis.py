@@ -60,6 +60,7 @@ from app.scoring.rules.renewal_rating import (
     premium_component_breakdown,
 )
 from app.book import repository as book_repo
+from app.api.census_ages import renewal_term_looks_wrong, stale_age_basis
 from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -2137,6 +2138,14 @@ def _member_rates_response(case: models.Case, extra: Optional[dict] = None) -> d
         "case_renewal_increase_pct": renewal_increase_pct,
         "members": members,
         "existing_premium": existing_premium,
+        # Whether these members' ages were struck at a different date to
+        # the one the case now carries. The grid buckets by age band, so a
+        # stale basis puts members in the wrong band and understates the
+        # premium with nothing on screen saying so.
+        "age_basis_warning": stale_age_basis(case),
+        # A renewal priced into a term that has already started is
+        # almost always the EXPIRING term keyed by mistake.
+        "past_term_warning": renewal_term_looks_wrong(case),
     }
     # Why there is no increase, when there is none. A grid of dashes is
     # indistinguishable from a grid that has not loaded, and an

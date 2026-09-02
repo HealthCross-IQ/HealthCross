@@ -118,13 +118,19 @@ def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date 
         if "date_of_birth" in df.columns:
             parsed_dob = pd.to_datetime(row.get("date_of_birth"), errors="coerce")
             date_of_birth = parsed_dob.date() if pd.notna(parsed_dob) else None
+        # The date the age is worked out against, carried back with the row
+        # so the stored age can be checked - and re-derived - later. An age
+        # taken from the file's own Age column has no basis we know of, so
+        # it stays None and is never flagged or recomputed.
+        age_as_of = None
         if pd.isna(age) and "date_of_birth" in df.columns:
             dob = pd.to_datetime(row.get("date_of_birth"), errors="coerce")
             if pd.notna(dob):
                 # Age as of the scheme's own inception/renewal date, not
                 # today's date - underwriting age bands are fixed at
                 # policy start, not recomputed on every ingestion run.
-                age = _calc_age(dob.date(), policy_start_date)
+                age_as_of = policy_start_date or date.today()
+                age = _calc_age(dob.date(), age_as_of)
 
         gender = row.get("gender")
         if isinstance(gender, str) and gender.strip():
@@ -150,6 +156,7 @@ def parse_census(file: BinaryIO, filename: str, default_policy_start_date: date 
                 "category": (str(row.get("category")).strip().upper() or None) if pd.notna(row.get("category")) else None,
                 "date_of_birth": date_of_birth,
                 "age": int(age) if pd.notna(age) else None,
+                "age_as_of": age_as_of,
                 "gender": gender,
                 "marital_status": _normalize_marital_status(row.get("marital_status")),
                 "relation": _classify_relation(row.get("relation")),

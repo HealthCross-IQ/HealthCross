@@ -248,10 +248,22 @@ def get_case(case_id: int, db: Session = Depends(get_db)):
 
 @router.patch("/{case_id}", response_model=schemas.CaseOut)
 def update_case(case_id: int, payload: schemas.CaseUpdate, db: Session = Depends(get_db)):
+    from app.api.census_ages import reage_census_records
+
     case = _get_case_or_404(db, case_id)
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    fields = payload.model_dump(exclude_unset=True)
+    for field, value in fields.items():
         setattr(case, field, value)
     db.commit()
+
+    # The policy start date is what member ages are struck at, and until
+    # now it only applied at upload - so setting it after uploading the
+    # census left every age derived against whatever the field held back
+    # then, silently. The hint under the field said it "is used to work
+    # out member ages", present tense, which is what it now does.
+    if "policy_start_date" in fields and case.policy_start_date:
+        reage_census_records(case, case.policy_start_date, db)
+
     db.refresh(case)
     return case
 
@@ -335,7 +347,9 @@ def upload_census(
         )
     db.query(models.CensusRecord).filter_by(case_id=case.id).delete()
 
-    records = [models.CensusRecord(case_id=case.id, **row) for row in parsed]
+    # Marked as the underwriter's own, so a later book reseed cannot
+    # replace it - see open_renewal_intake.
+    records = [models.CensusRecord(case_id=case.id, source="upload", **row) for row in parsed]
     db.add_all(records)
     db.commit()
     for record in records:

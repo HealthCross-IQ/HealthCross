@@ -222,6 +222,24 @@ def renewal_intake_profile(
     }
 
 
+def broker_category(book_category: Optional[str]) -> Optional[str]:
+    """The broker's own category letter out of the book's contract code.
+
+    The book stores a category as the full policy code -
+    "QIC/HC/BR/KKM/DXB/A" - and seeding a census from it copied that
+    verbatim, so a case whose census said A and B came back reading
+    QIC/HC/BR/KKM/DXB/A and QIC/HC/BR/KKM/BHD/B. Every screen that groups
+    by category then split one account into a row per booked entity.
+
+    The letter is the last segment. Anything without a separator is
+    already a plain category and is left exactly as it is.
+    """
+    if not book_category:
+        return None
+    tail = str(book_category).replace("\\", "/").rsplit("/", 1)[-1].strip()
+    return (tail or None) if tail else None
+
+
 def census_rows_from_members(members: List[dict]) -> List[dict]:
     """Membership rows mapped onto the census shape a case works in (see
     CensusRecord), so the Renewal Bench's census-driven views - the
@@ -239,7 +257,10 @@ def census_rows_from_members(members: List[dict]) -> List[dict]:
     for m in members:
         rows.append({
             "employee_ref": m.get("beneficiary_id"),
-            "category": (m.get("category") or None),
+            # The broker's own letter, not the book's policy code - see
+            # broker_category. An uploaded census is always authoritative
+            # for this; the book only fills in when there is no census.
+            "category": broker_category(m.get("category")),
             # Carried so the NEXT renewal can match this population member
             # for member rather than only by headcount - see
             # app/scoring/rules/member_movement.py.

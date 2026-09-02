@@ -985,7 +985,16 @@ def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Dep
 
     seeded = 0
     existing_census = db.query(models.CensusRecord).filter_by(case_id=case.id).count()
-    if not existing_census or payload.reseed_census:
+    # An UPLOADED census is the underwriter's own statement of who is
+    # renewing and on what category, and the book must never replace it -
+    # not even on an explicit reseed. On KIKO a reseed swapped a 67-row
+    # uploaded file for 84 rows of book roster whose category was the
+    # policy code rather than the broker's own letter, and nothing on
+    # screen said the census had changed.
+    uploaded_census = db.query(models.CensusRecord).filter_by(
+        case_id=case.id, source="upload").count()
+    census_protected = bool(uploaded_census)
+    if not census_protected and (not existing_census or payload.reseed_census):
         if existing_census:
             # Same snapshot-before-replace contract as upload_census, so a
             # reseed can't destroy the expiring state Census Movement needs.
@@ -999,7 +1008,7 @@ def open_renewal_intake(payload: schemas.RenewalIntakeRequest, db: Session = Dep
             )
             db.query(models.CensusRecord).filter_by(case_id=case.id).delete()
         rows = census_rows_from_members(term_members)
-        db.add_all(models.CensusRecord(case_id=case.id, **row) for row in rows)
+        db.add_all(models.CensusRecord(case_id=case.id, source="book", **row) for row in rows)
         seeded = len(rows)
 
     # The book's claims export already holds this account's own experience,

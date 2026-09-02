@@ -3167,6 +3167,24 @@ async function saveCaseDetails() {
   const businessType = document.getElementById('case-business-type').value;
   const existingInsurer = document.getElementById('case-existing-insurer').value;
   const policyStartDate = document.getElementById('case-policy-start-date').value;
+  // Changing the policy start date re-derives every member's age from
+  // their date of birth, which can move them between rate bands and
+  // therefore change the premium. It is not a field to edit in passing -
+  // on a live case it normally only moves when the term genuinely does.
+  const priorStart = currentCase.policy_start_date || '';
+  if (priorStart && policyStartDate && policyStartDate !== priorStart) {
+    const censusCount = (currentCase.census_record_count != null)
+      ? currentCase.census_record_count : null;
+    const who = censusCount ? `all ${censusCount} census members` : 'every census member';
+    if (!confirm(
+        `Change the policy start date from ${priorStart} to ${policyStartDate}?\n\n` +
+        `This re-works ${who}'s age from their date of birth as of the new date. ` +
+        `Members can move between age bands, which changes their rate and this ` +
+        `account's premium.\n\n` +
+        `Only change this when the policy term itself has changed.`)) {
+      return;
+    }
+  }
   const tpaFeeEl = document.getElementById('case-tpa-fee-pct');
   const commissionEl = document.getElementById('case-commission-pct');
   const hcFeeEl = document.getElementById('case-hc-fee-pct');
@@ -3414,6 +3432,16 @@ function renderMemberRatesTable(data) {
     ? `Case renewal increase: <strong>${data.case_renewal_increase_pct > 0 ? '+' : ''}${data.case_renewal_increase_pct}%</strong> - auto-fills every member's new rate once a cell's existing rate is applied below.`
     : escapeHtml(data.no_increase_reason
         || 'No case-level renewal increase computed yet - set rates individually below in the meantime.');
+  // The ages behind these bands were struck at a different date to the
+  // one the case now carries, so members can be sitting in the wrong
+  // band - which understates the premium silently. Shown above the grid
+  // because the grid is where the wrong band actually costs money.
+  const w = data.age_basis_warning;
+  const ageBanner = w ? `<div class="hint" style="background:#fff4e5;border-left:3px solid #b26a00;
+       padding:10px 13px;margin:10px 0;color:#7a4b00;">
+       <strong>Member ages are out of step with the policy start date.</strong>
+       ${escapeHtml(w.message)}</div>` : '';
+
   const blockedBanner = (data.case_renewal_increase_pct == null && data.no_increase_reason)
     ? `<div class="hint" style="background:#fdecea;border-left:3px solid #c0392b;padding:10px 13px;
          margin:10px 0;color:#922b21;">${escapeHtml(data.no_increase_reason)}</div>`
@@ -3439,6 +3467,7 @@ function renderMemberRatesTable(data) {
     <div class="card">
       <h3>Existing vs. New Rates by Category, Age Band &amp; Gender</h3>
       <div class="hint">One rate applies to every member in that region/category/gender/age-band cell at once - matching how the insurer's own rate card is priced. Only cells with at least one member are shown.</div>
+      ${ageBanner}
       ${blockedBanner || `<div class="hint">${increaseNote}</div>`}
       ${_rateGridHtml(regionTree, data.case_renewal_increase_pct)}
       <div style="margin-top:12px;"><button class="primary" onclick="saveCategoryRates()">Apply rates</button></div>

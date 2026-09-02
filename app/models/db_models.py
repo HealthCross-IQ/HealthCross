@@ -106,6 +106,29 @@ class CensusRecord(Base):
     # app/scoring/rules/member_movement.py.
     date_of_birth = Column(Date, nullable=True)
     age = Column(Integer, nullable=True)
+    # The date `age` was worked out against. Age is derived once, at
+    # upload, from whatever the case's policy_start_date held at that
+    # moment - so setting that date AFTER uploading left the stored ages
+    # silently a year out, with nothing on screen saying so. On KIKO two
+    # members sat in 18-40 who belong in 41-59, understating the expiring
+    # premium by AED 16,250 and the ask by about 27,000.
+    #
+    # Recording the basis makes the staleness visible (the census can be
+    # compared against the case's current date) and re-derivable (see
+    # reage_census_records, which recomputes from date_of_birth).
+    # NULL means the age came from the file's own Age column, or predates
+    # this field - neither is re-derivable, so neither is flagged.
+    age_as_of = Column(Date, nullable=True)
+    #: Where this row came from: "upload" when an underwriter uploaded a
+    #: census file, "book" when it was seeded from the Membership export.
+    #:
+    #: An UPLOADED census is the underwriter's own statement of who is
+    #: renewing and what category they are on, and nothing may replace it
+    #: silently. Opening a case from the Renewal Due List seeds a census
+    #: from the book, and on KIKO that swapped a 67-row uploaded file for
+    #: 84 rows of book roster carrying policy codes (QIC/HC/BR/KKM/DXB/A)
+    #: where the census had a plain A. NULL means it predates this field.
+    source = Column(String, nullable=True)
     gender = Column(String, nullable=True)  # "M" / "F"
     marital_status = Column(String, nullable=True)  # "married" / "single"
     relation = Column(String, nullable=True)  # "employee" / "spouse" / "child" / "other"
