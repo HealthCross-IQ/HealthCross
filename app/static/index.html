@@ -397,6 +397,18 @@
     display: none;
   }
 
+  /* Document cards - two choices, each saying what it is and who reads
+     it, rather than a row of buttons named after file formats. */
+  .doc-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(270px,1fr));gap:14px;margin-top:12px}
+  .doc-card{display:flex;flex-direction:column;justify-content:space-between;
+    border:1px solid var(--border);border-radius:10px;padding:16px 18px;background:var(--surface)}
+  .doc-card:hover{border-color:var(--accent);box-shadow:0 2px 10px rgba(0,0,0,.05)}
+  .doc-card-title{font-size:15px;font-weight:700;margin-bottom:3px}
+  .doc-card-lede{font-size:12px;font-weight:600;color:var(--accent);margin-bottom:7px}
+  .doc-card-desc{font-size:12px;color:var(--ink-muted);line-height:1.55}
+  .doc-card-actions{display:flex;gap:8px;margin-top:14px}
+  .doc-card-actions button{flex:1}
+
   /* Portfolio Analysis tab - scoped restyle only (KPI tiles, upload
      widgets, tables). Everything here is namespaced under .pa-panel so it
      doesn't touch any other tab's look. */
@@ -2278,347 +2290,6 @@ async function printNewBusinessSummary(variant) {
   win.document.close();
 }
 
-// Renewal Client Summary - a 3-page printed export (Executive Summary,
-// Census Analysis, Benefits & Premium Comparison) combining case info,
-// the renewal rating, the book-wide benchmark, and the premium's
-// component breakdown into one document - see
-// GET /cases/{id}/renewal-client-summary. Two variants share this same
-// builder: "internal" (sales team, includes the book-wide Renewal
-// Benchmark) and "external" (broker/client-ready, benchmark omitted -
-// see app/api/routes_analysis.py's docstring on why no external
-// market-rate comparison exists to show instead).
-async function printRenewalClientSummary(variant) {
-  if (!currentCase) return;
-
-  // Same pop-up blocker rule as printNewBusinessSummary and
-  // printPortfolioManagementReport: the tab has to be opened inside the
-  // click itself, before anything is awaited, or the browser kills it
-  // silently and the button looks broken.
-  const win = window.open('', '_blank');
-  if (!win) {
-    toast('Your browser blocked the document pop-up - allow pop-ups for this site and try again', true);
-    return;
-  }
-  win.document.write('<!doctype html><title>Preparing...</title><body style="font:14px system-ui;padding:40px;color:#46586e">Preparing the document...</body>');
-
-  let data;
-  try {
-    data = await api(`/cases/${currentCase.id}/renewal-client-summary`);
-  } catch (err) {
-    win.close();
-    toast(err.message, true);
-    return;
-  }
-  if (!data.renewal) {
-    win.close();
-    toast('No renewal rating available yet - upload a claims ledger and set the current annual premium first', true);
-    return;
-  }
-
-  // Best-effort - a case with only one year of claims reports on file (or
-  // none at all, since the renewal rating itself can run off the claims
-  // LEDGER instead) simply has nothing to trend, not an error.
-  let reportComparison = null;
-  try {
-    reportComparison = await api(`/cases/${currentCase.id}/claims-report-comparison`);
-  } catch (err) { /* no claims reports uploaded - trend section omitted */ }
-
-  const c = data.case;
-  const r = data.renewal;
-  const bench = data.benchmark;
-  const pb = data.premium_breakdown;
-  const census = data.census_summary;
-  const diagnoses = data.top_diagnoses || [];
-  const isInternal = variant === 'internal';
-
-  const lossRatioPct = r.actual_loss_ratio * 100;
-  const gaugeMax = Math.max(250, Math.ceil(lossRatioPct / 50) * 50);
-  const arcLen = Math.PI * 80;
-  const gaugeDash = (arcLen * Math.min(lossRatioPct / gaugeMax, 1)).toFixed(1);
-
-  const buildupMax = Math.max(r.annualized_incurred_claims, r.trended_claims, r.current_annual_premium, r.required_premium);
-  const buildupPct = v => (v / buildupMax * 100).toFixed(1);
-
-  const topDiagnosis = diagnoses[0];
-  const topDiagnosisShare = topDiagnosis ? (topDiagnosis.value / r.annualized_incurred_claims * 100) : 0;
-  const diagnosisNote = (topDiagnosis && topDiagnosisShare >= 8)
-    ? `${escapeHtml(topDiagnosis.diagnosis_description || 'One diagnosis')} accounts for AED ${topDiagnosis.value.toLocaleString()} of claims on its own - about ${topDiagnosisShare.toFixed(0)}% of the annualized total.`
-    : null;
-
-  let benchmarkHtml = '';
-  if (isInternal) {
-    if (bench && bench.comparable_case_count > 0) {
-      const allPct = [...bench.other_loss_ratios.map(v => v * 100), lossRatioPct];
-      const minV = Math.min(...allPct), maxV = Math.max(...allPct);
-      const pad = (maxV - minV) * 0.15 || 5;
-      const domainMin = Math.max(0, minV - pad), domainMax = maxV + pad;
-      const xScale = v => 20 + (v - domainMin) / (domainMax - domainMin || 1) * 800;
-      const dots = bench.other_loss_ratios.map(v => `<circle cx="${xScale(v * 100)}" cy="40" r="5" fill="#837e6d" opacity="0.55"></circle>`).join('');
-      benchmarkHtml = `
-        <div class="rcs-section">
-          <h3>Renewal Benchmark <span class="rcs-muted-label">(internal only)</span></h3>
-          <p class="rcs-desc">This case's loss ratio against ${bench.comparable_case_count} other HealthCross renewal case${bench.comparable_case_count === 1 ? '' : 's'} with a computed rating - case-to-case, no external market rate available yet.</p>
-          <svg viewBox="0 0 840 70" class="rcs-bench-svg">
-            <line x1="20" y1="40" x2="820" y2="40" stroke="#e7e3d6" stroke-width="2" stroke-linecap="round"></line>
-            ${dots}
-            <circle cx="${xScale(lossRatioPct)}" cy="40" r="7" fill="#a83232" stroke="#fdfcf9" stroke-width="2"></circle>
-            <text x="${xScale(lossRatioPct)}" y="24" text-anchor="middle" class="rcs-bench-label">this case &middot; ${lossRatioPct.toFixed(0)}%</text>
-          </svg>
-          ${bench.percentile != null ? `<p class="rcs-desc">${bench.percentile}th percentile${bench.low_credibility ? ' - small sample, treat as directional' : ''}.</p>` : ''}
-        </div>`;
-    } else {
-      benchmarkHtml = `
-        <div class="rcs-section">
-          <h3>Renewal Benchmark <span class="rcs-muted-label">(internal only)</span></h3>
-          <div class="rcs-redacted">No other case has a computed renewal rating yet to benchmark against.</div>
-        </div>`;
-    }
-  }
-
-  const ageBandRows = census ? Object.keys(census.age_band_counts).filter(b => census.age_band_counts[b] > 0).map(band => `
-    <div class="rcs-bar-row"><span>${escapeHtml(band)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.age_band_pct[band] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.age_band_counts[band]}</span></div>
-  `).join('') : '';
-  const genderRows = census ? ['M', 'F'].map(g => `
-    <div class="rcs-bar-row"><span>${g === 'M' ? 'Male' : 'Female'}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.gender_pct[g] * 100).toFixed(1)}%; ${g === 'F' ? 'background:#b3752c;' : ''}"></div></div><span class="rcs-count">${census.gender_counts[g]}</span></div>
-  `).join('') : '';
-  const relationRows = census ? Object.keys(census.relation_counts).filter(rel => census.relation_counts[rel] > 0).map(rel => `
-    <div class="rcs-bar-row"><span>${escapeHtml(rel)}</span><div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${(census.relation_pct[rel] * 100).toFixed(1)}%"></div></div><span class="rcs-count">${census.relation_counts[rel]}</span></div>
-  `).join('') : '';
-
-  const diagnosisRows = diagnoses.slice(0, 4).map(d => `<tr><th>${escapeHtml(d.diagnosis_description || d.diagnosis_code || 'Unknown')}${d.high_exposure ? '<span class="rcs-flag-pill">high exposure</span>' : ''}</th><td class="rcs-num">AED ${d.value.toLocaleString()}</td></tr>`).join('');
-
-  // Year-over-year burning cost, when a second policy year's claims report
-  // is on file - same figures as the on-screen "Year-over-year claims
-  // comparison" card (see /claims-report-comparison), just carried into
-  // the printed export too.
-  const trendReports = reportComparison && reportComparison.reports.length >= 2 ? reportComparison.reports : [];
-  const trendMaxBurningCost = trendReports.length ? Math.max(...trendReports.map(tr => tr.burning_cost_per_member || 0)) : 0;
-  const burningCostTrendBarsHtml = trendReports.map(tr => `
-    <div class="rcs-bar-row">
-      <span>${tr.year ?? '-'}</span>
-      <div class="rcs-bar-track"><div class="rcs-bar-fill" style="width:${trendMaxBurningCost ? (tr.burning_cost_per_member / trendMaxBurningCost * 100).toFixed(1) : 0}%; ${tr.burning_cost_pct_change > 0 ? 'background:#a83232;' : tr.burning_cost_pct_change < 0 ? 'background:#2f6b4f;' : ''}"></div></div>
-      <span class="rcs-count">${tr.burning_cost_per_member != null ? 'AED ' + tr.burning_cost_per_member.toLocaleString() : '-'}</span>
-    </div>
-  `).join('');
-  const burningCostTrendHtml = trendReports.length ? `
-    <section class="rcs-section">
-      <h3>Burning Cost Trend</h3>
-      <p class="rcs-desc">Total paid claims and burning cost per member (annualized, IBNR-adjusted) across every policy year uploaded for this case.</p>
-      <div class="rcs-bars" style="margin-bottom:12px;">${burningCostTrendBarsHtml}</div>
-      <table class="rcs-data">
-        <tr><th>Year</th><th class="rcs-num">Total Paid</th><th class="rcs-num">Burning Cost / Member</th><th class="rcs-num">Change</th></tr>
-        ${trendReports.map(tr => `
-          <tr>
-            <td>${tr.year ?? '-'}</td>
-            <td class="rcs-num">${tr.total_paid != null ? 'AED ' + tr.total_paid.toLocaleString() : '-'}</td>
-            <td class="rcs-num">${tr.burning_cost_per_member != null ? 'AED ' + tr.burning_cost_per_member.toLocaleString() : '-'}</td>
-            <td class="rcs-num">${tr.burning_cost_pct_change != null ? `<span class="${tr.burning_cost_pct_change > 0 ? 'rcs-change-up' : 'rcs-change-down'}">${tr.burning_cost_pct_change > 0 ? '+' : ''}${tr.burning_cost_pct_change}%</span>` : '-'}</td>
-          </tr>
-        `).join('')}
-      </table>
-    </section>
-  ` : '';
-
-  // Plain-language read of the numbers above, leading Page 1 right after
-  // the headline premium figures - so the "what does this mean" narrative
-  // comes before the gauge/buildup detail, not only after it in the Notes
-  // section at the very end of the document.
-  const latestBurningCostChangePct = trendReports.length ? trendReports[trendReports.length - 1].burning_cost_pct_change : null;
-  const keyFindings = [];
-  if (lossRatioPct >= 100) {
-    keyFindings.push(`Claims are currently running <strong>above</strong> premium income this period - an actual loss ratio of <strong>${lossRatioPct.toFixed(1)}%</strong> is the primary driver of this renewal.`);
-  } else if (lossRatioPct <= 65) {
-    keyFindings.push(`Claims experience is favorable this period, at an actual loss ratio of <strong>${lossRatioPct.toFixed(1)}%</strong>.`);
-  } else {
-    keyFindings.push(`Actual loss ratio for the period is <strong>${lossRatioPct.toFixed(1)}%</strong>.`);
-  }
-  keyFindings.push(`Required renewal premium is <strong>AED ${r.required_premium.toLocaleString()}</strong>, a <strong>${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</strong> change from the current AED ${r.current_annual_premium.toLocaleString()}.`);
-  if (latestBurningCostChangePct != null) {
-    keyFindings.push(`Burning cost per member has ${latestBurningCostChangePct > 0 ? 'risen' : 'fallen'} <strong>${latestBurningCostChangePct > 0 ? '+' : ''}${latestBurningCostChangePct}%</strong> year-over-year (see Burning Cost Trend, page 2).`);
-  }
-  if (diagnosisNote) keyFindings.push(diagnosisNote);
-  if (isInternal && bench && bench.comparable_case_count > 0 && bench.percentile != null) {
-    keyFindings.push(`This case sits at the <strong>${bench.percentile}th percentile</strong> of loss ratio among ${bench.comparable_case_count} comparable HealthCross case${bench.comparable_case_count === 1 ? '' : 's'}${bench.low_credibility ? ' (small sample, treat as directional)' : ''}.`);
-  }
-  const keyFindingsHtml = `
-    <div class="rcs-findings-box">
-      <div class="rcs-findings-title">Key Findings</div>
-      <ul class="rcs-findings-list">${keyFindings.map(f => `<li>${f}</li>`).join('')}</ul>
-    </div>`;
-
-  const notesText = isInternal
-    ? (diagnosisNote || 'No single diagnosis stands out as a disproportionate cost driver this period.')
-    : `This renewal reflects this year's claims experience.${diagnosisNote ? ' ' + diagnosisNote : ''} We're happy to walk through the details and discuss options for managing next year's cost, including plan design adjustments.`;
-
-  const title = `Renewal Client Summary${isInternal ? ' - Internal' : ''} - ${c.company_name}`;
-
-  const html = `<!doctype html>
-<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,600;0,9..144,700;1,9..144,500&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
-<style>
-  * { box-sizing: border-box; }
-  body { font-family: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", Arial, sans-serif; margin: 0; background: #f8f7f4; color: #14213d; font-variant-numeric: tabular-nums; padding: 30px 16px; }
-  .rcs-paper { max-width: 860px; margin: 0 auto 24px; }
-  .rcs-page-tag { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #837e6d; margin-bottom: 6px; }
-  .rcs-doc { background: #fdfcf9; border: 1px solid rgba(20,33,61,0.10); border-radius: 2px; box-shadow: 0 1px 3px rgba(20,33,61,0.06); padding: 40px 44px; page-break-after: always; }
-  .rcs-doc-header { display: flex; justify-content: space-between; align-items: flex-end; border-bottom: 2px solid #14213d; padding-bottom: 14px; margin-bottom: 22px; }
-  .rcs-brand { font-family: 'Fraunces', serif; font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
-  .rcs-brand span { color: #837e6d; font-family: 'IBM Plex Mono', monospace; font-weight: 400; font-size: 9.5px; letter-spacing: 0.08em; text-transform: uppercase; display: block; margin-top: 3px; }
-  .rcs-meta { text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 10px; color: #837e6d; line-height: 1.7; }
-  .rcs-client-block { margin-bottom: 20px; }
-  .rcs-eyebrow { font-family: 'IBM Plex Mono', monospace; font-size: 10px; font-weight: 500; letter-spacing: 0.1em; text-transform: uppercase; color: #b3752c; margin-bottom: 7px; }
-  .rcs-client-block h1 { font-family: 'Fraunces', serif; font-size: 24px; margin: 0 0 5px; font-weight: 600; letter-spacing: -0.01em; }
-  .rcs-client-block .rcs-sub { font-size: 12px; color: #4a4738; }
-  .rcs-status-pill { display: inline-block; font-family: 'IBM Plex Mono', monospace; font-size: 9px; font-weight: 500; text-transform: uppercase; letter-spacing: 0.05em; padding: 2px 8px; border: 1px solid #b3752c66; color: #b3752c; border-radius: 2px; margin-left: 9px; vertical-align: middle; }
-  .rcs-hero-row { display: flex; align-items: flex-end; gap: 26px; margin-bottom: 22px; flex-wrap: wrap; }
-  .rcs-hero-label { font-family: 'IBM Plex Mono', monospace; font-size: 9.5px; color: #837e6d; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 6px; }
-  .rcs-hero-value { font-family: 'IBM Plex Mono', monospace; font-size: 28px; font-weight: 500; line-height: 1; letter-spacing: -0.01em; }
-  .rcs-hero-value.rcs-muted { color: #837e6d; font-weight: 400; }
-  .rcs-hero-delta { font-family: 'IBM Plex Mono', monospace; font-size: 14px; font-weight: 600; color: #a83232; border-bottom: 2px solid #a83232; padding-bottom: 2px; }
-  .rcs-findings-box { border-left: 2px solid #b3752c; padding: 2px 0 2px 18px; margin-bottom: 24px; }
-  .rcs-findings-title { font-family: 'Fraunces', serif; font-style: italic; font-weight: 500; font-size: 14px; color: #14213d; margin-bottom: 9px; }
-  .rcs-findings-list { margin: 0; padding: 0; list-style: none; font-size: 12px; line-height: 1.6; color: #33301f; }
-  .rcs-findings-list li { padding: 7px 0; border-top: 1px solid #e7e3d6; }
-  .rcs-findings-list li:first-child { border-top: none; padding-top: 0; }
-  .rcs-findings-list strong { font-family: 'IBM Plex Mono', monospace; font-weight: 600; color: #14213d; }
-  .rcs-viz-split { display: grid; grid-template-columns: 170px 1fr; gap: 26px; align-items: center; margin-bottom: 22px; }
-  .rcs-gauge-num { font-family: 'IBM Plex Mono', monospace; font-size: 21px; font-weight: 600; text-align: center; margin-top: -44px; }
-  .rcs-gauge-caption { font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: #837e6d; text-align: center; margin-top: 2px; }
-  .rcs-buildup-row { display: grid; grid-template-columns: 128px 1fr 92px; align-items: center; gap: 9px; font-size: 11px; margin-bottom: 9px; color: #4a4738; }
-  .rcs-buildup-track { height: 3px; background: #e7e3d6; position: relative; }
-  .rcs-buildup-fill { height: 100%; }
-  .rcs-buildup-value { font-family: 'IBM Plex Mono', monospace; text-align: right; }
-  section.rcs-section { margin-bottom: 24px; }
-  section.rcs-section h3 { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 0 0 4px; }
-  .rcs-desc { font-size: 11px; color: #837e6d; margin: 0 0 11px; line-height: 1.5; }
-  table.rcs-data { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  table.rcs-data th { text-align: left; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #837e6d; font-weight: 500; padding: 0 9px 7px 0; border-bottom: 1.5px solid #14213d; }
-  table.rcs-data td { padding: 8px 9px 8px 0; border-bottom: 1px solid #e7e3d6; font-family: 'IBM Plex Mono', monospace; }
-  table.rcs-data td:first-child { font-family: 'IBM Plex Sans', sans-serif; }
-  table.rcs-data tr.rcs-total td, table.rcs-data tr.rcs-total th { font-weight: 700; border-top: 1.5px solid #14213d; border-bottom: none; padding-top: 11px; }
-  .rcs-num { text-align: right; }
-  table.rcs-compare { width: 100%; border-collapse: collapse; font-size: 11.5px; }
-  table.rcs-compare th { text-align: right; font-family: 'IBM Plex Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.05em; color: #837e6d; font-weight: 500; padding: 0 10px 8px; border-bottom: 1.5px solid #14213d; }
-  table.rcs-compare th:first-child, table.rcs-compare td:first-child { text-align: left; padding-left: 0; font-family: 'IBM Plex Sans', sans-serif; }
-  table.rcs-compare td { text-align: right; font-family: 'IBM Plex Mono', monospace; padding: 9px 10px; border-bottom: 1px solid #e7e3d6; }
-  table.rcs-compare tr.rcs-total td { font-weight: 700; font-size: 12.5px; border-top: 1.5px solid #14213d; border-bottom: none; padding-top: 12px; }
-  .rcs-change-up { color: #a83232; font-weight: 600; }
-  .rcs-change-down { color: #2f6b4f; font-weight: 600; }
-  .rcs-pct-pill { font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #b3752c; padding: 0; font-weight: 500; margin-left: 6px; }
-  .rcs-flag-pill { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; text-transform: uppercase; letter-spacing: 0.05em; color: #a83232; border-bottom: 1px solid #a83232; margin-left: 7px; padding-bottom: 1px; }
-  .rcs-bars { display: flex; flex-direction: column; gap: 9px; }
-  .rcs-bar-row { display: grid; grid-template-columns: 66px 1fr 90px; align-items: center; gap: 9px; font-size: 11px; }
-  .rcs-bar-track { height: 5px; background: #e7e3d6; }
-  .rcs-bar-fill { height: 100%; background: #14213d; }
-  .rcs-count { text-align: right; font-family: 'IBM Plex Mono', monospace; color: #4a4738; font-size: 10.5px; }
-  .rcs-split { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
-  .rcs-notes-box { border-left: 2px solid #14213d; background: #f4f2ea; padding: 13px 16px; font-size: 11.5px; line-height: 1.55; color: #33301f; }
-  .rcs-redacted { background: repeating-linear-gradient(135deg, #f4f2ea, #f4f2ea 4px, #e7e3d6 4px, #e7e3d6 8px); border-radius: 2px; padding: 12px 14px; font-size: 10.5px; color: #837e6d; text-align: center; font-style: italic; }
-  .rcs-muted-label { font-weight: 400; color: #837e6d; font-size: 9.5px; }
-  .rcs-bench-svg { width: 100%; display: block; overflow: visible; }
-  .rcs-bench-label { font-family: 'IBM Plex Mono', monospace; font-size: 10.5px; font-weight: 600; fill: #a83232; }
-  .rcs-doc-footer { border-top: 1px solid #e7e3d6; padding-top: 12px; margin-top: 26px; font-family: 'IBM Plex Mono', monospace; font-size: 9px; color: #837e6d; display: flex; justify-content: space-between; }
-  @media print { .rcs-doc { border: none; box-shadow: none; } body { background: #fff; padding: 0; } }
-</style></head><body>
-
-<div class="rcs-paper"><div class="rcs-page-tag">Page 1 of 3 &middot; Executive Summary</div><div class="rcs-doc">
-  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Renewal Client Summary${isInternal ? ' - Internal' : ''}<br>Generated ${new Date().toLocaleDateString('en-GB', {day: '2-digit', month: 'short', year: 'numeric'})}</div></div>
-  <div class="rcs-client-block">
-    <div class="rcs-eyebrow">Renewal &middot; Existing Business</div>
-    <h1>${escapeHtml(c.company_name)}<span class="rcs-status-pill">Renewal in progress</span></h1>
-    <div class="rcs-sub">Broker: ${escapeHtml(c.broker_name)}${c.existing_insurer ? ' &middot; Existing insurer: ' + escapeHtml(c.existing_insurer) : ''}${c.policy_start_date ? ' &middot; Policy start: ' + escapeHtml(c.policy_start_date) : ''}</div>
-  </div>
-  <div class="rcs-hero-row">
-    <div><div class="rcs-hero-label">Current Premium</div><div class="rcs-hero-value rcs-muted">AED ${(r.current_annual_premium / 1e6).toFixed(2)}M</div></div>
-    <div><div class="rcs-hero-label">Proposed Renewal Premium</div><div class="rcs-hero-value">AED ${(r.required_premium / 1e6).toFixed(2)}M</div></div>
-    <span class="rcs-hero-delta">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</span>
-  </div>
-  ${keyFindingsHtml}
-  <div class="rcs-viz-split">
-    <div>
-      <svg viewBox="0 0 190 100" style="width:100%;">
-        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#e7e3d6" stroke-width="10" stroke-linecap="round"></path>
-        <path d="M15,95 A80,80 0 0 1 175,95" fill="none" stroke="#a83232" stroke-width="10" stroke-linecap="round" stroke-dasharray="${gaugeDash} 999"></path>
-      </svg>
-      <div class="rcs-gauge-num">${lossRatioPct.toFixed(1)}%</div>
-      <div class="rcs-gauge-caption">Actual Loss Ratio</div>
-    </div>
-    <div>
-      <div class="rcs-buildup-row"><span>Annualized Claims</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.annualized_incurred_claims)}%; background:#837e6d;"></div></div><span class="rcs-buildup-value">${r.annualized_incurred_claims.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.trended_claims)}%; background:#4a4738;"></div></div><span class="rcs-buildup-value">${r.trended_claims.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span>Current Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.current_annual_premium)}%; border:1.5px dashed #837e6d; background:none;"></div></div><span class="rcs-buildup-value">${r.current_annual_premium.toLocaleString()}</span></div>
-      <div class="rcs-buildup-row"><span style="font-weight:600; color:#a83232;">Required Premium</span><div class="rcs-buildup-track"><div class="rcs-buildup-fill" style="width:${buildupPct(r.required_premium)}%; background:#a83232;"></div></div><span class="rcs-buildup-value" style="color:#a83232;">${r.required_premium.toLocaleString()}</span></div>
-    </div>
-  </div>
-  ${benchmarkHtml}
-  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
-</div></div>
-
-<div class="rcs-paper"><div class="rcs-page-tag">Page 2 of 3 &middot; Census Analysis</div><div class="rcs-doc">
-  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Census Analysis${isInternal ? ' - Internal' : ''}<br>${escapeHtml(c.company_name)}</div></div>
-  ${census ? `
-  <section class="rcs-section">
-    <h3>Population Snapshot</h3>
-    <table class="rcs-data"><tr><th>Total Lives</th><td class="rcs-num">${census.total_members}</td></tr><tr><th>Employees</th><td class="rcs-num">${census.employee_count}</td></tr><tr><th>Avg. Age</th><td class="rcs-num">${census.avg_age ?? '-'}</td></tr></table>
-  </section>
-  <section class="rcs-section"><div class="rcs-split">
-    <div><h3>Age Band</h3><div class="rcs-bars">${ageBandRows}</div></div>
-    <div><h3>Gender Split</h3><div class="rcs-bars">${genderRows}</div></div>
-  </div></section>
-  <section class="rcs-section">
-    <h3>Relation Breakdown</h3>
-    <div class="rcs-bars">${relationRows}</div>
-  </section>
-  ` : '<div class="rcs-redacted">No census uploaded for this case yet.</div>'}
-  <section class="rcs-section">
-    <h3>Claims &amp; Loss Experience</h3>
-    <p class="rcs-desc">Months used: ${r.months_used.join(', ')}</p>
-    <table class="rcs-data">
-      <tr><th>Annualized incurred claims</th><td class="rcs-num">AED ${r.annualized_incurred_claims.toLocaleString()}</td></tr>
-      <tr><th>+ Inflation (${(r.assumptions_used.inflation_pct * 100).toFixed(1)}%)</th><td class="rcs-num">AED ${r.trended_claims.toLocaleString()}</td></tr>
-      <tr class="rcs-total"><th>Required annual premium</th><td class="rcs-num">AED ${r.required_premium.toLocaleString()}</td></tr>
-    </table>
-  </section>
-  ${burningCostTrendHtml}
-  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
-</div></div>
-
-<div class="rcs-paper"><div class="rcs-page-tag">Page 3 of 3 &middot; Benefits &amp; Premium Comparison</div><div class="rcs-doc">
-  <div class="rcs-doc-header"><div class="rcs-brand">HealthCross<span>Underwriting Intelligence</span></div><div class="rcs-meta">Benefits &amp; Premium Comparison${isInternal ? ' - Internal' : ''}<br>${escapeHtml(c.company_name)}</div></div>
-  <section class="rcs-section">
-    <h3>Existing Premium vs. Proposed Renewal Terms</h3>
-    <p class="rcs-desc">Every component below is this case's own set %, applied to both columns for a fair comparison.</p>
-    <table class="rcs-compare">
-      <tr><th></th><th>Existing</th><th>Proposed Renewal</th><th>Change</th></tr>
-      <tr><td>Risk Premium<span class="rcs-pct-pill">${(pb.risk_premium_pct * 100).toFixed(1)}%</span></td><td>AED ${pb.existing.risk_premium.toLocaleString()}</td><td>AED ${pb.proposed.risk_premium.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-      <tr><td>TPA Fee<span class="rcs-pct-pill">${(pb.tpa_fee_pct * 100).toFixed(1)}%</span></td><td>AED ${pb.existing.tpa_fee.toLocaleString()}</td><td>AED ${pb.proposed.tpa_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-      <tr><td>Commission<span class="rcs-pct-pill">${(pb.commission_pct * 100).toFixed(1)}%</span></td><td>AED ${pb.existing.commission.toLocaleString()}</td><td>AED ${pb.proposed.commission.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-      <tr><td>HC Fee<span class="rcs-pct-pill">${(pb.hc_fee_pct * 100).toFixed(1)}%</span></td><td>AED ${pb.existing.hc_fee.toLocaleString()}</td><td>AED ${pb.proposed.hc_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-      <tr><td>QIC Fee${c.existing_insurer ? ' (' + escapeHtml(c.existing_insurer) + ')' : ''}<span class="rcs-pct-pill">${(pb.qic_fee_pct * 100).toFixed(1)}%</span></td><td>AED ${pb.existing.qic_fee.toLocaleString()}</td><td>AED ${pb.proposed.qic_fee.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-      <tr class="rcs-total"><td>Total Annual Premium</td><td>AED ${pb.existing.total.toLocaleString()}</td><td>AED ${pb.proposed.total.toLocaleString()}</td><td class="rcs-change-up">${r.renewal_increase_pct > 0 ? '+' : ''}${r.renewal_increase_pct}%</td></tr>
-    </table>
-  </section>
-  ${diagnoses.length ? `
-  <section class="rcs-section">
-    <h3>Top Diagnosis by Cost</h3>
-    <table class="rcs-data">${diagnosisRows}</table>
-  </section>` : ''}
-  <section class="rcs-section">
-    <h3>Notes for Broker &amp; Client</h3>
-    <div class="rcs-notes-box">${notesText}</div>
-  </section>
-  <div class="rcs-doc-footer"><span>HealthCross Underwriting Intelligence</span><span>${isInternal ? 'Internal - not for distribution to broker or client' : 'For broker & client discussion - not a binding quotation'}</span></div>
-</div></div>
-
-<script>window.onload = () => window.print();<\/script>
-</body></html>`;
-
-  win.document.open();
-  win.document.write(html);
-  win.document.close();
-}
 
 function _comparisonRowsFlat(result) {
   const rows = [];
@@ -3017,17 +2688,17 @@ function renderCaseWorkspace() {
         </div>
         <div class="card" style="margin-top:14px;">
           <h3>Documents</h3>
-          <div class="hint">Three, by who reads them. All price the renewal the same way &mdash;
-            Method A, the figure quoted everywhere in the portal &mdash; so they cannot disagree
-            with each other or with the screens above.</div>
-          <div style="display:flex; gap:8px; flex-wrap:wrap; margin-top:10px;">
-            <button class="primary" onclick="openRenewalReport()"
-                    title="One page: what the account cost, what it therefore needs, and what the claims are made of - in the order the conversation goes.">Renewal Review &mdash; the meeting</button>
-            <button onclick="printRenewalClientSummary('internal')"
-                    title="The underwriting file: the price build-up, the new-business comparison, the opportunity assessment and the experience price.">Internal &mdash; the file</button>
-            <button onclick="printRenewalClientSummary('external')"
-                    title="Client-facing: current versus proposed cover and the premium, without the internal workings.">External &mdash; the client</button>
-            <button onclick="printTabAsPdf('renewal-bench', 'Renewal Bench')">Print this tab as-is</button>
+          <div class="hint">Two. Both are built from the same figures by the same functions, so
+            the short one and the long one cannot disagree &mdash; section 1 of the report IS the
+            summary. Each opens to read, with an Internal / Client toggle and a Download button
+            on the page itself.</div>
+          <div class="doc-cards">
+            ${_docCardHtml('Renewal Summary', 'One page. The decision.',
+                'Loss ratio, the ask, the pricing ladder and the three premiums. Nothing that explains them.',
+                `/cases/${c.id}/renewal-summary.html`, true)}
+            ${_docCardHtml('Renewal Report', 'The full file.',
+                'The summary, then the census, the benefits and the claims behind the number, then the basis every figure was struck on.',
+                `/cases/${c.id}/renewal-report.html`, false)}
           </div>
         </div>
       </div>
@@ -4935,6 +4606,42 @@ function _rbBuildupHtml(steps) {
 // nothing awaited - the popup cannot be blocked and the browser simply
 // loads a page. Assembling a document in the browser after an await is
 // what broke this twice before.
+// A document card: read it, or take it away. Deliberately not "print" -
+// a browser print stamps its own date, URL and page counter onto the
+// page, which is what made these look like screenshots of an internal
+// tool rather than something a firm sends out. Download opens the same
+// document with the print dialog already up, so the PDF comes from the
+// document's own @page rules.
+function _docCardHtml(title, lede, desc, url, primary) {
+  return `
+    <div class="doc-card">
+      <div class="doc-card-body">
+        <div class="doc-card-title">${escapeHtml(title)}</div>
+        <div class="doc-card-lede">${escapeHtml(lede)}</div>
+        <div class="doc-card-desc">${escapeHtml(desc)}</div>
+      </div>
+      <div class="doc-card-actions">
+        <button class="${primary ? 'primary' : ''}" onclick="openDoc('${url}')">View</button>
+        <button onclick="downloadDoc('${url}')">Download</button>
+      </div>
+    </div>`;
+}
+
+function openDoc(url) {
+  // Opened inside the click, before anything is awaited - a pop-up
+  // blocker kills a window opened later and the button looks broken.
+  const win = window.open(url, '_blank');
+  if (!win) toast('Your browser blocked the document - allow pop-ups for this site', true);
+}
+
+function downloadDoc(url) {
+  const win = window.open(url, '_blank');
+  if (!win) { toast('Your browser blocked the document - allow pop-ups for this site', true); return; }
+  // The document raises its own print dialog once it has laid out, so the
+  // PDF is made from its @page rules rather than the tab's default.
+  win.addEventListener('load', () => setTimeout(() => win.print(), 350), { once: true });
+}
+
 function openRenewalReport() {
   if (!currentCase) { toast('Open a case first', true); return; }
   window.open(`/cases/${currentCase.id}/renewal-report.html`, '_blank');

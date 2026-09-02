@@ -2506,7 +2506,26 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
             # page says so instead of omitting its own headline.
             "pricing_blocked": rating.get("pricing_blocked"),
             "pricing_problems": rating.get("pricing_problems"),
+            # Whether the ask is the experience's own or one the
+            # underwriter is quoting instead. Without these the document
+            # printed the overridden premium in its KPI strip and the
+            # computed one in its ladder, three inches apart, with nothing
+            # saying which was which - two answers on one page.
+            "increase_source": rating.get("increase_source"),
+            "computed_increase_pct": rating.get("computed_increase_pct"),
+            "computed_required_premium": rating.get("computed_required_premium"),
         },
+        # The benefits behind the price, for the comprehensive report.
+        "benefits": [
+            {
+                "category": b.category,
+                "plan_name": b.plan_name,
+                "role": b.role,
+                "summary": b.standard_summary or {},
+                "member_count": b.member_count,
+            }
+            for b in sorted(case.benefit_plans, key=lambda b: (b.category or "", b.role or ""))
+        ],
         "monthly": monthly,
         "top_diagnoses": diagnoses,
         "top_claimants": member_claim_ranking(term, by_beneficiary, windows, top=8),
@@ -2565,11 +2584,26 @@ def _mode_of(values):
     return Counter(present).most_common(1)[0][0]
 
 
+@router.get("/{case_id}/renewal-summary.html", response_class=HTMLResponse,
+            include_in_schema=False)
+def get_renewal_summary_html(case_id: int, db: Session = Depends(get_db)):
+    """One page: the loss ratio, the ask, the ladder, the premiums.
+
+    Built from the same payload as the full report, by the same
+    functions, so the short document and the long one cannot quote
+    different numbers for the same account.
+    """
+    from app.reports.renewal_report import render_renewal_summary
+
+    return HTMLResponse(render_renewal_summary(get_renewal_report(case_id, db)))
+
+
 @router.get("/{case_id}/renewal-report.html", response_class=HTMLResponse,
             include_in_schema=False)
 def get_renewal_report_html(case_id: int, db: Session = Depends(get_db)):
-    """The document itself, rendered server-side at a URL so the print
-    button is a plain window.open with nothing awaited.
+    """The comprehensive file - the summary, then census, benefits and
+    claims, then the basis. Rendered server-side at a URL so opening it
+    is a plain window.open with nothing awaited.
     """
     from app.reports.renewal_report import render_renewal_report
 

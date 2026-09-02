@@ -168,19 +168,22 @@ def test_the_new_business_tab_leads_with_the_benefits_import():
     assert start < manual < admin, "the import must come before the manual setup and the admin upload"
 
 
-def test_the_renewal_documents_are_all_on_the_renewal_bench():
-    # A renewal's three outputs sat on two different tabs - the Review on
-    # the Renewal Bench, the Internal and External summaries on CLAIMS -
-    # with nothing saying which was which or who each was for.
+def test_the_renewal_bench_offers_two_documents_and_no_print_buttons():
+    # Three printouts across two tabs became two documents in one place.
+    # The Internal and External summaries and the two "print this tab"
+    # buttons are gone: the split they encoded is now a toggle ON the
+    # document, so one file serves both readers and they cannot drift.
     import pathlib
     markup = (pathlib.Path(__file__).resolve().parent.parent
               / "app" / "static" / "index.html").read_text()
 
     bench = markup.index('data-tab="renewal-bench"')
-    for label in ("Renewal Review &mdash; the meeting",
-                  "Internal &mdash; the file",
-                  "External &mdash; the client"):
-        assert markup.index(label) > bench, f"{label} is not on the Renewal Bench"
-    # And not left behind on the claims tab.
-    claims = markup.index('data-tab="claims"')
-    assert markup.index("printRenewalClientSummary('internal')") > bench > claims
+    assert markup.index("renewal-summary.html") > bench
+    assert markup.index("renewal-report.html") > bench
+
+    # Read or take away - never a browser print of a screen.
+    assert "function openDoc(" in markup
+    assert "function downloadDoc(" in markup
+    assert "printRenewalClientSummary('internal')" not in markup
+    assert "printRenewalClientSummary('external')" not in markup
+    assert "printTabAsPdf('renewal-bench'" not in markup

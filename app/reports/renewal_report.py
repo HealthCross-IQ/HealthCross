@@ -57,7 +57,84 @@ table.t td.note{color:var(--muted);font-size:10.5px}
 .chip{display:inline-block;font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.06em;background:var(--sky-25);color:var(--navy);padding:2px 6px;margin-right:5px;border-radius:2px}
 .chip.warn{background:var(--warn-wash);color:var(--warn)}
 .mixval{width:30px;text-align:right;font-family:var(--mono);flex:none;color:var(--navy)}
-@media print{.toolbar{display:none}body{background:#fff;padding:0}.doc{box-shadow:none;border:0}.page-tag{display:none}section{break-inside:avoid}}
+
+/* --- the document's own structure -------------------------------------
+   Numbered sections with a rule above each, so a reader can navigate a
+   long report by eye and cite a section back. The summary is section-less
+   by design: one page has nothing to navigate. */
+.sec{margin:0 0 30px}
+.sec-head{display:flex;align-items:baseline;gap:11px;border-top:2px solid var(--navy);padding-top:9px;margin:0 0 4px}
+.sec-no{font-family:var(--mono);font-size:10px;font-weight:700;color:var(--sky);letter-spacing:.08em}
+.sec-head h2{font-size:15px;margin:0;letter-spacing:-.01em;color:var(--navy)}
+.sec-sub{color:var(--muted);font-size:11px;margin:0 0 15px;max-width:62ch;line-height:1.55}
+
+/* The ask, stated once and unmistakably. */
+.ask{border:1px solid var(--rule);border-left:4px solid var(--sky);padding:17px 20px;margin:0 0 26px}
+.ask .l{font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);display:block;margin-bottom:6px}
+.ask .v{font-size:27px;font-weight:700;color:var(--navy);letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+.ask .v .u{font-size:14px;color:var(--muted);font-weight:500;margin-left:5px}
+.ask p{margin:11px 0 0;font-size:12px;line-height:1.65;color:var(--ink)}
+.ask.override{border-left-color:var(--warn)}
+.ask.override .v{color:var(--warn)}
+
+/* Quoted against computed - the two are never printed without the
+   sentence that tells them apart. */
+.vs{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--rule);margin:0 0 12px}
+.vs>div{padding:13px 17px}
+.vs>div+div{border-left:1px solid var(--rule)}
+.vs .l{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);display:block;margin-bottom:5px}
+.vs .n{font-size:18px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.vs .s{font-size:10.5px;color:var(--muted);margin-top:3px}
+.vs .quoted .n{color:var(--warn)}
+.vs .computed .n{color:var(--navy)}
+
+/* Client version: everything internal folds away in one click. */
+[data-view="client"] .internal-only{display:none!important}
+
+.toolbar{position:sticky;top:0;z-index:9;display:flex;align-items:center;gap:14px;
+  background:var(--navy);color:#fff;padding:11px 22px;font-size:12.5px;
+  font-family:var(--sans);box-shadow:0 1px 6px rgba(0,0,0,.18)}
+.toolbar .title{font-weight:600;flex:1}
+.toolbar button{font:inherit;font-size:11.5px;border:1px solid rgba(255,255,255,.35);
+  background:transparent;color:#fff;padding:6px 13px;border-radius:3px;cursor:pointer}
+.toolbar button:hover{background:rgba(255,255,255,.12)}
+.toolbar button.on{background:#fff;color:var(--navy);border-color:#fff;font-weight:600}
+.toolbar .seg{display:flex;border-radius:3px;overflow:hidden}
+.toolbar .seg button{border-radius:0}
+.toolbar .seg button+button{border-left:0}
+
+@page{size:A4;margin:12mm 11mm 14mm}
+@media print{
+  .toolbar{display:none}
+  body{background:#fff;padding:0;margin:0}
+  /* The screen paper is 920px wide - wider than A4's printable area, so
+     on paper it ran off the right edge and took the masthead and the KPI
+     strip with it. On paper the page IS the container. */
+  .paper,.doc{max-width:100%;width:100%;margin:0;box-shadow:none;border:0}
+  .pad{padding:0}
+  .page-tag{display:none}
+  /* Tightened for paper: the same spacing that breathes on a screen puts
+     a one-page summary onto two. */
+  .kpis{margin-bottom:16px}
+  .ask{padding:13px 15px;margin-bottom:16px}
+  .ask .v{font-size:23px}
+  .vs{margin-bottom:9px}
+  .sec{margin-bottom:20px}
+  h1{font-size:27px;margin-bottom:6px}
+  /* A summary that runs to two pages is not a summary. The rows carry
+     their own explanation, which is what a reader needs and also what
+     makes them tall - so the type tightens rather than the notes going. */
+  table.t td{padding:5px 13px 5px 0}
+  table.t th{padding:5px 13px 5px 0}
+  table.t td.note,table.t th{font-size:9.5px}
+  table.t{font-size:11px}
+  .desc,.sec-sub{margin-bottom:9px;line-height:1.45}
+  h2{font-size:14px;margin-bottom:2px}
+  .ask p{margin-top:8px;line-height:1.55}
+  .kpi .v{font-size:19px}
+  section,.sec,.ask,.vs,table.t,.kpis{break-inside:avoid}
+  .sec-head,h1,h2{break-after:avoid}
+}
 """
 
 
@@ -118,11 +195,71 @@ def _headline(payload: dict) -> str:
         + _kpi("Net earned loss ratio", pct(book.get("net_loss_ratio")),
                f'net of the {pct(book.get("loading_pct"))} book expense allowance',
                _ratio_tone(book.get("net_loss_ratio")))
+        # The share footnote is the LADDER's, which is the experience's -
+        # so beside an overridden premium it described a different number
+        # to the one printed above it (166.1% next to a figure that was
+        # 160%). Where the two differ the footnote says what it is.
         + _kpi("Required premium", aed(rating.get("required_premium")),
-               f'{pct(rating.get("required_share_of_expiring"))} of the annualised expiring premium')
-        + _kpi("Renewal increase", ("+" if (inc or 0) >= 0 else "") + f'{inc}%' if inc is not None else "&mdash;",
-               f'vs {aed(rating.get("renewal_base_premium"))} annualised expiring',
+               (f'quoted &mdash; the experience asks '
+                f'{pct(rating.get("required_share_of_expiring"))} of expiring'
+                if rating.get("increase_source") == "override"
+                else f'{pct(rating.get("required_share_of_expiring"))} of the annualised expiring premium'))
+        + _kpi(("Quoted increase" if rating.get("increase_source") == "override"
+                else "Renewal increase"),
+               ("+" if (inc or 0) >= 0 else "") + f'{inc}%' if inc is not None else "&mdash;",
+               (f'an override &mdash; experience asks {rating.get("computed_increase_pct")}%'
+                if rating.get("increase_source") == "override"
+                else f'vs {aed(rating.get("renewal_base_premium"))} annualised expiring'),
                "bad" if (inc or 0) >= 15 else ("warn" if (inc or 0) > 0 else "good"))
+        + "</div>"
+    )
+
+
+def _section(no: str, title: str, sub: str, body: str, internal_only: bool = False) -> str:
+    """A numbered section. Internal-only sections fold away entirely in
+    the client view rather than being redacted in place - a blanked-out
+    box tells a client there is something they are not being shown."""
+    cls = "sec internal-only" if internal_only else "sec"
+    return (
+        f'<section class="{cls}">'
+        f'<div class="sec-head"><span class="sec-no">{no}</span><h2>{title}</h2></div>'
+        + (f'<p class="sec-sub">{sub}</p>' if sub else "")
+        + body
+        + "</section>"
+    )
+
+
+def _quoted_vs_computed(payload: dict) -> str:
+    """What is being asked, beside what the experience asks for.
+
+    The document used to print the overridden premium in its KPI strip
+    and the computed one in its ladder, three inches apart, with nothing
+    distinguishing them - two required premiums and two increases on one
+    page. Whichever the reader happened to land on was the number they
+    took away.
+    """
+    r = payload["rating"]
+    if r.get("increase_source") != "override":
+        return ""
+    quoted, computed = r.get("renewal_increase_pct"), r.get("computed_increase_pct")
+    qp, cp = r.get("required_premium"), r.get("computed_required_premium")
+    if quoted is None or computed is None:
+        return ""
+    gap = (cp - qp) if (cp is not None and qp is not None) else None
+    return (
+        '<div class="vs">'
+        f'<div class="quoted"><span class="l">Quoted &mdash; what we are asking</span>'
+        f'<span class="n">{"+" if quoted >= 0 else ""}{quoted}%</span>'
+        f'<div class="s">{aed(qp)} on the annualised expiring premium</div></div>'
+        f'<div class="computed"><span class="l">Experience &mdash; what the account asks for</span>'
+        f'<span class="n">{"+" if computed >= 0 else ""}{computed}%</span>'
+        f'<div class="s">{aed(cp)} &mdash; the figure below builds to this</div></div>'
+        + (f'<div style="grid-column:1/-1;border-top:1px solid var(--rule);padding:10px 17px;'
+           f'font-size:11px;color:var(--muted);line-height:1.55">The quoted increase is an '
+           f'underwriting decision, not a measurement: it holds the account '
+           f'<strong style="color:var(--navy)">{aed(abs(gap))}</strong> '
+           f'{"below" if gap > 0 else "above"} what its own experience asks for. Every figure '
+           f'below is the experience&rsquo;s.</div>' if gap else "")
         + "</div>"
     )
 
@@ -155,14 +292,25 @@ def _the_ask(payload: dict) -> str:
         else "The account is running to plan."
     )
     ladder = payload.get("ladder") or {}
+    override = rating.get("increase_source") == "override"
+    # The headline is what is being ASKED. Where that is an override, the
+    # experience's own figure is the sentence after it, never the number
+    # in the box - a reader takes away whatever is largest on the page.
     return (
-        f'<div class="callout"><strong>{verdict}</strong> The account runs at {pct(gross)}; '
-        f'carried forward with {pct(ladder.get("inflation_pts"))} of claims inflation that is '
+        f'<div class="ask{" override" if override else ""}">'
+        f'<span class="l">{"Quoted renewal increase" if override else "Renewal increase"}</span>'
+        f'<span class="v">{"+" if inc >= 0 else "&minus;"}{abs(inc)}%'
+        f'<span class="u">&middot; {aed(rating.get("required_premium"))} '
+        f'on {aed(base)} annualised expiring</span></span>'
+        f'<p><strong>{verdict}</strong> The account runs at {pct(gross)}; carried forward with '
+        f'{pct(ladder.get("inflation_pts"))} of claims inflation that is '
         f'<strong>{pct(ladder.get("trended_loss_ratio"))}</strong>, and grossed up for a '
         f'{pct(ladder.get("loading_pct"))} loading it needs '
-        f'{pct(ladder.get("required_share_of_expiring"))} of the expiring premium. '
-        f'On {aed(base)} annualised that is <strong>{aed(rating.get("required_premium"))}</strong> '
-        f'&mdash; {direction} <strong>{abs(inc)}%</strong>.</div>'
+        f'{pct(ladder.get("required_share_of_expiring"))} of the expiring premium &mdash; '
+        f'{aed(rating.get("computed_required_premium") or rating.get("required_premium"))}'
+        + (f', {direction} {abs(rating.get("computed_increase_pct", inc))}%.'
+           if override else f', {direction} {abs(inc)}%.')
+        + '</p></div>'
     )
 
 
@@ -448,31 +596,128 @@ def _basis(payload: dict) -> str:
     )
 
 
-def render_renewal_report(payload: dict, today: Optional[date] = None) -> str:
-    """One page. `payload` is what GET /cases/{id}/renewal-report returns."""
-    today = today or date.today()
-    company = payload["case"].get("company_name") or "Renewal"
-    body = (
+def _benefits(payload: dict) -> str:
+    """What is actually being bought, per category.
+
+    A renewal priced without its cover beside it is a number with no
+    subject: the same loss ratio on a 275,000 limit and a 150,000 one are
+    different accounts.
+    """
+    plans = payload.get("benefits") or []
+    if not plans:
+        return _note("No table of benefits uploaded for this case, so the cover behind these "
+                     "figures is not shown.")
+    fields = ["annual_limit", "network", "deductible", "op_copay", "pharmacy_limit",
+              "dental_limit", "optical_limit", "maternity_limit", "pre_existing"]
+    labels = {f: f.replace("_", " ").title() for f in fields}
+    shown = [f for f in fields if any((p["summary"] or {}).get(f) for p in plans)]
+    if not shown:
+        return _note("The uploaded benefits carry no readable values yet.")
+    head = "".join(f"<th>{esc(labels[f])}</th>" for f in shown)
+    body = "".join(
+        f'<tr><td><strong>{esc(p.get("category") or "&mdash;")}</strong>'
+        f'{f"<br><span class=note>{esc(p.get(chr(112)+chr(108)+chr(97)+chr(110)+chr(95)+chr(110)+chr(97)+chr(109)+chr(101)))}</span>" if p.get("plan_name") else ""}</td>'
+        + "".join(f'<td>{esc((p["summary"] or {}).get(f) or "&mdash;")}</td>' for f in shown)
+        + "</tr>"
+        for p in plans
+    )
+    return (f'<table class="t"><thead><tr><th>Category</th>{head}</tr></thead>'
+            f"<tbody>{body}</tbody></table>")
+
+
+def _toolbar(title: str, download_url: str) -> str:
+    """Read on screen, download when wanted - never "print".
+
+    A browser print puts its own date, URL and page counter on the page,
+    which is what made these documents look like screenshots of an
+    internal tool rather than something a firm sends out.
+    """
+    return (
+        f'<div class="toolbar">'
+        f'<span class="title">{title}</span>'
+        f'<div class="seg">'
+        f'<button id="v-int" class="on" onclick="setView(\'internal\')">Internal</button>'
+        f'<button id="v-cli" onclick="setView(\'client\')">Client</button>'
+        f"</div>"
+        f'<button onclick="window.print()">Download PDF</button>'
+        f"</div>"
+        "<script>function setView(v){document.documentElement.setAttribute('data-view',v);"
+        "document.getElementById('v-int').className=(v==='internal'?'on':'');"
+        "document.getElementById('v-cli').className=(v==='client'?'on':'');}</script>"
+    )
+
+
+def _summary_body(payload: dict, today: date) -> str:
+    """The decision, and only the decision. One page."""
+    return (
         _masthead(payload)
         + _identity(payload, today)
         + _headline(payload)
         + '<div class="pad">'
+        + _quoted_vs_computed(payload)
         + _the_ask(payload)
         + _ladder(payload)
         + _premiums(payload)
-        + _claims_buildup(payload)
-        + _monthly(payload)
-        + _encounters(payload)
-        + _claimants(payload)
-        + _diagnoses(payload)
-        + _census(payload)
-        + _population(payload)
-        + _basis(payload)
         + "</div>"
-        + _footer("HealthCross &middot; Renewal Review", esc(company))
+    )
+
+
+def render_renewal_summary(payload: dict, today: Optional[date] = None) -> str:
+    """One page: the loss ratio, the ask, the ladder, the premiums.
+
+    Everything a renewal decision needs and nothing that explains it -
+    the explanation is the Renewal Report. `payload` is what
+    GET /cases/{id}/renewal-report returns; both documents are built from
+    the same one so they cannot disagree.
+    """
+    today = today or date.today()
+    company = payload["case"].get("company_name") or "Renewal"
+    body = (
+        _summary_body(payload, today)
+        + _footer("HealthCross &middot; Renewal Summary", esc(company))
     )
     return (
-        _HEAD.format(title=esc(f"{company} - Renewal Review"), css=STYLESHEET + EXTRA_CSS)
-        + _page("Renewal review", body)
+        _HEAD.format(title=esc(f"{company} - Renewal Summary"), css=STYLESHEET + EXTRA_CSS)
+        + _toolbar(f"{esc(company)} &middot; Renewal Summary",
+                   f'/cases/{payload["case"]["id"]}/renewal-summary.html')
+        + _page("Renewal summary", body)
+        + "</body></html>"
+    )
+
+
+def render_renewal_report(payload: dict, today: Optional[date] = None) -> str:
+    """The comprehensive file: the summary, then the census, the benefits
+    and the claims behind it, then the basis every figure was struck on.
+
+    Section 1 is the Summary document verbatim - the same function - so
+    the short document and the long one can never quote different
+    numbers for the same account.
+    """
+    today = today or date.today()
+    company = payload["case"].get("company_name") or "Renewal"
+    body = (
+        _summary_body(payload, today)
+        + '<div class="pad">'
+        + _section("02", "Census", "The population being renewed - who is on risk, and how it "
+                                   "has moved since the expiring term.",
+                   _census(payload) + _population(payload))
+        + _section("03", "Benefits", "The cover behind the price. The same loss ratio on a "
+                                     "different annual limit is a different account.",
+                   _benefits(payload))
+        + _section("04", "Claims", "What the money went on: the shape of the year, who carried "
+                                   "it, and what for.",
+                   _claims_buildup(payload) + _monthly(payload) + _encounters(payload)
+                   + _claimants(payload) + _diagnoses(payload))
+        + _section("05", "Basis", "What every figure above was measured on, so it can be "
+                                  "checked rather than trusted.",
+                   _basis(payload), internal_only=True)
+        + "</div>"
+        + _footer("HealthCross &middot; Renewal Report", esc(company))
+    )
+    return (
+        _HEAD.format(title=esc(f"{company} - Renewal Report"), css=STYLESHEET + EXTRA_CSS)
+        + _toolbar(f"{esc(company)} &middot; Renewal Report",
+                   f'/cases/{payload["case"]["id"]}/renewal-report.html')
+        + _page("Renewal report", body)
         + "</body></html>"
     )
