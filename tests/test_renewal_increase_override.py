@@ -168,8 +168,12 @@ def test_the_new_business_tab_leads_with_the_benefits_import():
     assert start < manual < admin, "the import must come before the manual setup and the admin upload"
 
 
-def test_the_renewal_bench_offers_two_documents_and_no_print_buttons():
-    # Three printouts across two tabs became two documents in one place.
+def test_the_documents_sit_beside_the_executive_summary():
+    # Three printouts across two tabs became two documents in one place -
+    # on the case overview, under the executive summary, because the
+    # documents SAY what that card shows. They were at the foot of the
+    # Renewal Bench, which meant opening a tab to reach them.
+    #
     # The Internal and External summaries and the two "print this tab"
     # buttons are gone: the split they encoded is now a toggle ON the
     # document, so one file serves both readers and they cannot drift.
@@ -177,9 +181,10 @@ def test_the_renewal_bench_offers_two_documents_and_no_print_buttons():
     markup = (pathlib.Path(__file__).resolve().parent.parent
               / "app" / "static" / "index.html").read_text()
 
+    exec_card = markup.index('id="executive-summary-card"')
+    docs = markup.index('<div class="doc-cards">')
     bench = markup.index('data-tab="renewal-bench"')
-    assert markup.index("renewal-summary.html") > bench
-    assert markup.index("renewal-report.html") > bench
+    assert exec_card < docs < bench, "Documents must sit under the executive summary"
 
     # Read or take away - never a browser print of a screen.
     assert "function openDoc(" in markup

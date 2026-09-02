@@ -2469,6 +2469,26 @@ function renderCaseWorkspace() {
 
     <div class="card" id="executive-summary-card"></div>
 
+    <!-- Beside the executive summary rather than at the foot of the
+         Renewal Bench: the documents SAY what that card shows, so this is
+         where a reader looks for them - and they are reachable without
+         opening a tab first. -->
+    ${c.business_type === 'existing' ? `
+    <div class="card">
+      <h3>Documents</h3>
+      <div class="hint">Two, built from the same figures by the same functions, so the short one
+        and the long one cannot disagree &mdash; section 1 of the report IS the summary. Each
+        opens to read, with an Internal / Client toggle and a Download button on the page.</div>
+      <div class="doc-cards">
+        ${_docCardHtml('Renewal Summary', 'One page. The decision.',
+            'Loss ratio, the ask, the pricing ladder and the three premiums. Nothing that explains them.',
+            `/cases/${c.id}/renewal-summary.html`, true)}
+        ${_docCardHtml('Renewal Report', 'The full file.',
+            'The summary, then the census, the benefits and the claims behind the number, then the basis every figure was struck on.',
+            `/cases/${c.id}/renewal-report.html`, false)}
+      </div>
+    </div>` : ''}
+
     <div class="card" id="case-completeness-card"></div>
 
     ${renewalIntakeNoticeHtml()}
@@ -2685,21 +2705,6 @@ function renderCaseWorkspace() {
         <div class="rb-grid-2">
           <div id="renewal-bench-premium-area"></div>
           <div id="renewal-bench-nb-area"></div>
-        </div>
-        <div class="card" style="margin-top:14px;">
-          <h3>Documents</h3>
-          <div class="hint">Two. Both are built from the same figures by the same functions, so
-            the short one and the long one cannot disagree &mdash; section 1 of the report IS the
-            summary. Each opens to read, with an Internal / Client toggle and a Download button
-            on the page itself.</div>
-          <div class="doc-cards">
-            ${_docCardHtml('Renewal Summary', 'One page. The decision.',
-                'Loss ratio, the ask, the pricing ladder and the three premiums. Nothing that explains them.',
-                `/cases/${c.id}/renewal-summary.html`, true)}
-            ${_docCardHtml('Renewal Report', 'The full file.',
-                'The summary, then the census, the benefits and the claims behind the number, then the basis every figure was struck on.',
-                `/cases/${c.id}/renewal-report.html`, false)}
-          </div>
         </div>
       </div>
     </div>
