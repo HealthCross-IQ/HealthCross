@@ -102,6 +102,12 @@ table.t td.note{color:var(--muted);font-size:10.5px}
 .toolbar .seg{display:flex;border-radius:3px;overflow:hidden}
 .toolbar .seg button{border-radius:0}
 .toolbar .seg button+button{border-left:0}
+.dlhint{display:none;background:var(--sky-25);border-bottom:1px solid var(--rule);
+  padding:10px 22px;font-size:11.5px;color:var(--navy);font-family:var(--sans)}
+.dlhint.show{display:block}
+.dlhint button{font:inherit;font-size:11px;margin-left:10px;border:1px solid var(--rule);
+  background:#fff;padding:3px 10px;border-radius:3px;cursor:pointer}
+@media print{.dlhint{display:none!important}}
 
 @page{size:A4;margin:12mm 11mm 14mm}
 @media print{
@@ -639,11 +645,22 @@ def _toolbar(title: str, download_url: str) -> str:
         f'<button id="v-int" class="on" onclick="setView(\'internal\')">Internal</button>'
         f'<button id="v-cli" onclick="setView(\'client\')">Client</button>'
         f"</div>"
-        f'<button onclick="window.print()">Download PDF</button>'
+        f'<button onclick="dl()">Download PDF</button>'
         f"</div>"
+        # The browser adds its own date, URL and page counter unless that
+        # one box is unticked. It is a setting the browser remembers, not
+        # something the page can turn off - so the page says so once,
+        # plainly, the first time rather than leaving it a mystery.
+        '<div class="dlhint" id="dlhint">In the print dialog choose '
+        '<strong>Destination: Save as PDF</strong> and untick '
+        '<strong>Headers and footers</strong> &mdash; your browser remembers it after the first '
+        'time. <button onclick="document.getElementById(\'dlhint\').remove()">Got it</button></div>'
         "<script>function setView(v){document.documentElement.setAttribute('data-view',v);"
         "document.getElementById('v-int').className=(v==='internal'?'on':'');"
-        "document.getElementById('v-cli').className=(v==='client'?'on':'');}</script>"
+        "document.getElementById('v-cli').className=(v==='client'?'on':'');}"
+        "function dl(){var h=document.getElementById('dlhint');"
+        "if(h){h.classList.add('show');setTimeout(function(){window.print();},60);}"
+        "else{window.print();}}</script>"
     )
 
 

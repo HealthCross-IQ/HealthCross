@@ -137,3 +137,17 @@ def test_the_print_rules_constrain_the_page_to_A4(client):
     # The toolbar is screen furniture; the browser's own header is what
     # made the old documents look like screenshots.
     assert ".toolbar{display:none}" in css
+
+
+def test_the_download_says_what_the_browser_will_do(client):
+    # The browser stamps its own date, URL and page counter on unless one
+    # box is unticked - a browser setting the page cannot turn off. It is
+    # what made the sample PDFs look like screenshots, so the document
+    # says it once rather than leaving it a mystery.
+    _, payload = _payload(client)
+    html = render_renewal_summary(payload)
+
+    assert "Headers and footers" in html
+    assert "Save as PDF" in html
+    # And the hint itself never reaches the paper.
+    assert "@media print{.dlhint{display:none!important}}" in html
