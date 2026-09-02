@@ -2873,10 +2873,16 @@ function renderCaseWorkspace() {
 
     <div class="tab-bar">
       ${TABS.filter(t => {
-        // New Business and Renewal are separate workflows - a renewal
-        // case has no New Business Quote to price, and a new-business
-        // case has no claims ledger/current premium for a Renewal Bench.
-        if (t.id === 'new-business') return c.business_type !== 'existing';
+        // New Business and Renewal are separate WORKFLOWS, but the rate
+        // card is not a workflow - it is a price, and a renewal needs it.
+        // Hiding this tab on a renewal (0d20ec5) left the account's
+        // experience-based ask with nothing to check it against, while
+        // renewal-vs-new-business went on quoting a card price the
+        // underwriter could not see or configure.
+        //
+        // On a renewal it answers "what would we charge this census on
+        // today's card?" - a reference beside the experience, not the
+        // quote. The heading says which.
         if (t.id === 'renewal-bench') return c.business_type === 'existing';
         // The Scorecard is a NEW BUSINESS instrument. It scores what a
         // population and a plan design imply about next year's cost,
@@ -2888,7 +2894,14 @@ function renderCaseWorkspace() {
         // the price Method 1 quotes on the next tab.
         if (t.id === 'scorecard') return c.business_type !== 'existing';
         return true;
-      }).map(t => `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${t.label}</button>`).join('')}
+      }).map(t => {
+        // On a renewal the card is a reference price, not the quote being
+        // sent - so it is headed "New Business Rate" there and "New
+        // Business Quote" on a case that really is being quoted from it.
+        const label = (t.id === 'new-business' && c.business_type === 'existing')
+          ? 'New Business Rate' : t.label;
+        return `<button class="tab-btn" data-tab="${t.id}" onclick="switchTab('${t.id}')">${label}</button>`;
+      }).join('')}
     </div>
 
     <div class="tab-panel" data-tab="census">
@@ -2939,6 +2952,14 @@ function renderCaseWorkspace() {
     </div>
 
     <div class="tab-panel" data-tab="new-business">
+      ${c.business_type === 'existing' ? `
+      <div class="hint" style="background:var(--sky-25);border-left:3px solid var(--sky);
+           padding:10px 13px;margin-bottom:10px;">
+        <strong>On a renewal this is a reference, not the quote.</strong> It prices this account's
+        census on today's New Business card, so the experience-based ask on the Renewal Bench has
+        something to be checked against &mdash; the two are compared side by side under
+        <em>Renewal vs New Business</em> there. The figure sent to the client is Method A's.
+      </div>` : ''}
       <div style="text-align:right; margin-bottom:8px;">
         <button onclick="printTabAsPdf('new-business', 'New Business Rating')">Print / Save as PDF</button>
         <button onclick="openUnderwritingDashboard()">Underwriting Dashboard (Internal)</button>

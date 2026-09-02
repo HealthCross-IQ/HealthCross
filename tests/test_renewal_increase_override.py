@@ -110,3 +110,24 @@ def test_an_override_does_not_resurrect_a_blocked_price(client):
     body = client.get(f"/cases/{case_id}/renewal-rating").json()
     assert body["pricing_blocked"] is True
     assert body["renewal_increase_pct"] is None
+
+
+def test_the_new_business_rate_tab_is_available_on_a_renewal(client):
+    # 0d20ec5 hid it, on the reasoning that New Business and Renewal are
+    # separate workflows. The rate card is not a workflow though - it is a
+    # price, and a renewal needs it: renewal-vs-new-business was already
+    # quoting a card price the underwriter had no way to see or configure.
+    import pathlib
+    markup = (pathlib.Path(__file__).resolve().parent.parent
+              / "app" / "static" / "index.html").read_text()
+    assert "if (t.id === 'new-business') return c.business_type !== 'existing';" not in markup
+    # Still headed for what it is on each side.
+    assert "'New Business Rate' : t.label" in markup
+
+
+def test_the_card_price_is_reachable_for_a_renewal_case(client):
+    # The comparison behind that tab has to actually answer on a renewal,
+    # not 404 - that is the whole reason for showing it.
+    case_id = _renewal_case(client, on_the_book=True)
+    resp = client.get(f"/cases/{case_id}/renewal-vs-new-business")
+    assert resp.status_code == 200
