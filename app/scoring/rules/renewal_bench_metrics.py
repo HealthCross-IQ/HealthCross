@@ -140,6 +140,7 @@ def renewal_drivers(
     underwriter_adjustment_pct: float = 0.0,
     authority_threshold_pct: float = 15.0,
     minimum_increase_pct: Optional[float] = _UNSET,
+    required_premium: Optional[float] = None,
 ) -> dict:
     """The Renewal Bench waterfall: Method 1's price, broken into the
     named factors that produced it.
@@ -218,8 +219,16 @@ def renewal_drivers(
     # premium terms. Adding percentage points to a premium the ladder
     # already rounded would leave the hero a few dirhams off the figure
     # the rest of the portal quotes.
+    #
+    # `required_premium` is the ask as the rating card PUBLISHED it. The
+    # published loss ratio is rounded to four places, so re-running the
+    # ladder on it lands a couple of hundred dirhams from the premium
+    # that ratio was originally computed from - close enough to look
+    # like a bug and far enough to be one.
+    method_1_premium = (required_premium if required_premium is not None
+                        else quoted["required_premium"])
     recommended_premium = round(
-        quoted["required_premium"] + expiring_annual_premium * adjustment_pct / 100, 2)
+        method_1_premium + expiring_annual_premium * adjustment_pct / 100, 2)
     total_pct = round((recommended_premium / expiring_annual_premium - 1) * 100, 2)
 
     return {
@@ -234,8 +243,9 @@ def renewal_drivers(
         "recommended_premium": recommended_premium,
         # Method 1's own ask, carried through untouched so a screen can
         # show what the adjustments were applied TO.
-        "method_1_required_premium": quoted["required_premium"],
-        "method_1_increase_pct": quoted["renewal_increase_pct"],
+        "method_1_required_premium": round(method_1_premium, 2),
+        "method_1_increase_pct": round(
+            (method_1_premium / expiring_annual_premium - 1) * 100, 2),
         "loss_ratio": quoted["loss_ratio"],
         "trended_loss_ratio": quoted["trended_loss_ratio"],
         "inflation_pts": inflation_pts,

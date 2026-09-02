@@ -62,6 +62,8 @@ from app.scoring.rules.renewal_rating import (
 from app.book import repository as book_repo
 from app.api.census_ages import renewal_term_looks_wrong, stale_age_basis
 from app.api.case_loading import renewal_loading
+from app.scoring.rules.renewal_scenarios import DEFAULT_LARGE_CLAIM_THRESHOLD
+from app.scoring.rules.renewal_workflow import renewal_workflow, workflow_state
 from app.book import analysis as book_analysis
 
 router = APIRouter(prefix="/cases", tags=["analysis"])
@@ -926,6 +928,67 @@ def get_claims_ledger_analysis(
     return result
 
 
+def _apply_house_ladder(two_methods: dict, lr_a: float, lr_b: float, base: float,
+                        inflation_pct: float, loading_pct: float,
+                        loss_ratio_premium_basis: Optional[float] = None) -> tuple:
+    """Overlay the house ladder onto both methods, whatever the figures
+    came from.
+
+    calculate_renewal_rating trends by MULTIPLYING the claims - claims x
+    (1 + inflation) - and the house ladder ADDS inflation to the loss
+    ratio in points. The two agree only at a 100% loss ratio and diverge
+    further the worse the account gets.
+
+    The book path applied this overlay and the case-ledger path did not,
+    so Method 1 meant two different formulas depending on which upload
+    the case happened to match. On Amazonico, 4,680,440 of incurred
+    against 3,000,000 of premium came out at +108.3% read off the book
+    and +113.65% read off its own ledger - the same account, the same
+    claims, AED 160,552 apart.
+
+    So the overlay lives here and both paths call it. That is the same
+    reason the 9% floor was moved out of the data sources: the formula
+    belongs to the house, not to whichever file arrived.
+    """
+    ladders = (
+        renewal_from_loss_ratio(lr_a, base, inflation_pct, loading_pct),
+        renewal_from_loss_ratio(lr_b, base, inflation_pct, loading_pct),
+    )
+    for method, ladder in zip((two_methods["method_a"], two_methods["method_b"]), ladders):
+        method["actual_loss_ratio"] = ladder["loss_ratio"]
+        method["trended_loss_ratio"] = ladder["trended_loss_ratio"]
+        method["required_share_of_expiring"] = ladder["required_share_of_expiring"]
+        method["experience_share_of_expiring"] = ladder["experience_share_of_expiring"]
+        method["experience_increase_pct"] = ladder["experience_increase_pct"]
+        method["experience_required_premium"] = ladder["experience_required_premium"]
+        method["minimum_increase_pct"] = ladder["minimum_increase_pct"]
+        method["floor_applied"] = ladder["floor_applied"]
+        method["required_premium"] = ladder["required_premium"]
+        method["renewal_increase_pct"] = ladder["renewal_increase_pct"]
+        method["renewal_base_premium"] = ladder["expiring_annual_premium"]
+        # The premium the loss ratio was DIVIDED BY, which is not the
+        # premium the ask is multiplied by: the book measures the ratio
+        # against premium earned to date and quotes against a full
+        # annualised year. Published so anything reworking the ratio -
+        # stripping a claim out of it, say - reduces it by the right
+        # denominator instead of guessing which premium was used.
+        method["loss_ratio_premium_basis"] = (
+            round(loss_ratio_premium_basis, 2) if loss_ratio_premium_basis else None
+        )
+
+    # The gap between the two methods has to be recomputed from the
+    # premiums the ladder just produced; leaving it as
+    # calculate_renewal_rating's own would report a difference between
+    # two numbers no longer on the page.
+    method_a, method_b = two_methods["method_a"], two_methods["method_b"]
+    two_methods["gap"] = round(method_b["required_premium"] - method_a["required_premium"], 2)
+    two_methods["gap_pct"] = (
+        round((method_b["required_premium"] / method_a["required_premium"] - 1) * 100, 2)
+        if method_a["required_premium"] else None
+    )
+    return ladders
+
+
 def _account_rating_from_book(case: models.Case) -> Optional[dict]:
     """This account's renewal experience read off the Portfolio Analysis
     book - the latest membership and claims uploaded - rather than off a
@@ -1245,28 +1308,15 @@ def _rating_from_book_figures(
             from_book=book,
             expiring_premium=expiring,
         )
-    ladder_a = renewal_from_loss_ratio(lr_a, base, effective_inflation_pct, effective_loading_pct)
-    ladder_b = renewal_from_loss_ratio(lr_b, base, effective_inflation_pct, effective_loading_pct)
-
     two_methods = calculate_renewal_rating_two_methods(
         incurred_a, incurred_b, book["gross_premium"],
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
         credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
         renewal_base=base,
     )
-    for method, ladder in ((two_methods["method_a"], ladder_a),
-                           (two_methods["method_b"], ladder_b)):
-        method["actual_loss_ratio"] = ladder["loss_ratio"]
-        method["trended_loss_ratio"] = ladder["trended_loss_ratio"]
-        method["required_share_of_expiring"] = ladder["required_share_of_expiring"]
-        method["experience_share_of_expiring"] = ladder["experience_share_of_expiring"]
-        method["experience_increase_pct"] = ladder["experience_increase_pct"]
-        method["experience_required_premium"] = ladder["experience_required_premium"]
-        method["minimum_increase_pct"] = ladder["minimum_increase_pct"]
-        method["floor_applied"] = ladder["floor_applied"]
-        method["required_premium"] = ladder["required_premium"]
-        method["renewal_increase_pct"] = ladder["renewal_increase_pct"]
-        method["renewal_base_premium"] = ladder["expiring_annual_premium"]
+    ladder_a, ladder_b = _apply_house_ladder(
+        two_methods, lr_a, lr_b, base, effective_inflation_pct, effective_loading_pct,
+        loss_ratio_premium_basis=earned)
 
     # The calendar months the exposure actually spans, so anything
     # reading len(months_used) for a credibility or frequency
@@ -1539,6 +1589,17 @@ def _case_renewal_rating(
         inflation_pct=effective_inflation_pct, loading_pct=effective_loading_pct,
         credibility_pct=credibility_pct if credibility_pct is not None else DEFAULT_CREDIBILITY_PCT,
     )
+    # The same house ladder the book path applies. Without it this case
+    # was priced by a different formula purely because its experience
+    # arrived as a ledger upload rather than on the book.
+    _apply_house_ladder(
+        two_methods,
+        dynamic["annualized_incurred_claims"] / case.current_annual_premium,
+        incurred_claims_method_b / case.current_annual_premium,
+        case.current_annual_premium,
+        effective_inflation_pct, effective_loading_pct,
+        loss_ratio_premium_basis=case.current_annual_premium,
+    )
     months_used = [f"{m['year']}-{m['month']:02d}" for m in full_months]
 
     result = two_methods["method_a"]
@@ -1736,6 +1797,200 @@ def _missing_quote_inputs(case, db: Session) -> List[dict]:
     return rows
 
 
+def _case_claim_lines(case: models.Case) -> dict:
+    """This account's claim lines, and who is leaving at renewal.
+
+    Whichever source the RATING used, so an adjustment always strips
+    claims out of the same experience the price was built from. A case
+    priced off the book that stripped its case-ledger claims instead
+    would remove figures the price never contained.
+    """
+    from sqlalchemy.orm import object_session
+
+    from app.scoring.rules.renewal_intake import (
+        account_members,
+        claim_belongs_to_term,
+        continuing_and_leaving,
+        current_term_members,
+        roster_term_end,
+        term_member_windows,
+    )
+
+    db = object_session(case)
+    if db is not None and case.company_name and _account_rating_from_book(case):
+        members = book_repo.members(db)
+        account = account_members(members, case.company_name,
+                                  book_repo.subgroup_master_by_name(db))
+        if account:
+            current = current_term_members(account)
+            windows = term_member_windows(current)
+            ids = {m.get("beneficiary_id") for m in current if m.get("beneficiary_id")}
+            lines = [
+                c for c in book_repo.large_claim_lines(db)
+                if c.get("patient_id") in ids
+                and c.get("date_of_treatment")
+                and claim_belongs_to_term(c["patient_id"], c["date_of_treatment"], windows)
+            ]
+            cut_date, _ = roster_term_end(account)
+            _, leaving = continuing_and_leaving(account, cut_date)
+            return {
+                "claims": lines,
+                "source": "the uploaded book",
+                "leaving_ids": [m.get("beneficiary_id") for m in leaving if m.get("beneficiary_id")],
+            }
+
+    # The case's own ledger has no roster, so it cannot say who is
+    # leaving - the lever is reported unavailable rather than guessed at.
+    return {"claims": _case_claim_dicts(case), "source": "this case's claims ledger",
+            "leaving_ids": []}
+
+
+def _renewal_adjustments(case: models.Case, large_claim_threshold: float,
+                         lines: Optional[dict] = None) -> List[dict]:
+    """The levers this account actually has, each with what it would
+    strip out of the experience.
+
+    A lever with nothing behind it is returned as unavailable with its
+    reason rather than left out. "Benefit change: no revised benefit
+    table uploaded" tells an underwriter what to go and do; a missing row
+    tells them nothing.
+    """
+    from app.scoring.rules.renewal_scenarios import claims_for_members, large_claim_total
+
+    lines = lines if lines is not None else _case_claim_lines(case)
+    claims, leaving_ids = lines["claims"], lines["leaving_ids"]
+
+    large = large_claim_total(claims, threshold=large_claim_threshold)
+    leavers_amount = claims_for_members(claims, leaving_ids)
+    proposed = [p for p in case.benefit_plans if p.role == "proposed"]
+
+    return [
+        {
+            "key": "large_claims",
+            "label": "Strip large claims",
+            "amount": large["amount"],
+            "available": large["amount"] > 0,
+            "note": (f"{large['claim_count']} claim lines at or above "
+                     f"{large_claim_threshold:,.0f}, across {large['member_count']} members"
+                     if large["amount"] > 0
+                     else f"No claim line reaches {large_claim_threshold:,.0f}"),
+        },
+        {
+            "key": "exiting_members",
+            "label": "Remove exiting members",
+            "amount": leavers_amount,
+            "available": leavers_amount > 0,
+            "note": (f"{len(leaving_ids)} members leaving at renewal"
+                     if leaving_ids
+                     else ("Nobody on the roster is leaving at renewal" if lines["leaving_ids"] == []
+                           and lines["source"] == "the uploaded book"
+                           else "No roster to read leavers from - this case is on its own ledger")),
+        },
+        {
+            # Nothing in the data marks a claim as one-off, and guessing
+            # would strip real experience. Left to the underwriter, who
+            # names the members on the repricing panel.
+            "key": "non_recurring",
+            "label": "Strip non-recurring",
+            "amount": 0.0,
+            "available": False,
+            "note": "Name the members on the repricing panel - nothing in the claims file marks a claim as one-off",
+        },
+        {
+            "key": "benefit_change",
+            "label": "Benefit change",
+            "amount": 0.0,
+            "available": False,
+            "note": ("A proposed benefit table is on file - price it on the New Business Rate tab"
+                     if proposed else "No revised benefit table uploaded"),
+        },
+    ]
+
+
+@router.get("/{case_id}/renewal-scenarios")
+def get_renewal_scenarios(
+    case_id: int,
+    large_claim_threshold: float = Query(
+        DEFAULT_LARGE_CLAIM_THRESHOLD,
+        description="A claim line at or above this AED amount counts as a large claim",
+    ),
+    db: Session = Depends(get_db),
+):
+    """The renewal at several different readings of the same experience.
+
+    Every row is the SAME ladder Method 1 uses, with a different incurred
+    figure fed into it - never a second way of arriving at a premium. A
+    "what if we strip the big claim" panel that builds its own price puts
+    two renewal premiums on one screen, and the reader has no way to know
+    which one the house would quote.
+
+    The claim amounts are stripped from the ANNUALISED incurred without
+    being annualised themselves, which is the point of stripping them: a
+    catastrophic admission is an event that happened once, not a rate
+    that continues for the rest of the year.
+    """
+    from app.scoring.rules.renewal_scenarios import scenario_rows
+
+    case = db.query(models.Case).filter(models.Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This case has no renewal experience yet - no claims on the book for it, "
+                   "and no claims ledger uploaded.",
+        )
+    adjustments = _renewal_adjustments(case, large_claim_threshold)
+    if renewal.get("pricing_blocked"):
+        # The same withheld shape every other renewal screen returns, so
+        # a caller renders "no price, and here is why" without a branch.
+        return {
+            "case_id": case.id,
+            "pricing_blocked": True,
+            "pricing_problems": renewal.get("pricing_problems"),
+            "adjustments": adjustments,
+            "scenarios": [],
+            "expiring_annual_premium": renewal.get("renewal_base_premium"),
+            "incurred_claims": None,
+        }
+
+    account_loading, _ = _renewal_loading(case, None)
+    expiring = renewal.get("renewal_base_premium") or case.current_annual_premium
+    # The incurred the price was actually built from - computed_ figures
+    # first, since an override replaces the premium but never the
+    # experience underneath it.
+    incurred = renewal.get("annualized_incurred_claims")
+    override_premium = (renewal.get("required_premium")
+                        if renewal.get("increase_source") == "override" else None)
+
+    return {
+        "case_id": case.id,
+        "pricing_blocked": False,
+        "expiring_annual_premium": expiring,
+        "incurred_claims": incurred,
+        "loading_pct": account_loading,
+        "inflation_pts": (renewal.get("assumptions_used") or {}).get("inflation_pct"),
+        "large_claim_threshold": large_claim_threshold,
+        "adjustments": adjustments,
+        "loss_ratio": renewal.get("actual_loss_ratio"),
+        "loss_ratio_premium_basis": renewal.get("loss_ratio_premium_basis"),
+        "scenarios": scenario_rows(
+            expiring, incurred, adjustments,
+            loading_pct=account_loading,
+            inflation_pts=(renewal.get("assumptions_used") or {}).get("inflation_pct"),
+            override_premium=override_premium,
+            override_reason="Underwriter override recorded on the case",
+            # The account's OWN published ratio, so the unadjusted row is
+            # the rating card's number rather than a recomputation of it
+            # that lands a few hundred dirhams away.
+            loss_ratio=renewal.get("actual_loss_ratio"),
+            loss_ratio_premium_basis=renewal.get("loss_ratio_premium_basis"),
+        ),
+    }
+
+
 @router.get("/{case_id}/renewal-bench-summary")
 def get_renewal_bench_summary(
     case_id: int,
@@ -1824,7 +2079,38 @@ def get_renewal_bench_summary(
         census_change_pct=census_change_pct,
         underwriter_adjustment_pct=underwriter_adjustment_pct,
         authority_threshold_pct=authority_threshold_pct,
+        # The ask exactly as the rating card publishes it, so the hero is
+        # that number rather than a re-run of the ladder on its rounded
+        # loss ratio.
+        required_premium=renewal.get("required_premium"),
     )
+
+    # Where the renewal actually is, built from facts the rest of this
+    # endpoint already established - so a step can never report a case as
+    # ready that the pricing path would refuse.
+    claim_lines = _case_claim_lines(case)
+    adjustments = _renewal_adjustments(case, DEFAULT_LARGE_CLAIM_THRESHOLD, claim_lines)
+    workflow = renewal_workflow(
+        census_member_count=census_member_count,
+        incurred_claims=renewal.get("annualized_incurred_claims"),
+        claims_present=bool(claim_lines["claims"]),
+        claims_source=claim_lines["source"],
+        loading_problems=loading_problems,
+        loading_pct=None if loading_problems else account_loading,
+        adjustments_available=sum(1 for a in adjustments if a["available"]),
+        adjustments_applied=0,
+        required_premium=renewal.get("required_premium"),
+        renewal_increase_pct=renewal.get("renewal_increase_pct"),
+        pricing_problems=renewal.get("pricing_problems"),
+        increase_source=("override" if renewal.get("increase_source") == "override"
+                         else "computed increase"),
+        # An override is a decision an underwriter recorded; a bound case
+        # has been quoted and accepted. A computed ask on its own is
+        # neither.
+        quote_settled=(renewal.get("increase_source") == "override"
+                       or (case.status or "").strip().lower() == "bound"),
+    )
+    workflow_summary = workflow_state(workflow)
 
     existing_plans = [p for p in case.benefit_plans if p.role == "existing"]
     product = (existing_plans[0].nb_product or existing_plans[0].plan_name) if existing_plans else None
@@ -1875,6 +2161,8 @@ def get_renewal_bench_summary(
         "claims_trend": claims_trend,
         "existing_premium": existing_premium,
         "drivers": drivers,
+        "workflow": workflow,
+        "workflow_state": workflow_summary,
     }
 
 

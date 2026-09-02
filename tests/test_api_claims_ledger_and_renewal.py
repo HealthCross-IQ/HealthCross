@@ -700,8 +700,20 @@ def test_renewal_client_summary_fee_split_changes_the_bottom_line_premium(client
     custom_required_premium = custom_body["renewal"]["required_premium"]
 
     assert custom_required_premium != pytest.approx(default_required_premium)
-    trended_claims = custom_body["renewal"]["trended_claims"]
-    assert custom_required_premium == pytest.approx(trended_claims / (1 - 0.38), abs=0.5)
+
+    # The 38% has to reach the premium through the house ladder - loss
+    # ratio plus inflation IN POINTS, over (1 - loading) - not through
+    # trended_claims / (1 - loading), which trends by multiplying the
+    # claims instead and is the formula this path used to run when the
+    # experience arrived as a ledger rather than on the book.
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    renewal = custom_body["renewal"]
+    ladder = renewal_from_loss_ratio(
+        renewal["actual_loss_ratio"], renewal["renewal_base_premium"],
+        renewal["assumptions_used"]["inflation_pct"], 0.38,
+    )
+    assert custom_required_premium == pytest.approx(ladder["required_premium"], abs=0.5)
 
 
 def _insert_census(client, case_id, members):

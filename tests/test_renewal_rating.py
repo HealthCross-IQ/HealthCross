@@ -252,3 +252,25 @@ def test_case_loading_pct_feeds_calculate_renewal_rating_so_fees_move_the_bottom
 
     assert custom_loading == pytest.approx(0.38)
     assert custom_result["required_premium"] != pytest.approx(default_result["required_premium"])
+
+
+def test_the_ladder_prices_the_loss_ratio_it_reports():
+    """Feeding a published loss ratio back in reproduces the premium it
+    was published beside.
+
+    Every screen publishes loss_ratio rounded to four places, and several
+    then rework it - the scenarios table strips a claim out of it, the
+    drivers waterfall decomposes it. When the ladder priced the unrounded
+    input but reported the rounded one, those screens landed a couple of
+    hundred dirhams from the rating card on the same account: 6,248,967.59
+    against 6,248,789.81 on Amazonico. Small enough to look like a
+    rounding artefact, large enough for someone to stop trusting the page.
+    """
+    from app.scoring.rules.renewal_rating import renewal_from_loss_ratio
+
+    for raw in (1.5601462, 0.8360049, 0.35459999, 2.4863333):
+        first = renewal_from_loss_ratio(raw, 3_000_000.0, 0.075, 0.215)
+        again = renewal_from_loss_ratio(first["loss_ratio"], 3_000_000.0, 0.075, 0.215)
+        assert again["required_premium"] == first["required_premium"]
+        assert again["renewal_increase_pct"] == first["renewal_increase_pct"]
+        assert again["loss_ratio"] == first["loss_ratio"]

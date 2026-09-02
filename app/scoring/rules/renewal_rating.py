@@ -215,6 +215,15 @@ def renewal_from_loss_ratio(
             f"{MAX_PLAUSIBLE_LOADING_PCT:.0%} this is treated as a data-entry error rather than "
             f"used to price a renewal."
         )
+    # Price the ratio that gets REPORTED, not one four decimal places
+    # away from it. Every screen publishes loss_ratio rounded here, and
+    # several then rework it - the scenarios table strips a claim out of
+    # it, the drivers waterfall decomposes it - so if the published
+    # figure is not the one the premium was built from, those screens
+    # land a couple of hundred dirhams from the rating card. That is
+    # small enough to look like a rounding artefact and large enough for
+    # someone to stop trusting the page.
+    loss_ratio = round(loss_ratio, 4)
     trended = loss_ratio + inflation_pts
     experience_share = trended / (1 - loading_pct)
 

@@ -683,6 +683,78 @@
   .rb-driver-block.total .lbl { color: inherit; opacity: 0.85; }
   .rb-driver-op { font-size: 15px; font-weight: 600; color: var(--rb-muted); flex-shrink: 0; }
 
+  /* ---------------- renewal step bar ----------------
+     Five stages, each coloured by a state derived from real facts. The
+     one distinction that earns the bar its space is blocked vs not
+     started: they look identical on an ordinary progress indicator and
+     mean completely different things. */
+  .rb-steps { display: flex; background: var(--rb-surface); border: 1px solid var(--rb-border);
+              border-radius: 12px; overflow: hidden; margin-bottom: 16px; box-shadow: var(--rb-shadow); }
+  .rb-step { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 12px 14px;
+             border-right: 1px solid var(--rb-border); position: relative; cursor: pointer;
+             background: none; font: inherit; text-align: left; color: inherit; }
+  .rb-step:last-child { border-right: 0; }
+  .rb-step:hover { background: var(--rb-accent-soft); }
+  .rb-step .n { width: 25px; height: 25px; border-radius: 50%; flex: none; display: grid; place-items: center;
+                font-family: 'IBM Plex Mono', monospace; font-size: 11px; font-weight: 700;
+                background: var(--rb-surface-2); color: var(--rb-muted); }
+  .rb-step .x { min-width: 0; }
+  .rb-step .k { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; letter-spacing: 0.1em;
+                text-transform: uppercase; color: var(--rb-muted); }
+  .rb-step .v { font-weight: 700; font-size: 13px; line-height: 1.2; }
+  /* Two lines rather than one ellipsised one: "4,680,440 incurred - the
+     uploaded book" cut to "4,680,440 incurred ..." loses the half that
+     says where the figure came from. */
+  .rb-step .d { font-size: 10.5px; color: var(--rb-muted); line-height: 1.35; margin-top: 2px;
+                overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical;
+                -webkit-line-clamp: 2; }
+  .rb-step.done .n { background: var(--rb-good); color: #fff; }
+  .rb-step.blocked .n { background: var(--rb-critical); color: #fff; }
+  .rb-step.blocked { background: color-mix(in srgb, var(--rb-critical) 8%, transparent); }
+  .rb-step.blocked .v { color: var(--rb-critical); }
+  .rb-step.todo .v, .rb-step.todo .d { color: var(--rb-muted); }
+  .rb-step.current::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
+                            background: var(--rb-accent); }
+  .rb-step.current.blocked::after { background: var(--rb-critical); }
+  .rb-blocker { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px; padding: 12px 15px;
+                border-radius: 10px; border-left: 3px solid var(--rb-critical);
+                background: color-mix(in srgb, var(--rb-critical) 9%, transparent); font-size: 12.5px;
+                line-height: 1.55; }
+  .rb-blocker b { color: var(--rb-critical); }
+
+  /* ---------------- scenarios ---------------- */
+  .rb-adj { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 10px; margin-bottom: 16px; }
+  .rb-adj-card { border: 1px solid var(--rb-border); border-radius: 10px; padding: 11px 13px; background: var(--rb-surface-2); }
+  .rb-adj-card.off { opacity: 0.62; }
+  .rb-adj-card .t { font-weight: 700; font-size: 12.5px; display: flex; align-items: baseline; gap: 8px; }
+  .rb-adj-card .t b { margin-left: auto; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+                      color: var(--rb-critical); white-space: nowrap; }
+  .rb-adj-card.off .t b { color: var(--rb-muted); }
+  .rb-adj-card .n { font-size: 10.5px; color: var(--rb-muted); margin-top: 4px; line-height: 1.45; }
+  .rb-scenario-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .rb-scenario-table th { font-family: 'IBM Plex Mono', monospace; font-size: 8.5px; letter-spacing: 0.08em;
+                          text-transform: uppercase; color: var(--rb-muted); font-weight: 700; text-align: left;
+                          padding: 0 12px 8px 0; border-bottom: 1px solid var(--rb-border); white-space: nowrap; }
+  .rb-scenario-table td { padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rb-border); vertical-align: top; }
+  .rb-scenario-table th:last-child, .rb-scenario-table td:last-child { padding-right: 0; }
+  .rb-scenario-table th.num, .rb-scenario-table td.num { text-align: right; }
+  .rb-scenario-table td.num { font-family: 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .rb-scenario-table tr.base td { font-weight: 700; }
+  /* The note under a row explains the row; it is not part of the figure,
+     so it does not inherit the base row's weight. */
+  .rb-scenario-table tr.base td .sub { font-weight: 400; }
+  /* A lever with nothing behind it still gets a row - the reader has to
+     see the lever and why it is doing nothing - but it should not read
+     with the same weight as one that moved the price. */
+  .rb-scenario-table tr.inert td { color: var(--rb-muted); }
+  .rb-scenario-table tr.inert td.num { color: var(--rb-muted); }
+  .rb-scenario-table tr.override td { background: var(--rb-accent-soft); }
+  .rb-scenario-table tr:last-child td { border-bottom: 0; }
+  .rb-scenario-table .sub { display: block; font-size: 10.5px; color: var(--rb-muted); margin-top: 3px; line-height: 1.4; }
+  .rb-floor-tag { font-family: 'IBM Plex Mono', monospace; font-size: 8px; letter-spacing: 0.08em;
+                  text-transform: uppercase; font-weight: 700; padding: 1px 5px; border-radius: 3px;
+                  background: var(--rb-accent-soft); color: var(--rb-accent); margin-left: 6px; }
+
   /* ---------------- account dashboard ----------------
      The landing screen for one account: what it is, what its numbers
      mean, and what to do about them. Severity is carried in FORM as
@@ -3102,6 +3174,7 @@ function renderCaseWorkspace() {
     <div class="tab-panel" data-tab="renewal-bench">
       <div class="rb-scope">
         <div id="renewal-bench-header-area"></div>
+        <div id="renewal-bench-workflow-area"></div>
         <div id="renewal-bench-kpi-area"></div>
         <div class="rb-grid-2">
           <div id="renewal-bench-existing-premium-area"></div>
@@ -3115,6 +3188,7 @@ function renderCaseWorkspace() {
                         <div id="renewal-bench-claims-split-area"></div>
         <div id="renewal-bench-census-comparison-area"></div>
         <div id="renewal-bench-repricing-area"></div>
+        <div id="renewal-bench-scenarios-area"></div>
         <div id="renewal-premium-buildup-area"></div>
         <div id="renewal-bench-claims-area"></div>
         <div id="renewal-bench-scorecard-area"></div>
@@ -3175,6 +3249,7 @@ function renderCaseWorkspace() {
   loadNewBusinessRating();
   loadMemberRates();
   loadRenewalBenchSummary();
+  loadRenewalScenarios();
   loadRenewalBenchScorecard();
   loadRenewalBenchNbComparison();
   loadRenewalBenchLargeClaims();
@@ -3759,7 +3834,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -3770,7 +3845,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -3968,7 +4043,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -3979,7 +4054,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   // The executive summary sits ABOVE the upload panel and reads the case
@@ -5294,6 +5369,7 @@ async function adoptComputedExistingPremium(computedTotal) {
     // The premium drives the scorecard, drivers and NB comparison too, so
     // the whole tab is reloaded rather than just this one card.
     await loadRenewalBenchSummary();
+    await loadRenewalScenarios();
     await loadRenewalBenchScorecard();
     await loadRenewalBenchNbComparison();
     await loadExecutiveSummary();
@@ -5359,6 +5435,7 @@ async function fillMemberRatesFromBook() {
     if (r.unmatched_count) parts.push(`${r.unmatched_count} not found on the book`);
     toast(parts.join('; '), r.filled_from_book === 0);
     await loadRenewalBenchSummary();
+    await loadRenewalScenarios();
   } catch (err) {
     toast(err.message || 'Could not fill rates from the book', true);
   }
@@ -5456,6 +5533,54 @@ function _rbDonutHtml(breakdown) {
   `;
 }
 
+/* ---------------- the five steps ----------------
+
+   The bench is thirteen panels in one scroll, and nothing on it said
+   what was still missing - so the way to discover an account could not
+   be priced was to scroll to the pricing card and read that the price
+   had been withheld.
+
+   Every state here is computed server-side from facts the rest of the
+   page already established (renewal_workflow), never from a checkbox.
+   The bar cannot report a renewal as ready that the pricing endpoint
+   would refuse. */
+const _RB_STEP_ICON = { done: '&check;', blocked: '!', todo: null };
+
+function _rbWorkflowHtml(steps, state) {
+  if (!steps || !steps.length) return '';
+  const cells = steps.map((s, i) => {
+    const icon = _RB_STEP_ICON[s.state] || String(i + 1);
+    const current = state && state.current_step === s.key ? ' current' : '';
+    const title = s.blocker ? ` title="${escapeHtml(s.blocker)}"` : '';
+    return `
+      <button type="button" class="rb-step ${escapeHtml(s.state)}${current}"${title}
+              onclick="_rbScrollToStep('${escapeHtml(s.anchor)}')">
+        <div class="n">${icon}</div>
+        <div class="x">
+          <div class="k">Step ${i + 1}</div>
+          <div class="v">${escapeHtml(s.label)}</div>
+          <div class="d">${s.detail || ''}</div>
+        </div>
+      </button>`;
+  }).join('');
+
+  // The blocker is repeated in full above the fold. A step cell can only
+  // hold one line of it, and the whole point of the bar is that nobody
+  // should have to go looking for what is stopping the renewal.
+  const blocker = state && state.blocked
+    ? `<div class="rb-blocker"><div><b>Blocked at ${escapeHtml(
+        (steps.find(s => s.state === 'blocked') || {}).label || 'this step')}.</b>
+        ${escapeHtml(state.blocker || '')}</div></div>`
+    : '';
+
+  return `<div class="rb-steps">${cells}</div>${blocker}`;
+}
+
+function _rbScrollToStep(anchor) {
+  const el = document.getElementById(anchor);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
 let _rbLastSummary = null;
 
 async function loadRenewalBenchSummary() {
@@ -5468,6 +5593,8 @@ async function loadRenewalBenchSummary() {
   try {
     const r = await api(`/cases/${currentCase.id}/renewal-bench-summary`);
     _rbLastSummary = r;
+    const workflowArea = document.getElementById('renewal-bench-workflow-area');
+    if (workflowArea) workflowArea.innerHTML = _rbWorkflowHtml(r.workflow, r.workflow_state);
     if (headerArea) headerArea.innerHTML = _rbHeaderHtml(r.case_identity);
     if (kpiArea) kpiArea.innerHTML = _rbKpiStripHtml(r.kpis);
     if (existingPremiumArea) existingPremiumArea.innerHTML = _rbExistingPremiumHtml(r.existing_premium);
@@ -5475,12 +5602,97 @@ async function loadRenewalBenchSummary() {
     if (trendArea) trendArea.innerHTML = _rbClaimsTrendHtml(r.claims_trend);
     renderRenewalBenchPremiumAndDrivers(r);
   } catch (err) {
+    const workflowArea = document.getElementById('renewal-bench-workflow-area');
+    if (workflowArea) workflowArea.innerHTML = '';
     if (headerArea) headerArea.innerHTML = '';
     if (kpiArea) kpiArea.innerHTML = '';
     if (existingPremiumArea) existingPremiumArea.innerHTML = '';
     if (donutArea) donutArea.innerHTML = '';
     if (trendArea) trendArea.innerHTML = '';
   }
+}
+
+/* ---------------- scenarios ----------------
+
+   The same account read several ways. Every row is Method 1's own
+   ladder with a different incurred figure fed into it - never a second
+   route to a premium, because two renewal prices on one screen leaves
+   the reader with no way to know which one the house would quote. */
+async function loadRenewalScenarios() {
+  const area = document.getElementById('renewal-bench-scenarios-area');
+  if (!area || !currentCase) return;
+  try {
+    const r = await api(`/cases/${currentCase.id}/renewal-scenarios`);
+    area.innerHTML = _rbScenariosHtml(r);
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+function _rbAdjustmentsHtml(adjustments) {
+  return (adjustments || []).map(a => `
+    <div class="rb-adj-card${a.available ? '' : ' off'}">
+      <div class="t">${escapeHtml(a.label)}
+        <b>${a.available && a.amount ? '&minus;' + Math.round(a.amount).toLocaleString() : '&mdash;'}</b></div>
+      <div class="n">${escapeHtml(a.note || '')}</div>
+    </div>`).join('');
+}
+
+function _rbScenariosHtml(r) {
+  const money = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+
+  if (r.pricing_blocked) {
+    // The levers still show. What is withheld is the price, not the
+    // account - and an underwriter needs to see what is available to
+    // strip while they go and fix the thing that is blocking it.
+    return `
+      <div class="rb-card">
+        <div class="rb-card-title">Adjustments &amp; scenarios</div>
+        <div class="rb-card-sub">No price to compare against yet.
+          ${escapeHtml((r.pricing_problems && r.pricing_problems[0] && r.pricing_problems[0].message) || '')}</div>
+        <div class="rb-adj">${_rbAdjustmentsHtml(r.adjustments)}</div>
+      </div>`;
+  }
+
+  const rows = (r.scenarios || []).map(s => {
+    // A row that stripped nothing repeats the "as reported" figures
+    // exactly, which is the honest answer and reads as a broken table
+    // unless it is visibly doing nothing.
+    const inert = s.key !== 'as_reported' && s.key !== 'override' && !s.removed;
+    const cls = s.key === 'as_reported' ? 'base' : s.key === 'override' ? 'override' : (inert ? 'inert' : '');
+    return `
+    <tr class="${cls}">
+      <td>${escapeHtml(s.label)}${s.floor_applied ? '<span class="rb-floor-tag">at floor</span>' : ''}
+        ${s.note ? `<span class="sub">${escapeHtml(s.note)}</span>` : ''}</td>
+      <td class="num">${s.removed == null ? '&mdash;' : (s.removed ? '&minus;' + money(s.removed) : '&mdash;')}</td>
+      <td class="num">${s.loss_ratio == null ? '&mdash;' : (s.loss_ratio * 100).toFixed(1) + '%'}</td>
+      <td class="num">${money(s.required_premium)}</td>
+      <td class="num">${inert ? 'no change' : pct(s.renewal_increase_pct)}</td>
+    </tr>`;
+  }).join('');
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Adjustments &amp; scenarios</div>
+      <div class="rb-card-sub">What the renewal costs on different readings of the same experience.
+        Each row is Method 1&rsquo;s own ladder &mdash; loss ratio plus
+        ${r.inflation_pts == null ? '&ndash;' : (r.inflation_pts * 100).toFixed(1)} points of inflation, over
+        (1 &minus; ${r.loading_pct == null ? '&ndash;' : (r.loading_pct * 100).toFixed(1) + '%'} loading) &mdash;
+        with a different incurred figure fed into it, not a second way of arriving at a premium.</div>
+      <div class="rb-adj">${_rbAdjustmentsHtml(r.adjustments)}</div>
+      <table class="rb-scenario-table">
+        <thead><tr>
+          <th>Scenario</th><th class="num">Stripped</th><th class="num">Loss ratio</th>
+          <th class="num">Required premium</th><th class="num">Change</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="rb-card-sub" style="margin:14px 0 0;">A claim amount is stripped from the annualised
+        incurred without being annualised itself &mdash; a catastrophic admission is an event that happened
+        once, not a rate that continues. IBNR is left untouched, because the tail projects the account&rsquo;s
+        ongoing run rate rather than the one-off being removed.</div>
+    </div>`;
 }
 
 function _rbDriverBlockHtml(label, value, isTotal) {
@@ -5550,6 +5762,20 @@ function _rbRecommendedPremiumHtml(r) {
 function renderRenewalBenchPremiumAndDrivers(r) {
   const area = document.getElementById('renewal-bench-premium-area');
   if (!area) return;
+  // A withheld price returns no drivers, and reading them anyway threw -
+  // which took down the whole loader, so the account with the most to
+  // say showed the least: no header, no KPI strip, no step bar, nothing
+  // naming the fee split that was stopping it.
+  if (!r.drivers) {
+    area.innerHTML = `
+      <div class="rb-card">
+        <div class="rb-card-title">Recommended renewal premium</div>
+        <div class="rb-card-sub">Withheld. A renewal is not priced on an assumed loading &mdash;
+          enter this account&rsquo;s fee split on the case record and the price, the drivers and the
+          scenarios all follow. Enter 0 for a fee the account genuinely does not pay.</div>
+      </div>`;
+    return;
+  }
   area.innerHTML = _rbRecommendedPremiumHtml(r);
 }
 
