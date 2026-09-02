@@ -716,6 +716,22 @@
   .rb-step.current::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
                             background: var(--rb-accent); }
   .rb-step.current.blocked::after { background: var(--rb-critical); }
+  /* An author rule with display:grid outranks the browser's own
+     [hidden]{display:none}, so .rb-grid-2 panels stayed on screen while
+     el.hidden was perfectly true. Stated explicitly rather than relying
+     on the UA sheet. */
+  .rb-scope [data-rb-step][hidden] { display: none !important; }
+  .rb-step.filtered { background: var(--rb-accent-soft); }
+  .rb-step.filtered .v { color: var(--rb-accent); }
+  /* Always on screen while a filter is on, with the count of what is
+     hidden and a way back - nobody should be able to lose a panel and
+     not know where it went. */
+  .rb-filter-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 16px;
+                   padding: 9px 14px; border-radius: 9px; background: var(--rb-accent-soft);
+                   font-size: 12.5px; color: var(--rb-ink-2); }
+  .rb-filter-bar b { color: var(--rb-ink); text-transform: capitalize; }
+  .rb-filter-bar a { margin-left: auto; color: var(--rb-accent); font-weight: 600; cursor: pointer;
+                     border-bottom: 1px solid currentColor; }
   .rb-blocker { display: flex; gap: 10px; align-items: flex-start; margin-bottom: 16px; padding: 12px 15px;
                 border-radius: 10px; border-left: 3px solid var(--rb-critical);
                 background: color-mix(in srgb, var(--rb-critical) 9%, transparent); font-size: 12.5px;
@@ -3275,26 +3291,32 @@ function renderCaseWorkspace() {
 
     <div class="tab-panel" data-tab="renewal-bench">
       <div class="rb-scope">
+        <!-- The account's own identity and headline: which step you are on
+             does not change who the account is, so these never hide. -->
         <div id="renewal-bench-header-area"></div>
         <div id="renewal-bench-workflow-area"></div>
         <div id="renewal-bench-kpi-area"></div>
-        <div class="rb-grid-2">
+        <!-- Everything below belongs to exactly one step. data-rb-step is
+             what lets the step bar REDUCE the page rather than merely
+             scroll it - thirteen panels in one column is a scroll, not a
+             workflow. -->
+        <div class="rb-grid-2" data-rb-step="census">
           <div id="renewal-bench-existing-premium-area"></div>
           <div id="premium-by-category-area"></div>
         </div>
-        <div class="rb-grid-2">
+        <div class="rb-grid-2" data-rb-step="claims">
           <div id="renewal-bench-donut-area"></div>
           <div id="renewal-bench-trend-area"></div>
         </div>
-        <div id="renewal-bench-population-movement-area"></div>
-                        <div id="renewal-bench-claims-split-area"></div>
-        <div id="renewal-bench-census-comparison-area"></div>
-        <div id="renewal-bench-repricing-area"></div>
-        <div id="renewal-bench-scenarios-area"></div>
-        <div id="renewal-premium-buildup-area"></div>
-        <div id="renewal-bench-claims-area"></div>
-        <div id="renewal-bench-scorecard-area"></div>
-        <div class="rb-grid-2">
+        <div data-rb-step="census" id="renewal-bench-population-movement-area"></div>
+        <div data-rb-step="claims" id="renewal-bench-claims-split-area"></div>
+        <div data-rb-step="census" id="renewal-bench-census-comparison-area"></div>
+        <div data-rb-step="adjustments" id="renewal-bench-repricing-area"></div>
+        <div data-rb-step="adjustments" id="renewal-bench-scenarios-area"></div>
+        <div data-rb-step="pricing" id="renewal-premium-buildup-area"></div>
+        <div data-rb-step="claims" id="renewal-bench-claims-area"></div>
+        <div data-rb-step="pricing" id="renewal-bench-scorecard-area"></div>
+        <div class="rb-grid-2" data-rb-step="quote">
           <div id="renewal-bench-premium-area"></div>
           <div id="renewal-bench-nb-area"></div>
         </div>
@@ -5655,8 +5677,8 @@ function _rbWorkflowHtml(steps, state) {
     const current = state && state.current_step === s.key ? ' current' : '';
     const title = s.blocker ? ` title="${escapeHtml(s.blocker)}"` : '';
     return `
-      <button type="button" class="rb-step ${escapeHtml(s.state)}${current}"${title}
-              onclick="_rbScrollToStep('${escapeHtml(s.anchor)}')">
+      <button type="button" class="rb-step ${escapeHtml(s.state)}${current}" data-rb-step-key="${escapeHtml(s.key)}"${title}
+              onclick="rbSelectStep('${escapeHtml(s.key)}', '${escapeHtml(s.anchor)}')">
         <div class="n">${icon}</div>
         <div class="x">
           <div class="k">Step ${i + 1}</div>
@@ -5675,12 +5697,56 @@ function _rbWorkflowHtml(steps, state) {
         ${escapeHtml(state.blocker || '')}</div></div>`
     : '';
 
-  return `<div class="rb-steps">${cells}</div>${blocker}`;
+  return `<div class="rb-steps">${cells}</div>
+    <div class="rb-filter-bar" id="rb-step-filter-bar" hidden></div>${blocker}`;
 }
 
-function _rbScrollToStep(anchor) {
-  const el = document.getElementById(anchor);
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+/* Clicking a step REDUCES the page to that step's panels. A wizard that
+   never hides anything is a labelled scrollbar - the thirteen panels
+   stayed thirteen panels and the bar just scrolled you between them.
+
+   Clicking the step you are already on clears the filter, and the count
+   of what is hidden is always on screen with a way back, so nobody can
+   lose a panel and not know where it went. Unfiltered is the default:
+   the long page is what people know, and this has to be something they
+   reach for rather than something that happens to them. */
+let _rbStepFilter = null;
+
+function rbSelectStep(step, anchor) {
+  _rbStepFilter = (_rbStepFilter === step) ? null : step;
+  _rbApplyStepFilter();
+  const target = _rbStepFilter
+    ? document.getElementById('renewal-bench-workflow-area')
+    : document.getElementById(anchor);
+  if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function rbShowEveryPanel() {
+  _rbStepFilter = null;
+  _rbApplyStepFilter();
+}
+
+function _rbApplyStepFilter() {
+  const panels = document.querySelectorAll('.rb-scope [data-rb-step]');
+  let hidden = 0;
+  panels.forEach(el => {
+    const show = !_rbStepFilter || el.dataset.rbStep === _rbStepFilter;
+    el.hidden = !show;
+    if (!show) hidden += 1;
+  });
+  document.querySelectorAll('.rb-step').forEach(el => {
+    el.classList.toggle('filtered', el.dataset.rbStepKey === _rbStepFilter);
+  });
+  const bar = document.getElementById('rb-step-filter-bar');
+  if (bar) {
+    bar.hidden = !_rbStepFilter;
+    if (_rbStepFilter) {
+      const shown = panels.length - hidden;
+      bar.innerHTML = `Showing the <b>${escapeHtml(_rbStepFilter)}</b> step &mdash;
+        ${shown} panel${shown === 1 ? '' : 's'}, ${hidden} hidden.
+        <a onclick="rbShowEveryPanel()">Show every panel</a>`;
+    }
+  }
 }
 
 let _rbLastSummary = null;
@@ -5696,7 +5762,13 @@ async function loadRenewalBenchSummary() {
     const r = await api(`/cases/${currentCase.id}/renewal-bench-summary`);
     _rbLastSummary = r;
     const workflowArea = document.getElementById('renewal-bench-workflow-area');
-    if (workflowArea) workflowArea.innerHTML = _rbWorkflowHtml(r.workflow, r.workflow_state);
+    if (workflowArea) {
+      workflowArea.innerHTML = _rbWorkflowHtml(r.workflow, r.workflow_state);
+      // The bar is rebuilt from scratch here, so a filter that was on
+      // before the reload has to be put back on it - otherwise a panel
+      // reload silently un-filters the page under the reader.
+      _rbApplyStepFilter();
+    }
     if (headerArea) headerArea.innerHTML = _rbHeaderHtml(r.case_identity);
     if (kpiArea) kpiArea.innerHTML = _rbKpiStripHtml(r.kpis);
     if (existingPremiumArea) existingPremiumArea.innerHTML = _rbExistingPremiumHtml(r.existing_premium);

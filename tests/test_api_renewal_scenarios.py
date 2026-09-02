@@ -305,6 +305,29 @@ class TestTheStepBar:
             assert step["anchor"]
             assert step["detail"]
 
+    def test_the_steps_reduce_the_page_rather_than_only_scrolling_it(self):
+        # A wizard that never hides anything is a labelled scrollbar. Each
+        # panel declares which step it belongs to, and the filter is
+        # always reversible with the hidden count on screen.
+        import pathlib
+        markup = (pathlib.Path(__file__).resolve().parent.parent
+                  / "app" / "static" / "index.html").read_text()
+        for step in ("census", "claims", "adjustments", "pricing", "quote"):
+            assert f'data-rb-step="{step}"' in markup
+        assert "function rbSelectStep(" in markup
+        assert "rbShowEveryPanel()" in markup
+        # An author display rule outranks the browser's own [hidden], so
+        # the .rb-grid-2 panels stayed on screen while el.hidden was true.
+        assert '.rb-scope [data-rb-step][hidden] { display: none !important; }' in markup
+
+    def test_a_panel_reload_does_not_silently_unfilter_the_page(self):
+        import pathlib
+        markup = (pathlib.Path(__file__).resolve().parent.parent
+                  / "app" / "static" / "index.html").read_text()
+        # The step bar is rebuilt on every summary load; the filter has to
+        # be put back on it or a reload un-filters under the reader.
+        assert markup.count("_rbApplyStepFilter()") >= 2
+
     def test_a_withheld_price_does_not_blank_the_whole_bench(self):
         # A blocked case returns no drivers, and the premium card read
         # them anyway - which threw, which took down the loader that
