@@ -740,6 +740,159 @@ def population_movement_for_account(master_client: str, db: Session = Depends(ge
     return {"master_client": master_client, **population_movement(account)}
 
 
+@router.get("/account-overview/{master_client}")
+def account_overview(
+    master_client: str,
+    as_of: Optional[date] = Query(
+        None,
+        description=(
+            "The day claims are measured to and premium earned to. Defaults to the "
+            "book's recorded extract date."
+        ),
+    ),
+    top: int = Query(5, description="How many of the largest claimants to return"),
+    db: Session = Depends(get_db),
+):
+    """Everything the account dashboard shows, in one payload.
+
+    Assembled from the figures that already exist rather than computed
+    again here. The KPI strip is one row of account_loss_ratio_rows - the
+    same row the Loss Ratio screen renders - the encounter split is
+    utilization_by_encounter_type, the claimants are member_claim_ranking,
+    and the readings are underwriting_alerts. A dashboard is the most
+    tempting place in a portal to recompute a number "just for the
+    summary", and a summary that disagrees with the detail below it is
+    worse than no summary at all.
+
+    Two things are worth knowing about the figures on it.
+
+    The loss ratio is against EARNED premium, not annual. K A F ran 130
+    days of a 365-day term: 991,265 of annual premium, 353,053 earned,
+    877,626 incurred. Putting the annual premium beside part-year claims
+    gives 88.5% - a comfortable-looking account that is actually running
+    at 248.6%. Both premium figures are returned, and the one the ratio
+    divides by is named.
+
+    The top claimant's share is against the account's INCURRED, so it
+    reconciles with the incurred figure on the same screen. Incurred
+    includes IBNR, which has no claimant, so the share is marginally
+    conservative - a member at 25.9% of incurred is a slightly larger
+    share of the claims actually filed.
+    """
+    from app.api.case_loading import is_renewal, renewal_loading
+    from app.scoring.rules.account_overview import (
+        book_position,
+        claims_by_month,
+        data_window,
+    )
+    from app.scoring.rules.renewal_repricing import member_claim_ranking
+    from app.scoring.rules.underwriting_alerts import alert_counts, underwriting_alerts
+
+    members = book_repo.members(db)
+    if not members:
+        raise HTTPException(status_code=400, detail="No portfolio members uploaded yet")
+    account = account_members(members, master_client, book_repo.subgroup_master_by_name(db))
+    if not account:
+        raise HTTPException(status_code=404, detail=f"No members found for master client '{master_client}'")
+
+    # The whole book in one call: the account's own row AND the population
+    # its percentile is measured against come from the same list, so the
+    # comparison can never be drawn against a differently-filtered book.
+    book_rows = book_analysis.account_loss_ratio_rows_for_book(db, as_of=as_of)
+    target = (master_client or "").strip().casefold()
+    account_rows = [
+        r for r in book_rows
+        if (r.get("master_client") or "").strip().casefold() == target
+    ]
+    # An account that has already renewed has a row per policy period.
+    # The dashboard is about the one currently running.
+    row = max(account_rows, key=lambda r: r["policy_start_date"]) if account_rows else None
+
+    current = current_term_members(account)
+    windows = term_member_windows(current)
+    account_ids = {m.get("beneficiary_id") for m in current if m.get("beneficiary_id")}
+
+    claims = [
+        {
+            "patient_id": patient_id,
+            "date_of_treatment": date_of_treatment,
+            "final_amount": final_amount,
+            "claim_status": claim_status,
+            "ip_op_maternity": ip_op_maternity,
+            "medical_category": medical_category,
+            "diagnosis_description": diagnosis_description,
+        }
+        for (
+            patient_id, date_of_treatment, final_amount, claim_status,
+            ip_op_maternity, medical_category, diagnosis_description,
+        ) in db.query(
+            models.PortfolioClaimEntry.patient_id,
+            models.PortfolioClaimEntry.date_of_treatment,
+            models.PortfolioClaimEntry.final_amount,
+            models.PortfolioClaimEntry.claim_status,
+            models.PortfolioClaimEntry.ip_op_maternity,
+            models.PortfolioClaimEntry.medical_category,
+            models.PortfolioClaimEntry.diagnosis_description,
+        ).all()
+        if patient_id in account_ids
+    ]
+    # Same in-term rule member_claim_ranking uses, so the monthly chart,
+    # the encounter split and the claimant list all cover exactly the
+    # same claims.
+    in_term = [
+        c for c in claims
+        if c["date_of_treatment"]
+        and claim_belongs_to_term(c["patient_id"], c["date_of_treatment"], windows)
+    ]
+    by_beneficiary = group_claims_by_beneficiary(in_term)
+
+    claimants = member_claim_ranking(current, by_beneficiary, windows, top=top)
+    incurred = (row or {}).get("incurred_claims") or 0.0
+    top_claimant_amount = claimants[0]["incurred"] if claimants else None
+    top_claimant_share = (
+        top_claimant_amount / incurred if claimants and incurred else None
+    )
+
+    position = book_position(row, book_rows)
+
+    case = _portfolio_cases_by_client(db).get(_client_key(master_client))
+    loading_problems = []
+    if case is not None and is_renewal(case):
+        _, loading_problems = renewal_loading(case)
+
+    alerts = underwriting_alerts(
+        row,
+        top_claimant_share=top_claimant_share,
+        top_claimant_amount=top_claimant_amount,
+        book_median_outstanding_share=(position or {}).get("book_median_outstanding_share"),
+        loading_problems=loading_problems,
+    )
+
+    return {
+        "master_client": master_client,
+        "case_id": case.id if case else None,
+        "as_of": (row or {}).get("as_of"),
+        "policy": {
+            "start_date": (row or {}).get("policy_start_date"),
+            "days_elapsed": (row or {}).get("days"),
+            "expired": (row or {}).get("expired"),
+            "member_count": (row or {}).get("member_count") or len(current),
+        },
+        # Named rather than left to the reader: which premium the ratio
+        # divides by is the whole difference between 88.5% and 248.6%.
+        "loss_ratio_basis": "earned_premium",
+        "kpis": row,
+        "alerts": alerts,
+        "alert_counts": alert_counts(alerts),
+        "claims_by_month": claims_by_month(in_term),
+        "encounter_split": utilization_by_encounter_type(in_term),
+        "top_claimants": claimants,
+        "top_claimant_share": round(top_claimant_share, 4) if top_claimant_share else None,
+        "book_position": position,
+        "claims_window": data_window(in_term),
+    }
+
+
 @router.post("/renewal-census-comparison/{master_client}")
 async def compare_renewal_census(
     master_client: str,
