@@ -394,3 +394,98 @@ class TestTheUploadBlock:
         i = markup.find("const uploads = document.getElementById('case-uploads');")
         j = markup.find("zone.scrollIntoView", i)
         assert i != -1 and j != -1 and j > i
+
+
+class TestPricingOptions:
+    """An underwriter chooses between premiums, not percentages. The
+    question that separates them was never on the page: at THIS premium,
+    where does the loss ratio land?"""
+
+    def options(self, client, case_id, **params):
+        resp = client.get(f"/cases/{case_id}/renewal-options", params=params)
+        assert resp.status_code == 200, resp.text
+        return resp.json()
+
+    def by_key(self, body, key):
+        return next(o for o in body["options"] if o["key"] == key)
+
+    def test_the_technical_option_is_method_1s_own_ask(self, client, case):
+        body = self.options(client, case)
+        rating = client.get(f"/cases/{case}/renewal-rating").json()
+        assert self.by_key(body, "technical")["premium"] == rating["required_premium"]
+
+    def test_the_technical_price_never_lands_worse_than_one_minus_the_loading(self, client, case):
+        # It IS exactly (1 - loading) when the experience decides the ask.
+        # On an account the house floor lifts, the quoted premium is
+        # higher than the experience needs, so the projection lands
+        # better - and saying "exactly" would be wrong on every floored
+        # account on the book.
+        body = self.options(client, case)
+        rating = client.get(f"/cases/{case}/renewal-rating").json()
+        projected = self.by_key(body, "technical")["projected_loss_ratio"]
+        assert projected <= 1 - body["loading_pct"] + 0.001
+        if not rating["floor_applied"]:
+            assert projected == pytest.approx(1 - body["loading_pct"], abs=0.001)
+
+    def test_every_option_is_projected_on_the_same_trended_claims(self, client, case):
+        body = self.options(client, case, commercial_premium=4_200_000,
+                            retention_premium=3_800_000)
+        for option in body["options"]:
+            if option["premium"]:
+                assert option["projected_loss_ratio"] == pytest.approx(
+                    body["trended_claims"] / option["premium"], abs=0.001)
+
+    def test_each_option_carries_a_decision(self, client, case):
+        body = self.options(client, case, commercial_premium=4_200_000,
+                            retention_premium=100_000)
+        assert self.by_key(body, "commercial")["decision"] in ("accept", "review", "reject")
+        # Far below the minimum acceptable: refused, and it says so.
+        assert self.by_key(body, "retention")["decision"] == "reject"
+
+    def test_an_option_nobody_has_priced_yet_gets_no_verdict(self, client, case):
+        body = self.options(client, case)
+        broker = self.by_key(body, "broker")
+        assert broker["premium"] is None and broker["decision"] is None
+
+    def test_the_minimum_acceptable_lands_on_the_house_maximum(self, client, case):
+        body = self.options(client, case)
+        assert self.by_key(body, "minimum_acceptable")["projected_loss_ratio"] == pytest.approx(
+            body["target_loss_ratio"], abs=0.001)
+
+    def test_the_waterfall_reaches_method_1s_premium(self, client, case):
+        body = self.options(client, case)
+        rating = client.get(f"/cases/{case}/renewal-rating").json()
+        assert body["build_up"][-1]["running"] == rating["required_premium"]
+
+    def test_the_waterfall_steps_add_up_to_their_own_total(self, client, case):
+        # Serviceplan's mockup drew 1.88 + 1.29 + 0.31 + 0.72 = 4.20
+        # under a final bar reading 4.50. A reader adds up the numbers in
+        # front of them, and that check has to pass.
+        body = self.options(client, case)
+        steps = [r for r in body["build_up"] if r["amount"] is not None]
+        assert sum(r["amount"] for r in steps) == pytest.approx(
+            body["build_up"][-1]["running"], abs=1.0)
+
+    def test_the_claims_table_comes_back_with_it(self, client, case):
+        performance = self.options(client, case)["claims_performance"]
+        assert performance["total_incurred"] > 0
+        assert performance["claim_count"] == 4
+        assert performance["largest_claim"] == 120_000.0
+        assert performance["high_cost_members"] >= 1
+        assert performance["top_ten_share"] == pytest.approx(1.0)
+
+    def test_a_withheld_price_still_returns_the_claims(self, client):
+        case_id = _create_case(client, company_name="No Fees Ltd")
+        client.patch(f"/cases/{case_id}", json={"current_annual_premium": 3_000_000})
+        _ledger(client, case_id, [((2025, 10), 100_000.0, "P1"),
+                                  ((2025, 11), 100_000.0, "P2"),
+                                  ((2025, 12), 100_000.0, "P3"),
+                                  ((2026, 1), 100_000.0, "P4")])
+        _census(client, case_id)
+        body = self.options(client, case_id)
+        assert body["pricing_blocked"] is True
+        assert body["options"] == []
+        assert body["claims_performance"]["total_incurred"] > 0
+
+    def test_an_unknown_case_is_a_404(self, client):
+        assert client.get("/cases/999999/renewal-options").status_code == 404

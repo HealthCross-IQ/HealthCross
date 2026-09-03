@@ -1996,6 +1996,105 @@ def get_renewal_scenarios(
     }
 
 
+@router.get("/{case_id}/renewal-options")
+def get_renewal_options(
+    case_id: int,
+    commercial_premium: Optional[float] = Query(None, description="A price the account would carry commercially"),
+    retention_premium: Optional[float] = Query(None, description="A price aimed at keeping the account"),
+    broker_premium: Optional[float] = Query(None, description="What the broker is asking for"),
+    target_loss_ratio: Optional[float] = Query(None, description="The maximum loss ratio the minimum acceptable premium is derived from - defaults to the house maximum"),
+    db: Session = Depends(get_db),
+):
+    """The price points on the table, each with the loss ratio it lands
+    on, and the claims behind them.
+
+    An underwriter chooses between premiums, not percentages. The
+    question that separates them is the same for all of them and was
+    never on the page: at THIS premium, where does the loss ratio land?
+    Every option is projected against the same trended claims, so the
+    table can be read down the column - a commercial figure measured
+    against a different denominator to the technical one would leave you
+    unable to tell which option was better, which is the only thing the
+    table is for.
+
+    The minimum acceptable premium is derived from this account's own
+    trended claims and the house maximum, not typed. A remembered figure
+    goes stale the moment the claims file is refreshed.
+    """
+    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+    from app.scoring.rules.renewal_options import (
+        claims_performance,
+        premium_build_up,
+        renewal_options,
+    )
+
+    case = db.query(models.Case).filter(models.Case.id == case_id).first()
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This case has no renewal experience yet - no claims on the book for it, "
+                   "and no claims ledger uploaded.",
+        )
+
+    lines = _case_claim_lines(case)
+    census_count = len(case.census_records) or None
+    performance = claims_performance(lines["claims"], member_count=census_count)
+
+    if renewal.get("pricing_blocked"):
+        return {
+            "case_id": case.id,
+            "pricing_blocked": True,
+            "pricing_problems": renewal.get("pricing_problems"),
+            "claims_performance": performance,
+            "claims_source": lines["source"],
+            "options": [],
+            "build_up": [],
+        }
+
+    expiring = renewal.get("renewal_base_premium") or case.current_annual_premium
+    loading = (renewal.get("assumptions_used") or {}).get("loading_pct")
+    inflation = (renewal.get("assumptions_used") or {}).get("inflation_pct")
+    # The claims the ask is built to fund, in money - the ladder's own
+    # trended ratio against the expiring premium, so the projection and
+    # the price cannot disagree about what next year is expected to cost.
+    trended_claims = (
+        renewal["trended_loss_ratio"] * expiring
+        if renewal.get("trended_loss_ratio") and expiring else None
+    )
+
+    quoted = [
+        {"key": "commercial", "label": "Commercial renewal", "premium": commercial_premium,
+         "note": "a price the account would carry"},
+        {"key": "retention", "label": "Retention strategy", "premium": retention_premium,
+         "note": "priced to keep the account"},
+        {"key": "broker", "label": "Broker target", "premium": broker_premium,
+         "note": "what the broker is asking for"},
+    ]
+
+    return {
+        "case_id": case.id,
+        "pricing_blocked": False,
+        "claims_source": lines["source"],
+        "claims_performance": performance,
+        "build_up": premium_build_up(
+            expiring, renewal.get("annualized_incurred_claims"), inflation, loading,
+            required_premium=renewal.get("required_premium")),
+        **renewal_options(
+            expiring,
+            renewal.get("required_premium"),
+            trended_claims,
+            loading_pct=loading,
+            target_loss_ratio=(target_loss_ratio if target_loss_ratio is not None
+                               else HOUSE_TARGET_LOSS_RATIO),
+            quoted=quoted,
+        ),
+    }
+
+
 @router.get("/{case_id}/renewal-bench-summary")
 def get_renewal_bench_summary(
     case_id: int,
