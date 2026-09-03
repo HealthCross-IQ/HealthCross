@@ -12,8 +12,9 @@ from app.ingestion.portfolio_claims import parse_portfolio_claims
 HEADER = [
     "PATIENT_ID", "CLAIM_ID", "Claim Status", "GROUP_NAME", "CLIENT_NAME", "MSH_POLICY_NUMBER",
     "POLICY_START_DATE", "POLICY_END_DATE", "Member Start Date", "Member End Date",
-    "DATE_OF_TREATMENT", "RELATION", "IP_OP_MATERNITY", "MEDICAL_CATEGORY", "PROVIDER_NAME",
-    "DIAGNOSIS_CODE", "DIAGNOSIS_DESCRIPTION", "Claimed Amount AED", "Final Amount in AED",
+    "DATE_OF_TREATMENT", "DATE_RECEPTION", "RELATION", "IP_OP_MATERNITY", "MEDICAL_CATEGORY",
+    "PROVIDER_NAME", "DIAGNOSIS_CODE", "DIAGNOSIS_DESCRIPTION", "Claimed Amount AED",
+    "Final Amount in AED",
 ]
 
 
@@ -25,13 +26,13 @@ def claims_xlsx(tmp_path):
     ws.append([
         "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
         "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "2025-06-01", "2025-06-08", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
         "J309", "Allergic rhinitis", 100.0, 90.0,
     ])
     ws.append([
         "ACM0001", "CLM2", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
         "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-        "2025-07-01", "Main Insured", "IP", "SURGERY", "Some Hospital",
+        "2025-07-01", "2025-07-03", "Main Insured", "IP", "SURGERY", "Some Hospital",
         "K358", "Appendicitis", 5000.0, 4800.0,
     ])
     path = tmp_path / "claims.xlsx"
@@ -50,6 +51,30 @@ def test_parses_claim_fields(claims_xlsx):
     assert first["msh_policy_number"] == "QC1-ACM-A"
     assert first["final_amount"] == 90.0
     assert first["date_of_treatment"].isoformat() == "2025-06-01"
+    # The date the claim actually reached the TPA - distinct from
+    # date_of_treatment, and the pair a real completion-factor IBNR is
+    # built on. Previously dropped on the floor entirely.
+    assert first["date_reception"].isoformat() == "2025-06-08"
+
+
+def test_a_claim_with_no_reception_date_yet_is_none_not_missing(tmp_path):
+    # A freshly-treated claim that has not been submitted at all yet has
+    # no reception date - that absence IS the IBNR signal, so it must
+    # come back as None rather than being silently dropped or defaulted.
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.append(HEADER)
+    ws.append([
+        "ACM0002", "CLM3", "Outstanding Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
+        "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+        "2026-08-30", None, "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "J309", "Allergic rhinitis", 50.0, 45.0,
+    ])
+    path = tmp_path / "claims_no_reception.xlsx"
+    wb.save(path)
+    with open(path, "rb") as f:
+        rows = parse_portfolio_claims(f, "claims_no_reception.xlsx")
+    assert rows[0]["date_reception"] is None
 
 
 def test_reads_xlsb_files_with_the_calamine_engine(monkeypatch, claims_xlsx):
@@ -101,7 +126,7 @@ def claims_xlsx_with_leading_blank_sheet(tmp_path):
     data.append([
         "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
         "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "2025-06-01", "2025-06-08", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
         "J309", "Allergic rhinitis", 100.0, 90.0,
     ])
     path = tmp_path / "claims_with_blank_sheet.xlsx"
@@ -136,7 +161,7 @@ def claims_xlsx_with_pivot_summary_sheets(tmp_path):
     detail.append([
         "PAR0001", "CLMP", "Paid Claims", "Partial Sub", "Partial Holdings", "QC9-PAR-A",
         "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "2025-06-01", "2025-06-08", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
         "J309", "Allergic rhinitis", 10.0, 10.0,
     ])
 
@@ -146,7 +171,7 @@ def claims_xlsx_with_pivot_summary_sheets(tmp_path):
         data.append([
             f"ACM000{i}", f"CLM{i}", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-            "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+            "2025-06-01", "2025-06-08", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
             "J309", "Allergic rhinitis", 100.0, 90.0,
         ])
 
@@ -199,7 +224,7 @@ def test_recognizes_the_contract_wording_for_amount_columns(tmp_path):
     ws.append([
         "ACM0001", "CLM1", "Paid Claims", "Acme Sub LLC", "Acme Holdings", "QC1-ACM-A",
         "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
-        "2025-06-01", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
+        "2025-06-01", "2025-06-08", "Main Insured", "OP", "PHARMACY", "Some Pharmacy",
         "J309", "Allergic rhinitis", 100.0, 90.0,
     ])
     path = tmp_path / "claims_contract_wording.xlsx"

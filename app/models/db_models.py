@@ -300,6 +300,14 @@ class ClaimsLedgerEntry(Base):
     member_start_date = Column(Date, nullable=True)
     member_end_date = Column(Date, nullable=True)
     date_of_treatment = Column(Date, nullable=True)
+    # When the claim was actually RECEIVED by the insurer/TPA - distinct
+    # from date_of_treatment, and the pair that a true IBNR completion
+    # factor is built on (see app.scoring.rules.claims_completion). A
+    # claim that has been received shows up as Outstanding until paid, so
+    # the gap this closes is "incurred but not yet even submitted", not
+    # "submitted but not yet paid" - the house's flat 30-day tail was
+    # answering that second, easier question.
+    date_reception = Column(Date, nullable=True)
     relation = Column(String, nullable=True)
     ip_op_maternity = Column(String, nullable=True)
     medical_category = Column(String, nullable=True)
@@ -662,6 +670,14 @@ class PortfolioClaimEntry(Base):
     member_start_date = Column(Date, nullable=True)
     member_end_date = Column(Date, nullable=True)
     date_of_treatment = Column(Date, nullable=True)
+    # When the claim was actually RECEIVED by the insurer/TPA - distinct
+    # from date_of_treatment, and the pair that a true IBNR completion
+    # factor is built on (see app.scoring.rules.claims_completion). A
+    # claim that has been received shows up as Outstanding until paid, so
+    # the gap this closes is "incurred but not yet even submitted", not
+    # "submitted but not yet paid" - the house's flat 30-day tail was
+    # answering that second, easier question.
+    date_reception = Column(Date, nullable=True)
     relation = Column(String, nullable=True)
     ip_op_maternity = Column(String, nullable=True)
     medical_category = Column(String, nullable=True)

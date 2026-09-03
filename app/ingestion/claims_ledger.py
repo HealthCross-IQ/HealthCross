@@ -28,6 +28,12 @@ CLAIMS_LEDGER_ALIASES: Dict[str, List[str]] = {
     "member_start_date": ["member_start_date", "member start date"],
     "member_end_date": ["member_end_date", "member end date"],
     "date_of_treatment": ["date_of_treatment", "date of treatment", "treatment date"],
+    # When the claim actually reached the TPA/insurer - the pair with
+    # date_of_treatment a real IBNR completion factor is built on. Never
+    # confuse with payment_date (a claim already received but not yet paid
+    # is not an IBNR question, it is the outstanding figure the book
+    # already carries).
+    "date_reception": ["date_reception", "date reception"],
     "relation": ["relation", "relationship"],
     "ip_op_maternity": ["ip_op_maternity", "ip/op/maternity", "claim type"],
     "medical_category": ["medical_category", "medical category"],
@@ -79,6 +85,7 @@ def parse_claims_ledger(file: BinaryIO, filename: str) -> List[dict]:
                 "member_start_date": _date_or_none(row.get("member_start_date")),
                 "member_end_date": _date_or_none(row.get("member_end_date")),
                 "date_of_treatment": _date_or_none(row.get("date_of_treatment")),
+                "date_reception": _date_or_none(row.get("date_reception")),
                 "relation": _str_or_none(row.get("relation")),
                 "ip_op_maternity": _str_or_none(row.get("ip_op_maternity")),
                 "medical_category": _str_or_none(row.get("medical_category")),
