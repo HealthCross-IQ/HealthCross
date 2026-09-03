@@ -2350,7 +2350,7 @@ async function hcRailRenewalBench() {
     <div class="card">
       <h3>Renewal Bench</h3>
       <div class="hint">Pick a renewal case below to open its Renewal Bench tab directly - the Method A/B scorecard, renewal-vs-new-business comparison, large claims insights, and census movement.</div>
-      <div class="hint"><strong>Net LR</strong> is each case's own claims against its own premium after <strong>that account's own entered loading</strong> - never an assumed one, so an account whose fee split has not been entered shows its gross ratio and "Needs fee split" instead. <strong>Suggested increase</strong> is what would bring it back to break-even after ${summary ? (summary.trend_pct * 100).toFixed(0) : 10}% trend - the opening position for the renewal conversation, not the final answer. A case with no claims ledger yet shows "-" rather than a misleading zero.</div>
+      <div class="hint"><strong>Net LR</strong> is each case's own claims against its own premium after <strong>that account's own entered loading</strong> - never an assumed one, so an account whose fee split has not been entered shows its gross ratio and "Needs fee split" instead. <strong>Suggested increase</strong> is what would bring it back to break-even after ${summary ? (summary.inflation_pts * 100).toFixed(0) : 10}% trend - the opening position for the renewal conversation, not the final answer. A case with no claims ledger yet shows "-" rather than a misleading zero.</div>
       ${cases.length ? `<table>
         <tr><th>Company</th><th>Broker</th><th>Renewal date</th><th>Status</th>
           <th style="text-align:right;">Current premium</th><th style="text-align:right;">Incurred claims</th>
