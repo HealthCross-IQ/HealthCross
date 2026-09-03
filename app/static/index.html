@@ -3226,11 +3226,11 @@ function renderCaseWorkspace() {
         and the long one cannot disagree &mdash; section 1 of the report IS the summary. Each
         opens to read, with an Internal / Client toggle and a Download button on the page.</div>
       <div class="doc-cards">
-        ${_docCardHtml('Renewal Summary', 'One page. The decision.',
-            'Loss ratio, the ask, the pricing ladder and the three premiums. Nothing that explains them.',
+        ${_docCardHtml('Renewal Summary', 'One page. Three questions.',
+            'Is this account risky, why, and what should we do about it. Gross against net, the readings that crossed a threshold, and every price with the loss ratio it lands on. Nothing that explains them.',
             `/cases/${c.id}/renewal-summary.html`, true)}
         ${_docCardHtml('Renewal Report', 'The full file.',
-            'The summary, then the census, the benefits and the claims behind the number, then the basis every figure was struck on.',
+            'The summary, then the pricing arithmetic behind it, the census, the benefits and the claims, then the basis every figure was struck on.',
             `/cases/${c.id}/renewal-report.html`, false)}
       </div>
     </div>` : ''}
