@@ -3442,6 +3442,13 @@ function renderCaseWorkspace() {
         <div id="renewal-bench-header-area"></div>
         <div id="renewal-bench-workflow-area"></div>
         <div id="renewal-bench-kpi-area"></div>
+        <!-- Executive Summary: loss ratio, premium waterfall, pricing table,
+             claims performance, and membership profile in one view - not
+             scoped to a single workflow step, since it is meant to answer
+             "is this account risky, why, and what should we do" regardless
+             of which step the underwriter is on. See
+             GET /{case_id}/renewal-bench-dashboard. -->
+        <div id="renewal-bench-dashboard-area"></div>
         <!-- Everything below belongs to exactly one step. data-rb-step is
              what lets the step bar REDUCE the page rather than merely
              scroll it - thirteen panels in one column is a scroll, not a
@@ -5972,6 +5979,304 @@ async function loadRenewalBenchSummary() {
     if (donutArea) donutArea.innerHTML = '';
     if (trendArea) trendArea.innerHTML = '';
   }
+  // Independent of whether /renewal-bench-summary itself succeeded - a
+  // case with no claims ledger 404s there but /renewal-bench-dashboard
+  // has its own eligibility check and its own message, so the Executive
+  // Summary should say why it can't render rather than going blank
+  // because an unrelated panel's call failed first.
+  loadRenewalBenchDashboard();
+}
+
+/* ---------------- Executive Summary dashboard ----------------
+
+   One consolidated view of the account's own already-vetted numbers -
+   loss ratio, the premium waterfall, the Accept/Review/Reject pricing
+   table, claims performance, and the membership profile - read from
+   GET /{case_id}/renewal-bench-dashboard, which itself calls the same
+   functions (_renewal_pricing, renewal_drivers, census_demographic_summary)
+   every other Renewal Bench panel already uses. Deliberately has no 0-100
+   risk-score gauge and no "indicative renewal range" - nothing in this
+   codebase derives either from real numbers, so this view shows the two
+   real bracketing figures (technical premium, minimum acceptable premium)
+   instead of a number with no ladder behind it. */
+
+async function loadRenewalBenchDashboard() {
+  const area = document.getElementById('renewal-bench-dashboard-area');
+  if (!area || !currentCase) return;
+  try {
+    const d = await api(`/cases/${currentCase.id}/renewal-bench-dashboard`);
+    area.innerHTML = _rbDashboardHtml(d);
+  } catch (err) {
+    area.innerHTML = `<div class="rb-card"><div class="rb-card-title">Executive Summary</div>
+      <div class="rb-card-sub">${escapeHtml(err.message)}</div></div>`;
+  }
+}
+
+function _rbDashboardHtml(d) {
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct1 = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Executive Summary</div>
+      <div class="rb-card-sub">${d.loss_ratio_basis ? escapeHtml(d.loss_ratio_basis) : ''}</div>
+      <div class="rb-kpi-strip">
+        <div class="rb-kpi-card">
+          <div class="rb-kpi-label">Gross Earned LR</div>
+          <div class="rb-kpi-value">${pct1(d.gross_earned_loss_ratio)}</div>
+          <div class="rb-kpi-sub">Target &le; 80%</div>
+        </div>
+        <div class="rb-kpi-card">
+          <div class="rb-kpi-label">Net Earned LR</div>
+          <div class="rb-kpi-value">${d.net_earned_loss_ratio != null ? pct1(d.net_earned_loss_ratio) : '&mdash;'}</div>
+          <div class="rb-kpi-sub">${d.net_earned_loss_ratio != null ? 'Target &le; 100%' : 'No book match for this account'}</div>
+        </div>
+        <div class="rb-kpi-card">
+          <div class="rb-kpi-label">Expiring Premium</div>
+          <div class="rb-kpi-value">AED ${aed(d.expiring_premium)}</div>
+          <div class="rb-kpi-sub">${d.expiring_premium_per_member != null ? 'Per member ' + aed(d.expiring_premium_per_member) : ''}</div>
+        </div>
+        <div class="rb-kpi-card">
+          <div class="rb-kpi-label">Required Premium</div>
+          <div class="rb-kpi-value">AED ${aed(d.required_premium)}</div>
+          <div class="rb-kpi-sub">${d.required_premium_per_member != null ? 'Per member ' + aed(d.required_premium_per_member) : ''}</div>
+        </div>
+      </div>
+      ${d.renewal_increase_pct != null ? `
+        <div class="rb-insight sev-critical" style="margin-top:14px;">
+          <div>
+            <b>Required increase ${d.renewal_increase_pct > 0 ? '+' : ''}${d.renewal_increase_pct.toFixed(1)}%.</b>
+            ${d.renewal_increase_reason ? ' ' + escapeHtml(d.renewal_increase_reason) : ''}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="rb-grid-2">
+      ${_rbLossRatioGaugeHtml(d)}
+      ${_rbWaterfallHtml(d.premium_build_up)}
+    </div>
+    <div class="rb-card">
+      <div class="rb-card-title">Pricing Adequacy Analysis</div>
+      <div class="rb-card-sub">Every option projected against the same trended claims, so the table can be read down the column.</div>
+      ${_rbPricingTableHtml(d.pricing_options)}
+    </div>
+    <div class="rb-grid-2">
+      ${_rbClaimsPerformanceCardHtml(d)}
+      ${_rbMembershipProfileCardHtml(d.membership_profile, d.age_thresholds)}
+    </div>
+  `;
+}
+
+function _rbLossRatioGaugeHtml(d) {
+  const lr = d.net_earned_loss_ratio != null ? d.net_earned_loss_ratio : d.gross_earned_loss_ratio;
+  const label = d.net_earned_loss_ratio != null ? 'Net Earned LR' : 'Gross Earned LR &middot; no net figure without a book match';
+  if (lr == null) {
+    return `<div class="rb-card"><div class="rb-card-title">Loss Ratio</div><div class="rb-card-sub">No loss ratio available yet.</div></div>`;
+  }
+  const pctVal = lr * 100;
+  const scaleMax = 300;
+  const clamped = Math.max(0, Math.min(scaleMax, pctVal));
+  const band = pctVal <= 80 ? 'good' : pctVal <= 120 ? 'warning' : 'critical';
+  const bandColor = { good: 'var(--rb-good)', warning: 'var(--rb-warning)', critical: 'var(--rb-critical)' }[band];
+  const stop1 = (80 / scaleMax * 100).toFixed(2);
+  const stop2 = (120 / scaleMax * 100).toFixed(2);
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Loss Ratio</div>
+      <div class="rb-card-sub">${label}</div>
+      <div style="font-family:'IBM Plex Mono',monospace; font-size:32px; font-weight:700; color:${bandColor}; margin:6px 0 2px;">${pctVal.toFixed(1)}%</div>
+      <div style="position:relative; height:10px; border-radius:6px; margin:10px 0 6px;
+                  background:linear-gradient(to right,
+                    var(--rb-good) 0%, var(--rb-good) ${stop1}%,
+                    var(--rb-warning) ${stop1}%, var(--rb-warning) ${stop2}%,
+                    var(--rb-critical) ${stop2}%, var(--rb-critical) 100%);">
+        <div style="position:absolute; top:-3px; left:${(clamped/scaleMax*100).toFixed(2)}%; width:2px; height:16px; background:var(--rb-ink); transform:translateX(-1px);"></div>
+      </div>
+      <div style="display:flex; justify-content:space-between; font-size:10.5px; color:var(--rb-muted);">
+        <span>0%</span><span>Good &le;80%</span><span>Poor &le;120%</span><span>${scaleMax}%</span>
+      </div>
+    </div>
+  `;
+}
+
+function _rbWaterfallHtml(steps) {
+  if (!steps || !steps.length) {
+    return `<div class="rb-card"><div class="rb-card-title">Premium Build (Waterfall)</div><div class="rb-card-sub">No build-up available yet.</div></div>`;
+  }
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const maxRunning = Math.max(1, ...steps.map(s => s.running || 0));
+  const rows = steps.map(s => {
+    const widthPct = Math.max(2, (s.running / maxRunning) * 100);
+    const isTotal = s.label === 'Expiring premium' || s.label === 'Required premium';
+    const barColor = isTotal ? 'var(--rb-accent)' : (s.amount != null && s.amount < 0 ? 'var(--rb-good)' : 'var(--rb-secondary)');
+    return `
+      <div style="margin-bottom:10px;">
+        <div style="display:flex; justify-content:space-between; font-size:11.5px; color:var(--rb-ink-2); margin-bottom:3px;">
+          <span>${escapeHtml(s.label)}</span>
+          <span style="font-family:'IBM Plex Mono',monospace; white-space:nowrap;">${s.amount != null ? (s.amount >= 0 ? '+' : '') + aed(s.amount) + ' &rarr; ' : ''}AED ${aed(s.running)}</span>
+        </div>
+        <div style="height:8px; border-radius:4px; background:var(--rb-surface-2);">
+          <div style="height:100%; width:${widthPct}%; border-radius:4px; background:${barColor};"></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Premium Build (Waterfall)</div>
+      <div class="rb-card-sub">Expiring premium, then each step that moves it, ending on the required premium.</div>
+      ${rows}
+    </div>
+  `;
+}
+
+function _rbPricingTableHtml(options) {
+  if (!options || !options.length) {
+    return `<div class="rb-card-sub">No pricing options available yet.</div>`;
+  }
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pctSigned = v => v == null ? '&mdash;' : (v > 0 ? '+' : '') + v.toFixed(1) + '%';
+  const lrFmt = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const decisionPill = decision => {
+    if (!decision) return '&mdash;';
+    const cls = decision === 'accept' ? 'rb-pill-good' : decision === 'review' ? 'rb-pill-warning' : 'rb-pill-critical';
+    return `<span class="rb-pill ${cls}">${escapeHtml(decision)}</span>`;
+  };
+  const rows = options.map(o => `
+    <tr>
+      <td>${escapeHtml(o.label)}${o.note ? `<div class="rb-card-sub" style="margin:2px 0 0;">${escapeHtml(o.note)}</div>` : ''}</td>
+      <td class="num">${o.premium != null ? 'AED ' + aed(o.premium) : '&mdash; (not entered)'}</td>
+      <td class="num">${pctSigned(o.change_pct)}</td>
+      <td class="num">${lrFmt(o.projected_loss_ratio)}</td>
+      <td class="num">${decisionPill(o.decision)}</td>
+    </tr>
+  `).join('');
+  return `
+    <div style="overflow-x:auto;">
+      <table class="rb-table">
+        <thead><tr><th>Scenario</th><th class="num">Premium</th><th class="num">Change</th><th class="num">Projected LR</th><th class="num">Decision</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `;
+}
+
+function _rbClaimsPerformanceCardHtml(d) {
+  const perf = d.claims_performance;
+  if (!perf) {
+    return `<div class="rb-card"><div class="rb-card-title">Claims Performance</div><div class="rb-card-sub">No claims data yet.</div></div>`;
+  }
+  const aed = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const stats = [
+    ['Total Incurred Claims', 'AED ' + aed(perf.total_incurred)],
+    ['No. of Claims', perf.claim_count],
+    ['Claim Frequency', perf.claim_frequency != null ? perf.claim_frequency.toFixed(2) : '&mdash;'],
+    ['Average Claim Cost', 'AED ' + aed(perf.average_claim_cost)],
+    ['Largest Claim', 'AED ' + aed(perf.largest_claim)],
+    ['Top 10 Claims', perf.top_ten_share != null ? (perf.top_ten_share * 100).toFixed(1) + '% of total' : '&mdash;'],
+    ['Chronic Claims (Est.)', perf.chronic_claims != null ? 'AED ' + aed(perf.chronic_claims) : 'Not classifiable from this ledger'],
+  ];
+  const statRows = stats.map(([k, v]) => `
+    <div style="display:flex; justify-content:space-between; font-size:12px; padding:5px 0; border-bottom:1px solid var(--rb-border);">
+      <span style="color:var(--rb-muted);">${escapeHtml(k)}</span><b>${v}</b>
+    </div>
+  `).join('');
+
+  const trend = d.monthly_claims_trend || [];
+  const maxTrend = Math.max(1, ...trend.map(t => t.final_amount || 0));
+  const trendBars = trend.map(t => `
+    <div style="display:flex; flex-direction:column; align-items:center; flex:1;">
+      <div style="width:100%; height:60px; display:flex; align-items:flex-end;">
+        <div style="width:100%; background:var(--rb-accent); border-radius:3px 3px 0 0; height:${Math.max(2, (t.final_amount / maxTrend) * 100)}%;" title="AED ${aed(t.final_amount)}"></div>
+      </div>
+      <div style="font-size:9px; color:var(--rb-muted); margin-top:3px;">${t.month}/${String(t.year).slice(2)}</div>
+    </div>
+  `).join('');
+
+  const drivers = (d.top_claim_drivers || []).slice(0, 5);
+  const driverTotal = drivers.reduce((s, x) => s + (x.value || 0), 0) || 1;
+  const maxDriver = Math.max(1, ...drivers.map(x => x.value || 0));
+  const driverBars = drivers.map(x => `
+    <div style="margin-bottom:7px;">
+      <div style="display:flex; justify-content:space-between; font-size:11px; color:var(--rb-ink-2); margin-bottom:2px;">
+        <span>${escapeHtml(x.diagnosis_description || x.diagnosis_code || 'Unclassified')}</span>
+        <span>${((x.value / driverTotal) * 100).toFixed(0)}%</span>
+      </div>
+      <div style="height:6px; border-radius:3px; background:var(--rb-surface-2);">
+        <div style="height:100%; width:${(x.value / maxDriver) * 100}%; border-radius:3px; background:var(--rb-secondary);"></div>
+      </div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Claims Performance</div>
+      <div class="rb-card-sub">This case's own claims ledger.</div>
+      ${statRows}
+      ${trend.length ? `
+        <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--rb-muted); font-weight:600; margin:14px 0 6px;">Monthly Incurred Claims Trend</div>
+        <div style="display:flex; gap:4px; align-items:flex-end;">${trendBars}</div>
+      ` : ''}
+      ${drivers.length ? `
+        <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--rb-muted); font-weight:600; margin:14px 0 6px;">Top Claim Drivers (by Value)</div>
+        ${driverBars}
+      ` : ''}
+    </div>
+  `;
+}
+
+function _rbMembershipProfileCardHtml(profile, ageThresholds) {
+  if (!profile || !profile.total_members) {
+    return `<div class="rb-card"><div class="rb-card-title">Membership Profile</div><div class="rb-card-sub">No census uploaded yet.</div></div>`;
+  }
+  const pctFmt = v => v == null ? '&mdash;' : (v * 100).toFixed(0) + '%';
+
+  const ageBandRows = Object.entries(profile.age_band_counts || {}).map(([band, count]) => `
+    <div style="display:flex; justify-content:space-between; font-size:11px; padding:2px 0;">
+      <span>${escapeHtml(band)}</span><span>${count} (${pctFmt((profile.age_band_pct || {})[band])})</span>
+    </div>
+  `).join('');
+
+  const relationRows = Object.entries(profile.relation_counts || {}).map(([rel, count]) => `
+    <div style="display:flex; justify-content:space-between; font-size:11px; padding:2px 0;">
+      <span>${escapeHtml(rel)}</span><span>${count} (${pctFmt((profile.relation_pct || {})[rel])})</span>
+    </div>
+  `).join('');
+
+  const zoneRows = Object.entries(profile.nationality_zone_counts || {}).map(([zone, count]) => {
+    const p = (profile.nationality_zone_pct || {})[zone] || 0;
+    return `
+      <div style="margin-bottom:6px;">
+        <div style="display:flex; justify-content:space-between; font-size:11px; margin-bottom:2px;"><span>${escapeHtml(ZONE_LABELS[zone] || zone)}</span><span>${count} (${pctFmt(p)})</span></div>
+        <div style="height:6px; border-radius:3px; background:var(--rb-surface-2);"><div style="height:100%; width:${(p * 100).toFixed(1)}%; border-radius:3px; background:var(--rb-accent);"></div></div>
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Membership Profile</div>
+      <div class="rb-card-sub">${profile.total_members} members, average age ${profile.avg_age != null ? profile.avg_age.toFixed(1) : '&mdash;'}</div>
+      <div class="rb-grid-2" style="gap:16px;">
+        <div>
+          <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--rb-muted); font-weight:600; margin-bottom:6px;">Age Band</div>
+          ${ageBandRows}
+        </div>
+        <div>
+          <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--rb-muted); font-weight:600; margin-bottom:6px;">Relation</div>
+          ${relationRows}
+        </div>
+      </div>
+      <div style="font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; color:var(--rb-muted); font-weight:600; margin:14px 0 6px;">Nationality Zones</div>
+      ${zoneRows}
+      <div class="rb-kpi-strip" style="margin-top:14px;">
+        <div class="rb-kpi-card"><div class="rb-kpi-label">Male : Female</div><div class="rb-kpi-value" style="font-size:15px;">${ageThresholds && ageThresholds.male_female_ratio ? escapeHtml(ageThresholds.male_female_ratio) : '&mdash;'}</div></div>
+        <div class="rb-kpi-card"><div class="rb-kpi-label">% &gt; 50 yrs</div><div class="rb-kpi-value" style="font-size:15px;">${ageThresholds ? pctFmt(ageThresholds.pct_over_50) : '&mdash;'}</div></div>
+        <div class="rb-kpi-card"><div class="rb-kpi-label">% &gt; 60 yrs</div><div class="rb-kpi-value" style="font-size:15px;">${ageThresholds ? pctFmt(ageThresholds.pct_over_60) : '&mdash;'}</div></div>
+      </div>
+    </div>
+  `;
 }
 
 /* ---------------- scenarios ----------------

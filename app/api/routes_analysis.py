@@ -2309,6 +2309,121 @@ def get_renewal_bench_summary(
     }
 
 
+@router.get("/{case_id}/renewal-bench-dashboard")
+def get_renewal_bench_dashboard(case_id: int, db: Session = Depends(get_db)):
+    """The Renewal Bench Executive Summary tab in one call: loss ratio,
+    the premium waterfall, the Accept/Review/Reject pricing table, claims
+    performance (with a monthly trend and top diagnosis drivers), and the
+    membership profile - all read from the SAME already-vetted functions
+    /renewal-bench-summary, /renewal-options, /census-summary, and
+    /claims-ledger-analysis already use (renewal_drivers, _renewal_pricing,
+    census_demographic_summary, monthly_final_amount,
+    top_diagnoses_by_final_amount), never a second computation of any of
+    them - see those endpoints' own docstrings for why a renewal price
+    can only ever have one number.
+
+    Deliberately does NOT invent a 0-100 "risk score" or an "indicative
+    renewal range" - no function anywhere in this codebase derives either
+    from real numbers, and this account's own renewal_options() already
+    reports the two real bracketing figures (technical premium, minimum
+    acceptable premium) a risk-scored gauge or a typed range would only
+    be restating with less precision.
+    """
+    from app.scoring.rules.renewal_bench_dashboard import (
+        age_threshold_percentages,
+        per_member_premium,
+        renewal_increase_reason,
+    )
+
+    case = _get_case_or_404(db, case_id)
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This case has no renewal experience yet - no claims on the book for it, "
+                   "and no claims ledger uploaded, or no current_annual_premium set.",
+        )
+
+    try:
+        pricing = _renewal_pricing(case, renewal)
+    except ValueError as problem:
+        raise HTTPException(status_code=400, detail=str(problem))
+
+    census_member_count = len(case.census_records)
+    census_ages = [c.age for c in case.census_records if c.age is not None]
+    account_loading, loading_problems = _renewal_loading(case, None)
+    blocked = renewal.get("pricing_blocked") or bool(loading_problems)
+    drivers = None if blocked else renewal_drivers(
+        loss_ratio=renewal.get("actual_loss_ratio"),
+        expiring_annual_premium=renewal.get("renewal_base_premium") or case.current_annual_premium,
+        loading_pct=account_loading,
+        inflation_pts=(renewal.get("assumptions_used") or {}).get("inflation_pct"),
+        required_premium=renewal.get("required_premium"),
+    )
+
+    book = renewal.get("from_book")
+    if book and book.get("gross_loss_ratio") is not None:
+        gross_earned_lr = book["gross_loss_ratio"]
+        net_earned_lr = book.get("net_loss_ratio")
+        loss_ratio_basis = f"gross earned, from the book as of {book['as_of']}"
+    else:
+        gross_earned_lr = renewal.get("actual_loss_ratio")
+        # A ledger-only case has no "net" figure - see
+        # app.book.analysis.account_loss_ratio_rows_for_book, which is the
+        # only place a net (post-loading) earned ratio is computed, and it
+        # only runs for a case matched on the uploaded Portfolio book.
+        net_earned_lr = None
+        loss_ratio_basis = "Method A (gross), from this case's claims ledger - no net figure without a book match"
+
+    claim_lines = _case_claim_lines(case)["claims"]
+    monthly_trend = monthly_final_amount(claim_lines)
+    top_diagnoses = top_diagnoses_by_final_amount(claim_lines)
+
+    census = [
+        {
+            "age": c.age,
+            "gender": c.gender,
+            "marital_status": c.marital_status,
+            "relation": c.relation,
+            "nationality_zone": c.nationality_zone,
+            "nationality": c.nationality,
+        }
+        for c in case.census_records
+    ]
+    membership_profile = census_demographic_summary(census) if census else None
+    age_thresholds = age_threshold_percentages(census) if census else None
+
+    expiring_premium = renewal.get("renewal_base_premium") or case.current_annual_premium
+    required_premium = renewal.get("required_premium")
+
+    return {
+        "case_identity": {
+            "company_name": case.company_name,
+            "broker_name": case.broker_name,
+            "member_count": census_member_count,
+            "renewal_date": case.renewal_date,
+            "status": case.status,
+        },
+        "gross_earned_loss_ratio": gross_earned_lr,
+        "net_earned_loss_ratio": net_earned_lr,
+        "loss_ratio_basis": loss_ratio_basis,
+        "expiring_premium": expiring_premium,
+        "expiring_premium_per_member": per_member_premium(expiring_premium, census_member_count),
+        "required_premium": required_premium,
+        "required_premium_per_member": per_member_premium(required_premium, census_member_count),
+        "renewal_increase_pct": renewal.get("renewal_increase_pct"),
+        "renewal_increase_reason": renewal_increase_reason(drivers) if drivers else None,
+        "premium_build_up": pricing.get("build_up", []),
+        "pricing_options": pricing.get("options", []),
+        "claims_performance": pricing.get("claims_performance"),
+        "monthly_claims_trend": monthly_trend,
+        "top_claim_drivers": top_diagnoses[:10],
+        "membership_profile": membership_profile,
+        "age_thresholds": age_thresholds,
+        "loading_problems": loading_problems or None,
+    }
+
+
 def _case_claim_dicts(case: models.Case) -> List[dict]:
     """This case's own claims ledger, reshaped into the same generic claim
     dict (patient_id/diagnosis_description/date_of_treatment/final_amount/
