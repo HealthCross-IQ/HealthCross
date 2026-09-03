@@ -29,6 +29,7 @@ number somebody remembers.
 from typing import List, Optional, Sequence
 
 from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+from app.scoring.rules.renewal_rating import MINIMUM_RENEWAL_INCREASE_PCT
 from app.scoring.rules.renewal_scenarios import DEFAULT_LARGE_CLAIM_THRESHOLD
 
 DECISION_ACCEPT = "accept"
@@ -46,16 +47,32 @@ REVIEW_BAND_PCT = 0.10
 def minimum_acceptable_premium(
     trended_claims: Optional[float],
     target_loss_ratio: float = HOUSE_TARGET_LOSS_RATIO,
+    expiring_annual_premium: Optional[float] = None,
+    minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> Optional[float]:
-    """The lowest premium that still lands inside the house maximum.
+    """The lowest premium the house would actually write, which is the
+    HIGHER of two floors.
 
-    Derived from this account's own trended claims rather than typed, so
-    it moves when the experience does. A remembered figure goes stale the
-    moment the claims file is refreshed and nobody notices.
+    The first is the loss-ratio floor: this account's own trended claims
+    over the house maximum. Derived rather than typed, so it moves when
+    the experience does - a remembered figure goes stale the moment the
+    claims file is refreshed and nobody notices.
+
+    The second is the house minimum increase, the same floor the ladder
+    applies. On a well-performing account the loss-ratio floor lands
+    BELOW the expiring premium: NOMADA's is 91,003 against an expiring
+    103,487, and a row on the pricing table reading "minimum acceptable
+    91,003, accept" invites a 12% reduction on an account whose renewal
+    ask is +24.7%. The house does not write that, so the table must not
+    print it as though it would.
     """
     if not trended_claims or target_loss_ratio <= 0:
         return None
-    return round(trended_claims / target_loss_ratio, 2)
+    by_loss_ratio = trended_claims / target_loss_ratio
+    if expiring_annual_premium and minimum_increase_pct is not None:
+        return round(max(by_loss_ratio,
+                         expiring_annual_premium * (1 + minimum_increase_pct)), 2)
+    return round(by_loss_ratio, 2)
 
 
 def _decide(premium: Optional[float], minimum: Optional[float]) -> Optional[str]:
@@ -117,21 +134,42 @@ def renewal_options(
     if expiring_annual_premium <= 0:
         raise ValueError("expiring_annual_premium must be positive.")
 
-    minimum = minimum_acceptable_premium(trended_claims, target_loss_ratio)
+    minimum = minimum_acceptable_premium(
+        trended_claims, target_loss_ratio,
+        expiring_annual_premium=expiring_annual_premium)
+    by_loss_ratio = minimum_acceptable_premium(trended_claims, target_loss_ratio)
+    # Which of the two floors is binding, so the row can say why it is
+    # where it is instead of being a number the reader has to trust.
+    floor_is_house_minimum = (
+        minimum is not None and by_loss_ratio is not None and minimum > by_loss_ratio)
+    minimum_note = (
+        f"the house minimum increase of {MINIMUM_RENEWAL_INCREASE_PCT:.0%} - this account's "
+        f"claims would allow less"
+        if floor_is_house_minimum
+        else f"lands exactly on the {target_loss_ratio:.0%} house maximum"
+    )
 
     rows: List[dict] = [
+        # No verdict on the expiring premium. It is the reference the
+        # other rows are measured against, not an option anybody is
+        # choosing - and "accept" against the price we are renewing away
+        # from reads as advice to do nothing, which is the one thing this
+        # table is not saying. Its projection stays, because "renewed
+        # flat, this account lands at 83.5%" is worth knowing.
         price_option(
             "Current premium", expiring_annual_premium, expiring_annual_premium,
-            trended_claims, minimum, key="expiring",
-            note="what the account pays today"),
+            trended_claims, None, key="expiring",
+            note="what the account pays today - the reference, not an option"),
         price_option(
             "Technical premium", technical_premium, expiring_annual_premium,
             trended_claims, minimum, key="technical",
             note="Method 1's own ask - the ladder, unadjusted"),
+        # No verdict here either, for the same reason as the expiring row
+        # and one more: this IS the line, so "accept" on it is circular.
         price_option(
             "Minimum acceptable", minimum, expiring_annual_premium,
-            trended_claims, minimum, key="minimum_acceptable",
-            note=f"lands exactly on the {target_loss_ratio:.0%} house maximum"),
+            trended_claims, None, key="minimum_acceptable",
+            note=minimum_note),
     ]
     for option in (quoted or []):
         rows.append(price_option(
@@ -144,6 +182,12 @@ def renewal_options(
         "trended_claims": round(trended_claims, 2) if trended_claims else None,
         "target_loss_ratio": target_loss_ratio,
         "minimum_acceptable_premium": minimum,
+        # Both floors, and which one is binding. A single number here
+        # would hide the fact that on a well-performing account the
+        # claims allow less than the house will write.
+        "minimum_by_loss_ratio": by_loss_ratio,
+        "minimum_is_house_floor": floor_is_house_minimum,
+        "minimum_increase_pct": MINIMUM_RENEWAL_INCREASE_PCT,
         "loading_pct": loading_pct,
         # The technical premium's own projection, stated because it is not
         # a coincidence: it is (1 - loading) by construction, and it is
@@ -157,7 +201,7 @@ def renewal_options(
 
 def premium_build_up(
     expiring_annual_premium: float,
-    incurred_claims: Optional[float],
+    loss_ratio: Optional[float],
     inflation_pts: float,
     loading_pct: float,
     required_premium: Optional[float] = None,
@@ -170,22 +214,35 @@ def premium_build_up(
     worse than no waterfall - it invites the reader to check, and the
     check fails.
 
-    Inflation is expiring x points, because the ladder adds inflation to
-    the LOSS RATIO in points; taking a percentage of the claims instead
-    is the other formula, and on a loss-making account it is much larger.
+    The claims step is the LOSS RATIO against the expiring premium, not
+    the annualised claims figure. Those are two different numbers on any
+    account with mid-term movement, and using the second one here is the
+    basis mix renewal_rating.py exists to prevent: claims are earned
+    against the pro-rata premium, so putting them over the larger
+    expiring premium silently improves the ratio. On a 103,487 expiring
+    against 78,961 earned that understated the ask by 14,907 - and the
+    understatement then hid inside the reconciling step below, wearing
+    the label "house minimum".
+
+    Inflation is likewise expiring x points, because the ladder adds
+    inflation to the RATIO in points; taking a percentage of the claims
+    instead is the other formula, and on a loss-making account it is much
+    larger.
     """
-    if expiring_annual_premium <= 0 or incurred_claims is None:
+    if expiring_annual_premium <= 0 or loss_ratio is None:
         return []
-    experience = incurred_claims - expiring_annual_premium
+    claims = loss_ratio * expiring_annual_premium
+    experience = claims - expiring_annual_premium
     inflation = expiring_annual_premium * inflation_pts
-    before_loading = incurred_claims + inflation
+    before_loading = claims + inflation
     loading = before_loading / (1 - loading_pct) - before_loading
     total = before_loading + loading
 
     steps = [
         ("Expiring premium", expiring_annual_premium, "what the account pays today"),
         ("Claims experience", experience,
-         "the account's own incurred claims against what it paid"),
+         f"the account's own claims at {loss_ratio:.1%} of premium, on a full year "
+         f"at current rates"),
         (f"Claim inflation ({inflation_pts:.1%})", inflation,
          "points of the expiring premium, the house convention"),
         (f"Expenses & risk loading ({loading_pct:.1%})", loading,
@@ -208,7 +265,16 @@ def premium_build_up(
     # lands somewhere other than the final bar.
     quoted = round(required_premium if required_premium is not None else total, 2)
     gap = round(quoted - running, 2)
-    if abs(gap) >= 0.01:
+    # A few cents of accumulated rounding is not a decision, and labelling
+    # it "house minimum" would be a lie about a real thing - the reader
+    # would go looking for a floor that never applied. Sub-dirham drift is
+    # absorbed by the loading step, which is where it came from; anything
+    # a dirham or more is a genuine adjustment and gets its own step.
+    if 0 < abs(gap) < 1:
+        rows[-1]["amount"] = round(rows[-1]["amount"] + gap, 2)
+        rows[-1]["running"] = quoted
+        gap = 0.0
+    if abs(gap) >= 1:
         rows.append({
             "label": "House minimum" if gap > 0 else "Underwriter adjustment",
             "amount": gap,
@@ -250,6 +316,7 @@ def claims_performance(claims: Sequence[dict], member_count: Optional[int] = Non
     total = sum(amounts)
     by_member: dict = {}
     chronic = 0.0
+    classified = 0
     for claim in claims:
         amount = claim.get("final_amount") or 0.0
         member = claim.get("patient_id")
@@ -257,7 +324,15 @@ def claims_performance(claims: Sequence[dict], member_count: Optional[int] = Non
             by_member[member] = by_member.get(member, 0.0) + amount
         chapter = (icd10_chapter(claim.get("diagnosis_code"))
                    or claim.get("medical_category") or "")
-        if chapter and classify_diagnosis_group(chapter).get("classification") == CHRONIC:
+        if not chapter:
+            continue
+        # How many claims could be classified AT ALL, kept separate from
+        # how many came out chronic. A file whose diagnosis codes are
+        # missing or unusable produces chronic spend of zero, and "AED 0,
+        # 0.0% of the total" is a confident statement about the account
+        # when the truth is a statement about the export.
+        classified += 1
+        if classify_diagnosis_group(chapter).get("classification") == CHRONIC:
             chronic += amount
 
     top_ten = sorted(amounts, reverse=True)[:10]
@@ -273,8 +348,9 @@ def claims_performance(claims: Sequence[dict], member_count: Optional[int] = Non
         "largest_claim": round(max(amounts), 2) if amounts else None,
         "top_ten_claims": round(sum(top_ten), 2),
         "top_ten_share": round(sum(top_ten) / total, 4) if total else None,
-        "chronic_claims": round(chronic, 2),
-        "chronic_share": round(chronic / total, 4) if total else None,
+        "chronic_claims": round(chronic, 2) if classified else None,
+        "chronic_share": round(chronic / total, 4) if (total and classified) else None,
+        "classified_claims": classified,
         "high_cost_members": len(high_cost),
         "high_cost_threshold": HIGH_COST_MEMBER_THRESHOLD,
         "high_cost_incurred": round(sum(by_member[m] for m in high_cost), 2),

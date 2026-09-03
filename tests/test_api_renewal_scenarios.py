@@ -447,10 +447,36 @@ class TestPricingOptions:
         broker = self.by_key(body, "broker")
         assert broker["premium"] is None and broker["decision"] is None
 
-    def test_the_minimum_acceptable_lands_on_the_house_maximum(self, client, case):
+    def test_the_minimum_acceptable_is_the_higher_of_the_two_floors(self, client, case):
+        # Two floors, and the binding one wins. The loss-ratio floor is
+        # this account's trended claims over the house maximum; the other
+        # is the house minimum increase the ladder already applies. On a
+        # well-performing account the first lands BELOW the expiring
+        # premium, and a row reading "minimum acceptable, accept" at a
+        # reduction is not something the house would write.
         body = self.options(client, case)
-        assert self.by_key(body, "minimum_acceptable")["projected_loss_ratio"] == pytest.approx(
-            body["target_loss_ratio"], abs=0.001)
+        row = self.by_key(body, "minimum_acceptable")
+
+        assert row["premium"] == max(
+            body["minimum_by_loss_ratio"],
+            round(body["expiring_annual_premium"] * (1 + body["minimum_increase_pct"]), 2))
+        if body["minimum_is_house_floor"]:
+            assert row["premium"] > body["minimum_by_loss_ratio"]
+            assert row["change_pct"] == pytest.approx(
+                body["minimum_increase_pct"] * 100, abs=0.01)
+        else:
+            assert row["projected_loss_ratio"] == pytest.approx(
+                body["target_loss_ratio"], abs=0.001)
+
+    def test_the_two_reference_rows_carry_no_verdict(self, client, case):
+        # The expiring premium is what the other rows are measured
+        # against; the minimum acceptable IS the line. A pill on either
+        # says something the table does not mean.
+        body = self.options(client, case)
+        assert self.by_key(body, "expiring")["decision"] is None
+        assert self.by_key(body, "minimum_acceptable")["decision"] is None
+        # But both are still projected - that is the information.
+        assert self.by_key(body, "expiring")["projected_loss_ratio"] is not None
 
     def test_the_waterfall_reaches_method_1s_premium(self, client, case):
         body = self.options(client, case)
@@ -486,6 +512,57 @@ class TestPricingOptions:
         assert body["pricing_blocked"] is True
         assert body["options"] == []
         assert body["claims_performance"]["total_incurred"] > 0
+
+    def test_a_book_sourced_case_still_classifies_its_chronic_claims(self, client):
+        # Chronic is read off each claim's ICD-10 chapter, and the book's
+        # claim lines were being handed over without their diagnosis CODE
+        # - so every account priced off the book reported chronic spend of
+        # nil, confidently and silently. A description cannot stand in for
+        # the code: it is free text an operator typed.
+        db = client.db_session_local()
+        db.bulk_insert_mappings(models.PortfolioMember, [{
+            "beneficiary_id": f"B{i}", "contract": "Chronic Co",
+            "master_contract": "Chronic Co", "relation": "employee", "age": 40, "gender": "M",
+            "policy_start_date": POLICY_START, "policy_end_date": date(2026, 9, 30),
+            "member_start_date": POLICY_START, "member_end_date": date(2026, 9, 30),
+            "gross_premium": 10_000.0, "actual_gross_premium": 10_000.0,
+        } for i in range(10)])
+        db.bulk_insert_mappings(models.PortfolioClaimEntry, [{
+            "patient_id": "B0", "final_amount": 30_000.0, "claim_status": "Paid Claims",
+            "date_of_treatment": date(2026, 1, 10),
+            # Type 2 diabetes: the endocrine chapter, which the house
+            # classifies as chronic.
+            "diagnosis_code": "E119", "diagnosis_description": "Type 2 diabetes",
+        }])
+        db.add(models.PortfolioDataSnapshot(data_as_of_date=date(2026, 8, 15)))
+        db.commit()
+        db.close()
+
+        case_id = _create_case(client, company_name="Chronic Co")
+        client.patch(f"/cases/{case_id}", json={**HOUSE_FEES, "business_type": "existing"})
+        performance = self.options(client, case_id)["claims_performance"]
+
+        assert performance["chronic_claims"] == 30_000.0
+        assert performance["chronic_share"] == pytest.approx(1.0)
+        assert performance["classified_claims"] == 1
+
+    def test_claims_with_no_usable_diagnosis_report_nothing_rather_than_zero(self, client, case):
+        # "Chronic AED 0, 0.0% of the total" is a confident statement
+        # about the account when the truth is a statement about the
+        # export. Not measured is the honest answer, and it points at the
+        # claims file rather than at the group.
+        db = client.db_session_local()
+        for row in db.query(models.ClaimsLedgerEntry).all():
+            row.diagnosis_code = None
+            row.diagnosis_description = None
+        db.commit()
+        db.close()
+
+        performance = self.options(client, case)["claims_performance"]
+        assert performance["claim_count"] > 0
+        assert performance["classified_claims"] == 0
+        assert performance["chronic_claims"] is None
+        assert performance["chronic_share"] is None
 
     def test_an_unknown_case_is_a_404(self, client):
         assert client.get("/cases/999999/renewal-options").status_code == 404

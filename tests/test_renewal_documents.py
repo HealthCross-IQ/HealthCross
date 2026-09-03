@@ -30,14 +30,21 @@ def _payload(client, override=None):
 
 # --- the two documents ---------------------------------------------------
 
-def test_the_summary_is_the_decision_and_nothing_else(client):
+def test_the_summary_answers_three_questions_and_asks_no_others(client):
+    # "Your first design should answer only three questions within ten
+    # seconds: is this account profitable or risky, why is it risky, what
+    # should the underwriter do." Everything that EXPLAINS those answers -
+    # the ladder, the build-up, the claims detail - is a section further
+    # down, because a first page carrying its own workings is not read in
+    # ten seconds.
     _, payload = _payload(client)
     html = render_renewal_summary(payload)
 
-    for wanted in ("Renewal Summary", "The renewal ask", "Premium"):
+    for wanted in ("Renewal Summary", "Is it risky?", "Why?", "What should we do?"):
         assert wanted in html
     # The explaining sections belong to the report, not here.
-    for unwanted in ("Census</h2>", "Benefits</h2>", "Claims</h2>", "Basis</h2>"):
+    for unwanted in ("Census</h2>", "Benefits</h2>", "Claims</h2>", "Basis</h2>",
+                     "The renewal ask</h2>", "The premium build-up</h2>"):
         assert unwanted not in html
 
 
@@ -45,10 +52,14 @@ def test_the_report_carries_the_census_benefits_and_claims(client):
     _, payload = _payload(client)
     html = render_renewal_report(payload)
 
-    for section in ("Census", "Benefits", "Claims", "Basis"):
+    for section in ("Pricing", "Census", "Benefits", "Claims", "Basis"):
         assert f"<h2>{section}</h2>" in html
     assert 'class="sec-no">02' in html
-    assert 'class="sec-no">05' in html
+    assert 'class="sec-no">06' in html
+    # The workings the summary deliberately leaves out are one section
+    # down, not gone.
+    assert "The renewal ask</h2>" in html
+    assert "The premium build-up</h2>" in html
 
 
 def test_both_documents_quote_the_same_ask(client):
@@ -75,9 +86,12 @@ def test_an_overridden_ask_is_never_printed_beside_the_computed_one_unlabelled(c
     # Both figures still appear - but each is now named.
     assert "Quoted &mdash; what we are asking" in html
     assert "Experience &mdash; what the account asks for" in html
-    assert "Quoted increase" in html
-    assert "an override" in html
-    # And the share footnote no longer describes the other number.
+    assert "Quoted renewal increase" in html
+    assert "an underwriting decision, not a measurement" in html
+    # And the verdict banner - the one line every reader takes away -
+    # says which of the two figures it is naming rather than asserting
+    # the account "needs" a number that is a decision.
+    assert "We are quoting" in html
     assert "the experience asks" in html
 
 

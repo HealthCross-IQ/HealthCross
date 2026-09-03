@@ -862,4 +862,7 @@ def test_the_printed_report_says_it_is_not_priced_rather_than_omitting_the_ask(c
     assert "Not priced" in html
     assert "renewal loading is not set" in html
     # The experience is still on the page - it is not what is missing.
-    assert "Gross earned loss ratio" in html
+    assert "Gross loss ratio" in html
+    # And the withheld price is stated as the verdict, not left to be
+    # inferred from an empty space where the ask would be.
+    assert "the renewal price is withheld" in html

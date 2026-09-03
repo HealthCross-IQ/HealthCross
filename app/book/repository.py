@@ -152,6 +152,14 @@ def large_claim_lines(db: Session) -> List[dict]:
         models.PortfolioClaimEntry.client_name,
         models.PortfolioClaimEntry.provider_name,
         models.PortfolioClaimEntry.diagnosis_description,
+        # The CODE as well as the description. Everything that classifies a
+        # claim as chronic reads the code's ICD-10 chapter
+        # (app.reference.icd10_chapters), and a line that arrives without
+        # one is not classified as anything - so claims performance
+        # reported chronic spend of nil on accounts whose claims file
+        # carries the codes. A description alone cannot stand in: it is
+        # free text an operator typed.
+        models.PortfolioClaimEntry.diagnosis_code,
         models.PortfolioClaimEntry.date_of_treatment,
         models.PortfolioClaimEntry.final_amount,
     ).all()
@@ -162,11 +170,12 @@ def large_claim_lines(db: Session) -> List[dict]:
             "client_name": master_by_beneficiary.get(patient_id) or client_name,
             "provider_name": provider_name,
             "diagnosis_description": diagnosis_description,
+            "diagnosis_code": diagnosis_code,
             "date_of_treatment": date_of_treatment,
             "final_amount": final_amount,
         }
         for patient_id, group_name, client_name, provider_name, diagnosis_description,
-        date_of_treatment, final_amount in rows
+        diagnosis_code, date_of_treatment, final_amount in rows
     ]
 
 

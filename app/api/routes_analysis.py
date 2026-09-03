@@ -2021,13 +2021,6 @@ def get_renewal_options(
     trended claims and the house maximum, not typed. A remembered figure
     goes stale the moment the claims file is refreshed.
     """
-    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
-    from app.scoring.rules.renewal_options import (
-        claims_performance,
-        premium_build_up,
-        renewal_options,
-    )
-
     case = db.query(models.Case).filter(models.Case.id == case_id).first()
     if not case:
         raise HTTPException(status_code=404, detail="Case not found")
@@ -2040,13 +2033,49 @@ def get_renewal_options(
                    "and no claims ledger uploaded.",
         )
 
+    return {
+        "case_id": case.id,
+        **_renewal_pricing(
+            case, renewal,
+            commercial_premium=commercial_premium,
+            retention_premium=retention_premium,
+            broker_premium=broker_premium,
+            target_loss_ratio=target_loss_ratio,
+        ),
+    }
+
+
+def _renewal_pricing(
+    case: models.Case,
+    renewal: dict,
+    *,
+    commercial_premium: Optional[float] = None,
+    retention_premium: Optional[float] = None,
+    broker_premium: Optional[float] = None,
+    target_loss_ratio: Optional[float] = None,
+) -> dict:
+    """The options table, the build-up behind it, and the claims under it.
+
+    Assembled here once because two callers need it - the screen's
+    /renewal-options endpoint and the printed Renewal Bench document - and
+    a document that priced its own options would be a second answer to
+    the question the screen already answers. The whole point of the table
+    is that every row is projected against the same trended claims; two
+    implementations of it would not survive one change to that line.
+    """
+    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+    from app.scoring.rules.renewal_options import (
+        claims_performance,
+        premium_build_up,
+        renewal_options,
+    )
+
     lines = _case_claim_lines(case)
     census_count = len(case.census_records) or None
     performance = claims_performance(lines["claims"], member_count=census_count)
 
     if renewal.get("pricing_blocked"):
         return {
-            "case_id": case.id,
             "pricing_blocked": True,
             "pricing_problems": renewal.get("pricing_problems"),
             "claims_performance": performance,
@@ -2076,12 +2105,15 @@ def get_renewal_options(
     ]
 
     return {
-        "case_id": case.id,
         "pricing_blocked": False,
         "claims_source": lines["source"],
         "claims_performance": performance,
+        # The ladder's OWN loss ratio, not the annualised claims figure.
+        # The two are different numbers on any account with mid-term
+        # movement, and the waterfall has to be built on the same basis
+        # the price was - see premium_build_up.
         "build_up": premium_build_up(
-            expiring, renewal.get("annualized_incurred_claims"), inflation, loading,
+            expiring, renewal.get("actual_loss_ratio"), inflation, loading,
             required_premium=renewal.get("required_premium")),
         **renewal_options(
             expiring,
@@ -2822,9 +2854,11 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
         claim_belongs_to_term,
         continuing_and_leaving,
         current_term_members,
+        roster_term_end,
         term_member_windows,
     )
     from app.scoring.rules.renewal_repricing import member_claim_ranking
+    from app.scoring.rules.underwriting_alerts import underwriting_alerts
 
     case = _get_case_or_404(db, case_id)
     rating = _case_renewal_rating(case)
@@ -2884,6 +2918,15 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
          "high_exposure": d.get("high_exposure")}
         for d in top_diagnoses_by_final_amount(own, top_n=8)
     ]
+    claimants = member_claim_ranking(term, by_beneficiary, windows, top=8)
+    # The concentration reading, struck exactly as the Account Dashboard
+    # strikes it - the top claimant's incurred over the book's own
+    # incurred figure. A document that computed the share a second way
+    # would eventually print a different percentage to the screen it was
+    # opened from, and there would be no way to tell which was wrong.
+    top_amount = claimants[0]["incurred"] if claimants else None
+    incurred = book.get("incurred_claims") or 0.0
+    term_end, _term_end_warning = roster_term_end(account)
     return {
         "case": {
             "id": case.id,
@@ -2891,8 +2934,24 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
             "broker_name": case.broker_name,
             "product": _mode_of([m.get("product_name") for m in term]),
             "renewal_date": case.renewal_date,
+            # When the expiring term actually ends, read off the roster
+            # rather than the policy_end_date field - the exports disagree
+            # with each other by a day and the roster cannot drift.
+            "term_end_date": term_end,
         },
         "book": book,
+        # What the numbers are SAYING, not just what they are. The same
+        # rules the Account Dashboard runs, so the printed page and the
+        # screen cannot read one account two ways.
+        "alerts": underwriting_alerts(
+            book,
+            top_claimant_share=(top_amount / incurred if (top_amount and incurred) else None),
+            top_claimant_amount=top_amount,
+            loading_problems=_renewal_loading(case, None)[1],
+        ),
+        # The price points on the table, each with the loss ratio it lands
+        # on. Same function the /renewal-options screen calls.
+        "pricing": _renewal_pricing(case, rating),
         "ladder": rating.get("ladder"),
         "rating": {
             "required_premium": rating.get("required_premium"),
@@ -2929,7 +2988,7 @@ def get_renewal_report(case_id: int, db: Session = Depends(get_db)):
         ],
         "monthly": monthly,
         "top_diagnoses": diagnoses,
-        "top_claimants": member_claim_ranking(term, by_beneficiary, windows, top=8),
+        "top_claimants": claimants,
         "census": _renewal_census_profile(term),
         "encounter_split": utilization_by_encounter_type(own),
         "population": {

@@ -20,7 +20,8 @@ from app.scoring.rules.renewal_options import (
 
 # Serviceplan's own shape: 168.2% earned, 26.5% loading, 7.5 points.
 EXPIRING = 1_882_801.0
-INCURRED = 3_167_446.0
+LOSS_RATIO = 1.682
+INCURRED = LOSS_RATIO * EXPIRING
 LOADING = 0.265
 PTS = 0.075
 TRENDED = INCURRED + EXPIRING * PTS
@@ -58,14 +59,19 @@ class TestTheProjection:
         assert result["trended_claims"] == pytest.approx(TRENDED, abs=0.01)
         assert TRENDED > INCURRED
 
-    def test_the_current_premium_is_on_the_table_too(self):
-        # "Do nothing" is an option, and it should be priced like one.
+    def test_the_current_premium_is_projected_but_not_judged(self):
+        # It is the reference the other rows are measured against, not an
+        # option anybody is choosing. On an account whose house-maximum
+        # verdict comes out "accept" while the ladder asks +24.7%, a pill
+        # in that row reads as advice to do nothing - the one thing the
+        # table is not saying. The projection stays, because "renewed
+        # flat, this account lands at 175.7%" is the point.
         result = renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=LOADING)
         current = by_key(result, "expiring")
         assert current["premium"] == EXPIRING
         assert current["change_pct"] == 0
         assert current["projected_loss_ratio"] > 1.6
-        assert current["decision"] == DECISION_REJECT
+        assert current["decision"] is None
 
 
 class TestTheMinimumAcceptable:
@@ -90,6 +96,36 @@ class TestTheMinimumAcceptable:
     def test_no_claims_means_no_minimum_rather_than_a_division(self):
         assert minimum_acceptable_premium(None) is None
         assert minimum_acceptable_premium(0.0) is None
+
+    def test_the_house_minimum_increase_floors_it_on_a_good_account(self):
+        # NOMADA's shape: an account performing well enough that its own
+        # trended claims allow 91,003 against an expiring 103,487. A row
+        # reading "minimum acceptable 91,003, accept" invites a 12%
+        # REDUCTION on an account whose renewal ask is +24.7%, and the
+        # house does not write that - so the table must not print it as
+        # though it would.
+        expiring, trended = 103_487.0, 86_453.0
+        by_claims = minimum_acceptable_premium(trended)
+        assert by_claims < expiring
+
+        floored = minimum_acceptable_premium(trended, expiring_annual_premium=expiring)
+        assert floored == pytest.approx(expiring * 1.09, abs=0.01)
+
+        result = renewal_options(expiring, 129_034.39, trended, loading_pct=0.33)
+        assert result["minimum_is_house_floor"] is True
+        assert result["minimum_by_loss_ratio"] == by_claims
+        row = by_key(result, "minimum_acceptable")
+        assert row["premium"] == floored
+        assert "house minimum increase" in row["note"]
+
+    def test_the_reference_rows_carry_no_verdict(self):
+        # The expiring premium is what the others are measured against
+        # and the minimum acceptable IS the line, so a verdict on it is
+        # circular.
+        result = renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=LOADING)
+        assert by_key(result, "expiring")["decision"] is None
+        assert by_key(result, "minimum_acceptable")["decision"] is None
+        assert by_key(result, "technical")["decision"] == DECISION_ACCEPT
 
 
 class TestTheDecision:
@@ -132,12 +168,12 @@ class TestTheWaterfallAddsUp:
         # than no waterfall: it invites the reader to check, and the
         # check fails. Serviceplan's drawn as 1.88 + 1.29 + 0.31 + 0.72
         # = 4.20 under a final bar reading 4.50.
-        rows = premium_build_up(EXPIRING, INCURRED, PTS, LOADING)
+        rows = premium_build_up(EXPIRING, LOSS_RATIO, PTS, LOADING)
         steps = [r for r in rows if r["amount"] is not None]
         assert sum(r["amount"] for r in steps) == pytest.approx(rows[-1]["running"], abs=1.0)
 
     def test_each_running_total_is_the_one_before_plus_the_step(self):
-        rows = premium_build_up(EXPIRING, INCURRED, PTS, LOADING)
+        rows = premium_build_up(EXPIRING, LOSS_RATIO, PTS, LOADING)
         running = 0.0
         for row in rows:
             if row["amount"] is None:
@@ -148,21 +184,46 @@ class TestTheWaterfallAddsUp:
     def test_inflation_is_points_of_the_expiring_premium(self):
         # Not a percentage of the claims - that is the other formula, and
         # on a loss-making account it is much larger.
-        rows = premium_build_up(EXPIRING, INCURRED, PTS, LOADING)
+        rows = premium_build_up(EXPIRING, LOSS_RATIO, PTS, LOADING)
         inflation = next(r for r in rows if "inflation" in r["label"].lower())
         assert inflation["amount"] == pytest.approx(EXPIRING * PTS, abs=0.01)
         assert inflation["amount"] != pytest.approx(INCURRED * PTS, abs=1.0)
 
     def test_it_ends_on_the_ladder_premium(self):
-        rows = premium_build_up(EXPIRING, INCURRED, PTS, LOADING)
+        rows = premium_build_up(EXPIRING, LOSS_RATIO, PTS, LOADING)
         assert rows[-1]["running"] == pytest.approx(TECHNICAL, abs=1.0)
 
     def test_the_required_premium_passed_in_wins_over_the_reconstruction(self):
         # Where the caller has Method 1's own figure - floored, rounded,
         # or overridden - the waterfall must end on THAT, not on a
         # rebuild of it a few dirhams away.
-        rows = premium_build_up(EXPIRING, INCURRED, PTS, LOADING, required_premium=4_501_303.0)
+        rows = premium_build_up(EXPIRING, LOSS_RATIO, PTS, LOADING, required_premium=4_501_303.0)
         assert rows[-1]["running"] == 4_501_303.0
 
     def test_no_claims_is_no_waterfall(self):
         assert premium_build_up(EXPIRING, None, PTS, LOADING) == []
+
+    def test_it_is_built_on_the_ratio_not_on_annualised_claims(self):
+        # The two are different numbers on any account with mid-term
+        # movement: claims are earned against the PRO-RATA premium, so
+        # putting the annualised claims figure over the larger expiring
+        # premium silently improves the ratio - the basis mix
+        # renewal_rating.py exists to prevent.
+        #
+        # NOMADA's own shape: 78,961 earned against 103,487 expiring.
+        # Feeding the annualised claims in reached 114,128 where the
+        # ladder asks 129,034, and the 14,907 then hid inside the
+        # reconciling step wearing the label "house minimum".
+        expiring, earned, ratio, pts, loading = 103_487.0, 78_960.84, 0.7604, 0.075, 0.33
+        annualised = ratio * earned
+        rows = premium_build_up(expiring, ratio, pts, loading)
+        ladder = expiring * (ratio + pts) / (1 - loading)
+
+        assert rows[-1]["running"] == pytest.approx(ladder, abs=1.0)
+        # And nothing had to be reconciled away to get there.
+        assert not [r for r in rows if r["label"] in ("House minimum", "Underwriter adjustment")]
+        # The claims step is the ratio's own money, not the annualised
+        # figure, and on this account they are 9,987 apart.
+        claims = next(r for r in rows if r["label"] == "Claims experience")
+        assert claims["running"] == pytest.approx(ratio * expiring, abs=1.0)
+        assert claims["running"] != pytest.approx(annualised, abs=100.0)

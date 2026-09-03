@@ -648,6 +648,15 @@
   .rb-pill { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 3px 9px; border-radius: 999px; white-space: nowrap; }
   .rb-pill-warning { background: var(--rb-warning-soft); color: var(--rb-warning); }
   .rb-pill-good { background: var(--rb-good-soft); color: var(--rb-good); }
+  .rb-pill-critical { background: var(--rb-critical-soft); color: var(--rb-critical); }
+  /* A price the underwriter types, beside the ones the engine derives.
+     Narrow, because a premium is at most nine digits and a wide box in a
+     table row reads as the row's main content. */
+  /* Qualified with the element so it outranks the global
+     input[type=number] rule's width:100% - an attribute selector and a
+     class weigh the same, and that one comes first in the sheet. */
+  input.rb-opt-input { width: 128px; font-family: 'IBM Plex Mono', monospace; font-size: 12px;
+                  text-align: right; padding: 5px 8px; }
 
   .rb-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
   @media (max-width: 900px) { .rb-grid-2 { grid-template-columns: 1fr; } }
@@ -3450,6 +3459,7 @@ function renderCaseWorkspace() {
         <div data-rb-step="census" id="renewal-bench-census-comparison-area"></div>
         <div data-rb-step="adjustments" id="renewal-bench-repricing-area"></div>
         <div data-rb-step="adjustments" id="renewal-bench-scenarios-area"></div>
+        <div data-rb-step="pricing" id="renewal-bench-options-area"></div>
         <div data-rb-step="pricing" id="renewal-premium-buildup-area"></div>
         <div data-rb-step="claims" id="renewal-bench-claims-area"></div>
         <div data-rb-step="pricing" id="renewal-bench-scorecard-area"></div>
@@ -3511,6 +3521,7 @@ function renderCaseWorkspace() {
   loadMemberRates();
   loadRenewalBenchSummary();
   loadRenewalScenarios();
+  loadRenewalOptions();
   loadRenewalBenchScorecard();
   loadRenewalBenchNbComparison();
   loadRenewalBenchLargeClaims();
@@ -4133,7 +4144,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -4144,7 +4155,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -4342,7 +4353,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -4353,7 +4364,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   // The executive summary sits ABOVE the upload panel and reads the case
@@ -5669,6 +5680,7 @@ async function adoptComputedExistingPremium(computedTotal) {
     // the whole tab is reloaded rather than just this one card.
     await loadRenewalBenchSummary();
     await loadRenewalScenarios();
+    await loadRenewalOptions();
     await loadRenewalBenchScorecard();
     await loadRenewalBenchNbComparison();
     await loadExecutiveSummary();
@@ -5735,6 +5747,7 @@ async function fillMemberRatesFromBook() {
     toast(parts.join('; '), r.filled_from_book === 0);
     await loadRenewalBenchSummary();
     await loadRenewalScenarios();
+    await loadRenewalOptions();
   } catch (err) {
     toast(err.message || 'Could not fill rates from the book', true);
   }
@@ -5976,6 +5989,111 @@ async function loadRenewalScenarios() {
   } catch (err) {
     area.innerHTML = '';
   }
+}
+
+/* ---------------- pricing options ----------------
+
+   An underwriter chooses between premiums, not percentages, and the
+   question that separates them was never on the page: at THIS premium,
+   where does the loss ratio land? Every row - including the ones typed
+   into this panel - is projected against the same trended claims, so the
+   table can be read straight down the column. A commercial price
+   measured against a different denominator to the technical one would
+   leave you unable to say which option was better, which is the only
+   thing the table is for. */
+let renewalOptionInputs = { commercial: null, retention: null, broker: null };
+
+function setRenewalOption(key, value) {
+  const n = parseFloat(value);
+  renewalOptionInputs[key] = (isFinite(n) && n > 0) ? n : null;
+  loadRenewalOptions();
+}
+
+async function loadRenewalOptions() {
+  const area = document.getElementById('renewal-bench-options-area');
+  if (!area || !currentCase) return;
+  try {
+    const p = new URLSearchParams();
+    if (renewalOptionInputs.commercial != null) p.set('commercial_premium', renewalOptionInputs.commercial);
+    if (renewalOptionInputs.retention != null) p.set('retention_premium', renewalOptionInputs.retention);
+    if (renewalOptionInputs.broker != null) p.set('broker_premium', renewalOptionInputs.broker);
+    const r = await api(`/cases/${currentCase.id}/renewal-options?${p}`);
+    area.innerHTML = _rbOptionsHtml(r);
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+const RB_DECISION_PILL = { accept: 'good', review: 'warning', reject: 'critical' };
+const RB_TYPED_OPTIONS = { commercial: 'commercial', retention: 'retention', broker: 'broker' };
+
+function _rbOptionsHtml(r) {
+  const money = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const ratio = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+  const move = v => v == null ? '&mdash;' : (v > 0 ? '+' : '') + v.toFixed(2) + '%';
+
+  if (r.pricing_blocked) {
+    return `
+      <div class="rb-card">
+        <div class="rb-card-title">Pricing options</div>
+        <div class="rb-card-sub">No price to project against yet.
+          ${escapeHtml((r.pricing_problems && r.pricing_problems[0] && r.pricing_problems[0].message) || '')}</div>
+      </div>`;
+  }
+
+  const rows = (r.options || []).map(o => {
+    const typed = RB_TYPED_OPTIONS[o.key];
+    const pill = o.decision
+      ? `<span class="rb-pill rb-pill-${RB_DECISION_PILL[o.decision]}">${escapeHtml(o.decision)}</span>`
+      : '&mdash;';
+    // A typed option is an input where the others are a figure - the
+    // underwriter's own price points belong on the same table as the
+    // derived ones, priced by the same line, or they get compared in
+    // somebody's head against a different denominator.
+    const premium = typed
+      ? `<input type="number" step="1000" class="rb-opt-input" value="${o.premium == null ? '' : o.premium}"
+           placeholder="type a price"
+           onchange="setRenewalOption('${typed}', this.value)">`
+      : money(o.premium);
+    return `
+      <tr class="${o.key === 'technical' ? 'base' : (o.premium == null ? 'inert' : '')}">
+        <td>${escapeHtml(o.label)}${o.note ? `<span class="sub">${escapeHtml(o.note)}</span>` : ''}</td>
+        <td class="num">${premium}</td>
+        <td class="num">${move(o.change_pct)}</td>
+        <td class="num">${ratio(o.projected_loss_ratio)}</td>
+        <td class="num">${pill}</td>
+      </tr>`;
+  }).join('');
+
+  const floorNote = r.minimum_is_house_floor
+    ? `the house minimum increase of ${ratio(r.minimum_increase_pct)} on the expiring premium &mdash;
+       this account&rsquo;s own claims would allow as little as ${money(r.minimum_by_loss_ratio)},
+       which the house does not write`
+    : `this account&rsquo;s trended claims over the ${ratio(r.target_loss_ratio)} house maximum,
+       derived rather than typed`;
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Pricing options</div>
+      <div class="rb-card-sub">At each of these premiums, where does the loss ratio land? Every row is
+        projected against the same trended claims &mdash; ${money(r.trended_claims)}, what next year is
+        expected to cost &mdash; so the table reads straight down the column. Not last year&rsquo;s
+        claims: those would flatter every option by the whole of the inflation assumption.</div>
+      <table class="rb-scenario-table" style="margin-top:14px;">
+        <thead><tr>
+          <th>Option</th><th class="num">Premium</th><th class="num">vs expiring</th>
+          <th class="num">Projected loss ratio</th><th class="num">Decision</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="rb-card-sub" style="margin:14px 0 0;">The technical premium lands on
+        ${ratio(r.technical_projected_loss_ratio)} because that is (1 &minus; the
+        ${ratio(r.loading_pct)} loading) by construction &mdash; it is the line every other option is
+        measured against. A price is accepted at or above the minimum acceptable premium of
+        ${money(r.minimum_acceptable_premium)}, which is ${floorNote}, and reviewed within
+        ${ratio(r.review_band_pct)} below it. The two reference rows carry no verdict: the expiring
+        premium is what the others are measured against, and the minimum acceptable IS the line.</div>
+    </div>`;
 }
 
 function _rbAdjustmentsHtml(adjustments) {

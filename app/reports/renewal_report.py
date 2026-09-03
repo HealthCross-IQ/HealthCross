@@ -19,7 +19,7 @@ from datetime import date
 from typing import List, Optional
 
 from app.reports.underwriting_report import (
-    _HEAD,
+    _HEAD_PLAIN,
     STYLESHEET,
     _footer,
     _logo_img,
@@ -88,6 +88,69 @@ table.t td.note{color:var(--muted);font-size:10.5px}
 .vs .quoted .n{color:var(--warn)}
 .vs .computed .n{color:var(--navy)}
 
+/* --- the three questions ----------------------------------------------
+   The first page answers exactly three: is this account risky, why, and
+   what should be done about it. Everything that EXPLAINS those answers -
+   the ladder, the premium build-up, the claims detail - is a section
+   further down, because a first page carrying its own workings is a
+   first page nobody reads in ten seconds. */
+.verdict{display:flex;align-items:flex-start;gap:15px;border:1px solid var(--rule);
+  border-left:5px solid var(--alert);padding:14px 18px;margin:0 0 22px}
+.verdict.warn{border-left-color:var(--warn)} .verdict.ok{border-left-color:var(--ok)}
+.verdict .tag{font-family:var(--mono);font-size:10px;font-weight:700;text-transform:uppercase;
+  letter-spacing:.09em;color:var(--alert);white-space:nowrap;padding-top:2px}
+.verdict.warn .tag{color:var(--warn)} .verdict.ok .tag{color:var(--ok)}
+.verdict .say{font-size:12.5px;line-height:1.6;color:var(--ink);margin:0}
+.verdict .say strong{color:var(--navy)}
+
+/* Account information: the facts, as facts. No card, no chart. */
+.facts{display:grid;grid-template-columns:auto 1fr auto 1fr;gap:0 14px;font-size:11.5px;
+  border:1px solid var(--rule);padding:13px 16px;margin:0}
+.facts dt{font-family:var(--mono);font-size:8.5px;text-transform:uppercase;letter-spacing:.07em;
+  color:var(--muted);padding:5px 0;white-space:nowrap}
+.facts dd{margin:0;padding:5px 0;color:var(--navy);font-weight:600}
+
+/* Gross to net, side by side with the reason between them. A reader who
+   is told 168.2% and 228.8% without being told what happened in between
+   assumes one of them is wrong. */
+.compare{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;
+  border:1px solid var(--rule);margin:0}
+.compare>.side{padding:15px 18px}
+.compare .l{font-family:var(--mono);font-size:8px;text-transform:uppercase;letter-spacing:.08em;
+  color:var(--muted);display:block;margin-bottom:6px}
+.compare .n{font-size:25px;font-weight:700;font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+  line-height:1.05;display:block}
+.compare .s{font-size:10.5px;color:var(--muted);margin-top:5px;line-height:1.5}
+.compare .arrow{padding:0 4px;color:var(--navy-25);font-size:20px;line-height:1}
+.compare .gross .n{color:var(--warn)} .compare .net .n{color:var(--alert)}
+.compare .gross .n.ok,.compare .net .n.ok{color:var(--ok)}
+
+/* Why it is risky: the readings, worst first, each with its action. */
+.why{border:1px solid var(--rule);margin:0}
+.why .r{display:grid;grid-template-columns:6px 1fr;gap:13px;padding:12px 16px 12px 0;
+  border-bottom:1px solid var(--rule)}
+.why .r:last-child{border-bottom:0}
+.why .r>i{background:var(--alert);display:block}
+.why .r.high>i{background:var(--warn)} .why .r.watch>i{background:var(--sky)}
+.why h4{margin:0 0 3px;font-size:12px;color:var(--navy);font-weight:700}
+.why p{margin:0;font-size:11px;line-height:1.55;color:var(--ink)}
+.why p.act{color:var(--muted);margin-top:4px}
+.why p.act b{color:var(--navy);font-weight:600}
+
+/* The decision column. A pill, because "accept" three times in a column
+   of text is a paragraph and this is meant to be scanned. */
+.pill{display:inline-block;font-family:var(--mono);font-size:8.5px;font-weight:700;
+  text-transform:uppercase;letter-spacing:.07em;padding:3px 8px;border-radius:2px;white-space:nowrap}
+.pill.accept{background:var(--ok-wash);color:var(--ok)}
+.pill.review{background:var(--warn-wash);color:var(--warn)}
+.pill.reject{background:var(--alert-wash);color:var(--alert)}
+table.t tr.lead td{background:var(--sky-25)}
+table.t tr.lead td.num{font-weight:700}
+/* The claims metrics have short labels and long explanations, and auto
+   layout gave the explanation the width - so "Members who claimed"
+   wrapped onto two lines beside a column of white space. */
+.perf table.t td:first-child{width:168px}
+
 /* Client version: everything internal folds away in one click. */
 [data-view="client"] .internal-only{display:none!important}
 
@@ -142,20 +205,6 @@ table.t td.note{color:var(--muted);font-size:10.5px}
   .sec-head,h1,h2{break-after:avoid}
 }
 """
-
-
-def _kpi(label: str, value: str, foot: str = "", tone: str = "") -> str:
-    return (f'<div class="kpi"><span class="l">{label}</span>'
-            f'<span class="v {tone}">{value}</span>'
-            f'{f"<span class=f>{foot}</span>" if foot else ""}</div>')
-
-
-def _ratio_tone(ratio: Optional[float]) -> str:
-    if ratio is None:
-        return ""
-    if ratio >= 1.0:
-        return "bad"
-    return "warn" if ratio >= 0.85 else "good"
 
 
 def _rows(pairs: List[tuple]) -> str:
@@ -214,35 +263,326 @@ def _net_ratio_note(book: dict, rating: dict) -> str:
     return note
 
 
-def _headline(payload: dict) -> str:
+def _sentence(text: str) -> str:
+    """A clause written to sit mid-sentence, promoted to its own sentence.
+
+    str.capitalize would lowercase everything after the first letter and
+    take "The ask below is priced on the 21.5%" down with it.
+    """
+    text = text.strip()
+    if not text:
+        return ""
+    return text[0].upper() + text[1:] + ("" if text.endswith(".") else ".")
+
+
+def _verdict(payload: dict) -> tuple:
+    """The ten-second answer: is this account profitable or risky.
+
+    Read off the alerts rather than recomputed here - the alert rules ARE
+    the house's reading of a loss ratio, and a document that re-derived
+    the verdict from the raw ratio would eventually disagree with the
+    screen the reader opened it from.
+    """
+    alerts = payload.get("alerts") or []
     book, rating = payload["book"], payload["rating"]
+    gross = book.get("gross_loss_ratio")
+    critical = [a for a in alerts if a["severity"] == "critical"]
+    high = [a for a in alerts if a["severity"] == "high"]
+
+    if rating.get("pricing_blocked"):
+        return ("Not priced", "warn",
+                "The experience below is complete, but the renewal price is withheld until the "
+                "inputs it depends on are entered.")
     inc = rating.get("renewal_increase_pct")
+    computed = rating.get("computed_increase_pct")
+    if inc is None:
+        ask = ""
+    elif rating.get("increase_source") == "override":
+        # "It needs +12%" would be false where 12% is a decision and the
+        # experience asks for 66%. The banner is the one line a reader is
+        # certain to take away, so it says which of the two it is naming.
+        ask = (f' We are quoting <strong>{"+" if inc >= 0 else "&minus;"}{abs(inc)}%</strong> '
+               f'&mdash; {aed(rating.get("required_premium"))}; the experience asks '
+               f'{"+" if (computed or 0) >= 0 else "&minus;"}{abs(computed)}% '
+               f'({aed(rating.get("computed_required_premium"))}).')
+    else:
+        ask = (f' It needs <strong>{"+" if inc >= 0 else "&minus;"}{abs(inc)}%</strong> '
+               f'&mdash; {aed(rating.get("required_premium"))} against '
+               f'{aed(rating.get("renewal_base_premium"))} annualised expiring.')
+    if critical:
+        # Name the reading that made it critical. "High risk" beside a
+        # gross ratio of 76% reads as a contradiction until the reader
+        # knows the risk is one member carrying 58% of the claims.
+        worst = ", ".join(a["title"].lower() for a in critical)
+        return ("High risk", "",
+                f'The account runs at <strong>{pct(gross)}</strong> of the premium it earned.{ask} '
+                f'Critical: {esc(worst)} &mdash; see below.')
+    if high:
+        return ("Above target", "warn",
+                f'The account runs at <strong>{pct(gross)}</strong> of the premium it earned.{ask}')
+    return ("On plan", "ok",
+            f'The account runs at <strong>{pct(gross)}</strong> of the premium it earned, inside '
+            f'the house target.{ask}')
+
+
+def _verdict_banner(payload: dict) -> str:
+    word, tone, say = _verdict(payload)
+    return (f'<div class="verdict {tone}"><span class="tag">{word}</span>'
+            f'<p class="say">{say}</p></div>')
+
+
+def _account_information(payload: dict, today: date) -> str:
+    """The facts about what is being renewed, before any figure about it.
+
+    An underwriter reading a renewal for the first time needs to know
+    which account, which product, how many lives and over what period
+    before a loss ratio means anything - and every one of those was
+    scattered across a sentence in the old page.
+    """
+    case, book = payload["case"], payload["book"]
+
+    def fact(value):
+        # esc() the value, not the fallback - escaping "&mdash;" printed
+        # the entity itself on the page.
+        return esc(value) if value else "&mdash;"
+
+    rows = [
+        ("Client", fact(case.get("company_name"))),
+        ("Product", fact(case.get("product"))),
+        ("Broker", fact(case.get("broker_name"))),
+        ("Members", fact(book.get("member_count"))),
+        ("Policy start", fact(book.get("policy_start_date"))),
+        ("Expiry", fact(case.get("term_end_date"))),
+        ("Experience period", f'{book.get("days")} days, to {esc(book.get("as_of"))}'),
+        ("Prepared", long_date(today)),
+    ]
+    return ('<dl class="facts">'
+            + "".join(f"<dt>{label}</dt><dd>{value}</dd>" for label, value in rows)
+            + "</dl>")
+
+
+def _ratio_compare(payload: dict) -> str:
+    """Gross beside net, with what happened in between written between them.
+
+    These two figures are the ones a non-underwriter misreads: told the
+    account is at 168% and also at 229%, the natural conclusion is that
+    one of them is a mistake. Nothing changed except that the expenses
+    came out of the premium first, and saying so is a sentence, not a
+    footnote.
+    """
+    book, rating = payload["book"], payload["rating"]
+    gross, net = book.get("gross_loss_ratio"), book.get("net_loss_ratio")
+    if gross is None or net is None:
+        return ""
+    loading = book.get("loading_pct")
     return (
-        '<div class="kpis">'
-        + _kpi("Gross earned loss ratio", pct(book.get("gross_loss_ratio")),
-               f'{aed(book.get("incurred_claims"))} &divide; {aed(book.get("earned_premium"))} earned',
-               _ratio_tone(book.get("gross_loss_ratio")))
-        + _kpi("Net earned loss ratio", pct(book.get("net_loss_ratio")),
-               _net_ratio_note(book, rating),
-               _ratio_tone(book.get("net_loss_ratio")))
-        # The share footnote is the LADDER's, which is the experience's -
-        # so beside an overridden premium it described a different number
-        # to the one printed above it (166.1% next to a figure that was
-        # 160%). Where the two differ the footnote says what it is.
-        + _kpi("Required premium", aed(rating.get("required_premium")),
-               (f'quoted &mdash; the experience asks '
-                f'{pct(rating.get("required_share_of_expiring"))} of expiring'
-                if rating.get("increase_source") == "override"
-                else f'{pct(rating.get("required_share_of_expiring"))} of the annualised expiring premium'))
-        + _kpi(("Quoted increase" if rating.get("increase_source") == "override"
-                else "Renewal increase"),
-               ("+" if (inc or 0) >= 0 else "") + f'{inc}%' if inc is not None else "&mdash;",
-               (f'an override &mdash; experience asks {rating.get("computed_increase_pct")}%'
-                if rating.get("increase_source") == "override"
-                else f'vs {aed(rating.get("renewal_base_premium"))} annualised expiring'),
-               "bad" if (inc or 0) >= 15 else ("warn" if (inc or 0) > 0 else "good"))
-        + "</div>"
+        '<div class="compare">'
+        f'<div class="side gross"><span class="l">Gross loss ratio</span>'
+        f'<span class="n{" ok" if (gross or 0) < 1 else ""}">{pct(gross)}</span>'
+        f'<div class="s">Before expenses. Incurred claims of {aed(book.get("incurred_claims"))} '
+        f'against the {aed(book.get("earned_premium"))} the account earned over '
+        f'{book.get("days")} days.</div></div>'
+        '<div class="arrow">&#9654;</div>'
+        f'<div class="side net"><span class="l">Net loss ratio</span>'
+        f'<span class="n{" ok" if (net or 0) < 1 else ""}">{pct(net)}</span>'
+        f'<div class="s">After expenses. The same claims against the '
+        f'{aed(book.get("net_premium"))} left once the {pct(loading)} expense and commission '
+        f'allowance comes out. Nothing else changed.<br>'
+        f'<span style="color:var(--navy-50)">{_sentence(_net_ratio_note(book, rating))}</span>'
+        f'</div></div>'
+        '</div>'
     )
+
+
+def _why_risky(payload: dict) -> str:
+    """The second question, answered as readings rather than as figures.
+
+    "Loss ratio 168.2%" is a fact; "this is not a rate-increase
+    conversation, restructure or decline" is the underwriting decision
+    that fact implies. The alerts carry both, and the action is the half
+    a page of numbers never says.
+    """
+    alerts = payload.get("alerts") or []
+    if not alerts:
+        return _note("No reading on this account crosses a house threshold: the loss ratio is "
+                     "inside target, no single member dominates the claims, the outstanding "
+                     "share is ordinary and the term is long enough to be credible.")
+    rows = "".join(
+        f'<div class="r {esc(a["severity"])}"><i></i><div>'
+        f'<h4>{esc(a["title"])}</h4>'
+        f'<p>{esc(a["message"])}</p>'
+        f'<p class="act"><b>Do:</b> {esc(a["action"])}</p>'
+        f'</div></div>'
+        for a in alerts
+    )
+    return f'<div class="why">{rows}</div>'
+
+
+_PILL_WORD = {"accept": "Accept", "review": "Review", "reject": "Reject"}
+
+
+def _options_table(payload: dict) -> str:
+    """The third question: what should the underwriter do.
+
+    Every row is projected against the same trended claims, so the table
+    can be read straight down the column. A commercial price measured
+    against a different denominator to the technical one would leave a
+    reader unable to say which option was better, which is the only thing
+    the table is for.
+    """
+    pricing = payload.get("pricing") or {}
+    options = [o for o in (pricing.get("options") or []) if o.get("premium") is not None]
+    if not options:
+        return ""
+    target = pricing.get("target_loss_ratio")
+    body = ""
+    for o in options:
+        decision = o.get("decision")
+        pill = (f'<span class="pill {decision}">{_PILL_WORD.get(decision, "")}</span>'
+                if decision else "&mdash;")
+        change = o.get("change_pct")
+        note = (f'<br><span class="note">{esc(o["note"])}</span>') if o.get("note") else ""
+        move = (("+" if change >= 0 else "&minus;") + f"{abs(change)}%") if change else "&mdash;"
+        body += (
+            f'<tr{" class=lead" if o.get("key") == "technical" else ""}>'
+            f'<td><strong>{esc(o["label"])}</strong>{note}</td>'
+            f'<td class="num">{aed(o["premium"])}</td>'
+            f'<td class="num">{move}</td>'
+            f'<td class="num">{pct(o.get("projected_loss_ratio"))}</td>'
+            f'<td class="num">{pill}</td></tr>'
+        )
+    minimum = pricing.get("minimum_acceptable_premium")
+    floor = (
+        f'the house minimum increase of {pct(pricing.get("minimum_increase_pct"), 0)} on the '
+        f'expiring premium &mdash; this account&rsquo;s own claims would allow as little as '
+        f'{aed(pricing.get("minimum_by_loss_ratio"))}, which the house does not write'
+        if pricing.get("minimum_is_house_floor")
+        else f'those same trended claims over the {pct(target)} house maximum, derived rather '
+             f'than typed'
+    )
+    return (
+        '<table class="t"><thead><tr><th>Option</th><th class="num">Premium</th>'
+        '<th class="num">vs expiring</th><th class="num">Projected loss ratio</th>'
+        '<th class="num">Decision</th></tr></thead>'
+        f'<tbody>{body}</tbody></table>'
+        + _note(
+            f'Projected loss ratio is this account&rsquo;s trended claims &mdash; '
+            f'{aed(pricing.get("trended_claims"))}, what next year is expected to cost &mdash; '
+            f'divided by the premium in that row. Not last year&rsquo;s claims: using those would '
+            f'flatter every option by the whole of the inflation assumption. '
+            f'A price is accepted at or above the minimum acceptable premium of '
+            f'{aed(minimum)}, which is {floor}, and reviewed within '
+            f'{pct(pricing.get("review_band_pct"), 0)} below it. The two reference rows carry no '
+            f'verdict: the expiring premium is what the other rows are measured against, and the '
+            f'minimum acceptable IS the line.'
+        )
+    )
+
+
+def _build_up(payload: dict) -> str:
+    """The ladder as a waterfall whose bars reach its own final figure.
+
+    Each step is the actual amount that step adds and the running total
+    accumulates the ROUNDED steps, because a reader checks a waterfall by
+    adding up the numbers in front of them. Where the house floor lifted
+    the ask above what the experience built, that difference is a labelled
+    step - the alternative is a total that does not equal its own parts,
+    which invites exactly the check that then fails.
+    """
+    rows = (payload.get("pricing") or {}).get("build_up") or []
+    if not rows:
+        return ""
+    top = max((r.get("running") or 0) for r in rows) or 1
+    bars = bar_rows([
+        {"label": esc(r["label"]),
+         "value_text": aed(r.get("running")),
+         "width": f'{(r.get("running") or 0) / top * 100:.1f}%',
+         "fill": "navy" if r["amount"] is None else "",
+         "key": r["amount"] is None,
+         "value_class": "key" if r["amount"] is None else ""}
+        for r in rows
+    ], label_width=190)
+    body = "".join(
+        f'<tr><td>{esc(r["label"])}</td>'
+        f'<td class="num">{aed(r["amount"]) if r["amount"] is not None else "&mdash;"}</td>'
+        f'<td class="num">{aed(r.get("running"))}</td>'
+        f'<td class="note">{esc(r.get("note") or "")}</td></tr>'
+        for r in rows
+    )
+    return ('<section><h2 class="sec">The premium build-up</h2>'
+            '<p class="desc">The same ladder in money rather than in ratios. Each bar is the '
+            'running total, and the steps add up to the final one exactly &mdash; including the '
+            'house minimum where it lifted the ask above what the experience built.</p>'
+            + bars
+            + '<table class="t" style="margin-top:13px"><thead><tr><th>Step</th>'
+              '<th class="num">Adds</th><th class="num">Running</th><th>What it is</th>'
+              '</tr></thead>'
+            + f'<tbody>{body}</tbody></table></section>')
+
+
+def _claims_performance(payload: dict) -> str:
+    """What the year cost and the shape of it.
+
+    Frequency counts claim LINES per member while the claimant ratio
+    counts members with any claim at all - a member with five claims is
+    five in one and one in the other, which is why both are here. An
+    account can be expensive because a few people are very ill or because
+    everybody goes to the doctor, and those are different renewals.
+    """
+    pricing = payload.get("pricing") or {}
+    p = pricing.get("claims_performance") or {}
+    if not p.get("claim_count"):
+        return ""
+    book = payload["book"]
+    rows = [
+        ("Total claim lines", aed(p.get("total_incurred")),
+         f'the {p.get("claim_count"):,} lines on {esc(pricing.get("claims_source") or "file")} '
+         f'for this term'),
+        ("Number of claims", f'{p.get("claim_count"):,}', "individual claim lines, not claimants"),
+        ("Members who claimed", f'{p.get("distinct_claimants"):,}',
+         (f'{pct(p.get("claimant_ratio"))} of the census &mdash; the rest did not claim at all'
+          if p.get("claimant_ratio") is not None else "distinct claimants")),
+        ("Claim frequency",
+         f'{p.get("claim_frequency")}' if p.get("claim_frequency") is not None else "&mdash;",
+         "claims per member on the census. Counts a member with five claims five times"),
+        ("Average claim cost", aed(p.get("average_claim_cost")), "per claim line"),
+        ("Largest single claim", aed(p.get("largest_claim")), "one line, not one member"),
+        ("Top ten claims", aed(p.get("top_ten_claims")),
+         f'{pct(p.get("top_ten_share"))} of the total &mdash; ten lines out of '
+         f'{p.get("claim_count"):,}'),
+        ("Chronic conditions", aed(p.get("chronic_claims")),
+         (f'{pct(p.get("chronic_share"))} of the total, from '
+          f'{p.get("classified_claims"):,} of {p.get("claim_count"):,} claims that carry a usable '
+          f'diagnosis. An <strong>estimate</strong>: read off each claim&rsquo;s diagnosis chapter, '
+          f'and a chapter blends ongoing conditions with one-off events. No claims file marks a '
+          f'claim as chronic'
+          if p.get("classified_claims")
+          else 'Not measured. No claim on this account carries a diagnosis code that resolves to '
+               'an ICD-10 chapter, so there is nothing to classify &mdash; which is a fact about '
+               'the claims export, not about the account')),
+        ("High-cost members", f'{p.get("high_cost_members"):,}',
+         f'members whose own claims reach {aed(p.get("high_cost_threshold"))} &mdash; '
+         f'{aed(p.get("high_cost_incurred"))} between them. The same line large-loss analysis uses'),
+    ]
+    # The claim lines and the incurred figure are not the same number and
+    # never will be: the incurred figure carries a reserve for claims that
+    # have not been reported yet, and a reserve has no lines. Stating the
+    # difference is the only thing that stops a reader treating one of the
+    # two as an error.
+    total, incurred = p.get("total_incurred") or 0, book.get("incurred_claims") or 0
+    gap = round(incurred - total, 2)
+    reconcile = _note(
+        f'These lines total {aed(total)}. The renewal is priced from incurred claims of '
+        f'{aed(incurred)} &mdash; a difference of {aed(abs(gap))}, which is the '
+        f'{aed(book.get("ibnr"))} reserved for claims incurred but not yet reported. A reserve '
+        f'has no claim lines, so it cannot appear in the table above.'
+    ) if abs(gap) >= 1 else ""
+    return ('<section><h2 class="sec">Claims performance</h2>'
+            '<p class="desc">What the year cost and the shape of it. Frequency counts claim '
+            'lines per member; the claimant ratio counts members with any claim at all. An '
+            'account can be expensive because a few people are very ill or because everybody '
+            'goes to the doctor, and those are different renewals.</p>'
+            '<div class="perf">' + _rows(rows) + "</div>" + reconcile + "</section>")
 
 
 def _section(no: str, title: str, sub: str, body: str, internal_only: bool = False) -> str:
@@ -689,16 +1029,39 @@ def _toolbar(title: str, download_url: str) -> str:
 
 
 def _summary_body(payload: dict, today: date) -> str:
-    """The decision, and only the decision. One page."""
+    """Three questions, in the order they get asked.
+
+        1. Is this account profitable or risky?
+        2. Why is it risky?
+        3. What should the underwriter do?
+
+    Nothing else. The ladder, the premium build-up and the claims detail
+    all EXPLAIN those three answers and none of them is one, so they are
+    sections further down rather than competing for the first page. A
+    first page carrying its own workings is a first page that takes five
+    minutes to read, and the whole value of this one is that it takes
+    ten seconds.
+    """
     return (
         _masthead(payload)
         + _identity(payload, today)
-        + _headline(payload)
         + '<div class="pad">'
+        + _verdict_banner(payload)
+        + _account_information(payload, today)
+        + '<h2 class="sec" style="margin-top:26px">Is it risky?</h2>'
+        '<p class="desc">The two ratios a renewal turns on. They differ by the expense '
+        'allowance and nothing else.</p>'
+        + _ratio_compare(payload)
+        + '<h2 class="sec" style="margin-top:26px">Why?</h2>'
+        '<p class="desc">Every reading on this account that crosses a house threshold, worst '
+        'first, with what to do about it before pricing.</p>'
+        + _why_risky(payload)
+        + '<h2 class="sec" style="margin-top:26px">What should we do?</h2>'
+        '<p class="desc">Each price on the table, and the loss ratio it lands on. The workings '
+        'behind the technical premium are in the pricing section.</p>'
         + _quoted_vs_computed(payload)
         + _the_ask(payload)
-        + _ladder(payload)
-        + _premiums(payload)
+        + _options_table(payload)
         + "</div>"
     )
 
@@ -718,7 +1081,7 @@ def render_renewal_summary(payload: dict, today: Optional[date] = None) -> str:
         + _footer("HealthCross &middot; Renewal Summary", esc(company))
     )
     return (
-        _HEAD.format(title=esc(f"{company} - Renewal Summary"), css=STYLESHEET + EXTRA_CSS)
+        _HEAD_PLAIN.format(title=esc(f"{company} - Renewal Summary"), css=STYLESHEET + EXTRA_CSS)
         + _toolbar(f"{esc(company)} &middot; Renewal Summary",
                    f'/cases/{payload["case"]["id"]}/renewal-summary.html')
         + _page("Renewal summary", body)
@@ -739,24 +1102,28 @@ def render_renewal_report(payload: dict, today: Optional[date] = None) -> str:
     body = (
         _summary_body(payload, today)
         + '<div class="pad">'
-        + _section("02", "Census", "The population being renewed - who is on risk, and how it "
+        + _section("02", "Pricing", "How the technical premium was arrived at. The summary states "
+                                    "the ask; this is the arithmetic behind it, step by step, so "
+                                    "it can be checked rather than trusted.",
+                   _ladder(payload) + _build_up(payload) + _premiums(payload))
+        + _section("03", "Census", "The population being renewed - who is on risk, and how it "
                                    "has moved since the expiring term.",
                    _census(payload) + _population(payload))
-        + _section("03", "Benefits", "The cover behind the price. The same loss ratio on a "
+        + _section("04", "Benefits", "The cover behind the price. The same loss ratio on a "
                                      "different annual limit is a different account.",
                    _benefits(payload))
-        + _section("04", "Claims", "What the money went on: the shape of the year, who carried "
+        + _section("05", "Claims", "What the money went on: the shape of the year, who carried "
                                    "it, and what for.",
-                   _claims_buildup(payload) + _monthly(payload) + _encounters(payload)
-                   + _claimants(payload) + _diagnoses(payload))
-        + _section("05", "Basis", "What every figure above was measured on, so it can be "
+                   _claims_performance(payload) + _claims_buildup(payload) + _monthly(payload)
+                   + _encounters(payload) + _claimants(payload) + _diagnoses(payload))
+        + _section("06", "Basis", "What every figure above was measured on, so it can be "
                                   "checked rather than trusted.",
                    _basis(payload), internal_only=True)
         + "</div>"
         + _footer("HealthCross &middot; Renewal Report", esc(company))
     )
     return (
-        _HEAD.format(title=esc(f"{company} - Renewal Report"), css=STYLESHEET + EXTRA_CSS)
+        _HEAD_PLAIN.format(title=esc(f"{company} - Renewal Report"), css=STYLESHEET + EXTRA_CSS)
         + _toolbar(f"{esc(company)} &middot; Renewal Report",
                    f'/cases/{payload["case"]["id"]}/renewal-report.html')
         + _page("Renewal report", body)

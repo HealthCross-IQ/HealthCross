@@ -1389,14 +1389,26 @@ def _section_if_price_cannot_move(payload: dict) -> str:
 
 # --- the whole document -------------------------------------------------
 
-_HEAD = """<!doctype html>
+#: The document, up to <body>, with no furniture of its own. A document
+#: that brings its own toolbar (the renewal Summary and Report both do)
+#: uses this and adds it after.
+_HEAD_PLAIN = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800&family=Montserrat:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
 <style>{css}</style></head><body>
-<div class="toolbar"><button type="button" onclick="window.print()">Print / Save as PDF</button></div>
 """
+
+#: With the bare print button, for a document that has no toolbar. The
+#: renewal documents must NOT use this: they carry their own toolbar with
+#: a Download PDF button that first tells the reader to untick headers and
+#: footers, and stacking a plain window.print() above it offered the same
+#: action twice with the worse one on top.
+_HEAD = _HEAD_PLAIN + (
+    '<div class="toolbar"><button type="button" onclick="window.print()">'
+    "Print / Save as PDF</button></div>\n"
+)
 
 
 def render_underwriting_report(payload: dict, today: Optional[date] = None) -> str:
