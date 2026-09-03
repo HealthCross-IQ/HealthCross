@@ -977,6 +977,26 @@ def account_overview(
     ]
     by_beneficiary = group_claims_by_beneficiary(in_term)
 
+    # An account that renewed has a row per policy period, and the card
+    # below only appears when the book holds more than one. Where it
+    # holds ONE but the account's own members have claims dated before
+    # that period started, the earlier year exists in the claims file and
+    # not in the membership export - which is a fact about the upload,
+    # not about the account, and silence is the worst way to report it.
+    period_start = (
+        date.fromisoformat(row["policy_start_date"]) if row and row.get("policy_start_date") else None
+    )
+    earlier = [
+        c for c in claims
+        if c["date_of_treatment"] and period_start and c["date_of_treatment"] < period_start
+    ] if len(account_rows) < 2 else []
+    earlier_claims = {
+        "claim_count": len(earlier),
+        "incurred": round(sum(c["final_amount"] or 0.0 for c in earlier), 2),
+        "from": min(c["date_of_treatment"] for c in earlier).isoformat() if earlier else None,
+        "to": max(c["date_of_treatment"] for c in earlier).isoformat() if earlier else None,
+    } if earlier else None
+
     claimants = member_claim_ranking(current, by_beneficiary, windows, top=top)
     incurred = (row or {}).get("incurred_claims") or 0.0
     top_claimant_amount = claimants[0]["incurred"] if claimants else None
@@ -1031,6 +1051,9 @@ def account_overview(
         # term is not credited with 140 lives in month one.
         "monthly_burning_cost": burning_cost,
         "policy_periods": periods,
+        # Only ever set when there is exactly one period on the book and
+        # the claims file reaches back past it.
+        "earlier_claims": earlier_claims,
         "encounter_split": utilization_by_encounter_type(in_term),
         "top_claimants": claimants,
         "top_claimant_share": round(top_claimant_share, 4) if top_claimant_share else None,

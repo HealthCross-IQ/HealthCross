@@ -411,3 +411,70 @@ class TestMoreThanOneYearOnTheBook:
         data = overview(book)
         assert len(data["policy_periods"]) == 1
         assert data["policy_periods"][0]["change_pts"] is None
+
+
+class TestAnEarlierYearInTheClaimsFileOnly:
+    """"The client has two years of data but I cannot see last year's loss
+    ratio" has two causes, and only one of them is a missing feature.
+
+    The card needs two POLICY PERIODS on the book, and a period comes
+    from the Membership export. An export holding only the current year
+    gives one period however far back the claims file reaches - and
+    there is genuinely no premium to measure the earlier claims against.
+    Reporting that as a missing card tells the reader nothing.
+    """
+
+    @pytest.fixture()
+    def claims_reach_further_back_than_the_roster(self, client, tmp_path):
+        members = _write_xlsx(tmp_path, "m.xlsx", MEMBERS_HEADER, [
+            _member("Acquisit DMCC", "ACQ001", 500000),
+            _member("Acquisit DMCC", "ACQ002", 400000),
+        ])
+        claims = _write_xlsx(tmp_path, "c.xlsx", CLAIMS_HEADER, [
+            _claim("ACQ001", "Acquisit DMCC", "2026-05-10", 40_000.0),
+            # Last year - the members are the same people, and the export
+            # carries their claims, but not their prior-year membership.
+            _claim("ACQ001", "Acquisit DMCC", "2025-08-14", 22_000.0),
+            _claim("ACQ002", "Acquisit DMCC", "2025-11-02", 18_000.0),
+        ])
+        for path, endpoint in ((members, "members"), (claims, "claims")):
+            with open(path, "rb") as f:
+                resp = client.post(f"/portfolio-analysis/{endpoint}/upload",
+                                   files={"file": (path.name, f, "application/octet-stream")})
+            assert resp.status_code == 200, resp.text
+        return client
+
+    def _overview(self, client):
+        return client.get("/portfolio-analysis/account-overview/Acquisit DMCC",
+                          params={"as_of": AS_OF}).json()
+
+    def test_one_period_on_the_book_however_far_the_claims_reach(self, claims_reach_further_back_than_the_roster):
+        data = self._overview(claims_reach_further_back_than_the_roster)
+        assert len(data["policy_periods"]) == 1
+
+    def test_the_earlier_claims_are_reported_rather_than_ignored(self, claims_reach_further_back_than_the_roster):
+        earlier = self._overview(claims_reach_further_back_than_the_roster)["earlier_claims"]
+        assert earlier is not None
+        assert earlier["claim_count"] == 2
+        assert earlier["incurred"] == pytest.approx(40_000.0)
+        assert earlier["from"] == "2025-08-14"
+        assert earlier["to"] == "2025-11-02"
+
+    def test_they_are_kept_out_of_the_current_year_figures(self, claims_reach_further_back_than_the_roster):
+        # The whole point of the term windows: last year's claims must not
+        # land in this year's loss ratio.
+        data = self._overview(claims_reach_further_back_than_the_roster)
+        charted = sum(m["total"] for m in data["claims_by_month"])
+        assert charted == pytest.approx(40_000.0)
+
+    def test_an_account_with_two_real_periods_reports_no_such_note(self, book):
+        # Nothing earlier than the one period on the book, so there is
+        # nothing to explain.
+        assert overview(book)["earlier_claims"] is None
+
+    def test_the_screen_explains_the_absence(self):
+        import pathlib
+        markup = (pathlib.Path(__file__).resolve().parent.parent
+                  / "app" / "static" / "index.html").read_text()
+        assert "Only one policy year on the book" in markup
+        assert "Re-upload the Membership export including the prior policy year" in markup

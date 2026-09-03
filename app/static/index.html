@@ -1640,7 +1640,25 @@ function _adBookPosition(position) {
    account that is structurally underpriced. */
 function _adPeriodsCard(data) {
   const periods = data.policy_periods || [];
-  if (periods.length < 2) return '';
+  // One period on the book, but claims dated before it: the earlier year
+  // is in the claims file and not in the membership export. Said out
+  // loud, because "where is last year?" answered with a missing card is
+  // the worst way to report a fact about an upload.
+  if (periods.length < 2) {
+    const earlier = data.earlier_claims;
+    if (!earlier) return '';
+    return `
+      <div class="card">
+        <h3>Only one policy year on the book</h3>
+        <div class="hint">This account has <b>${_adMoney(earlier.incurred)}</b> of claims across
+          ${earlier.claim_count} lines dated <b>${escapeHtml(earlier.from)}</b> to
+          <b>${escapeHtml(earlier.to)}</b> &mdash; before the policy period above started. The
+          claims file reaches back into an earlier year; the membership export does not, so there
+          is no premium to measure those claims against and no loss ratio can be struck for them.
+          Re-upload the Membership export including the prior policy year and the year-by-year
+          comparison appears here.</div>
+      </div>`;
+  }
   const rows = periods.map(p => {
     const severity = p.loss_ratio == null ? '' : p.loss_ratio > 1.6 ? 'critical'
       : p.loss_ratio > 0.95 ? 'high' : 'good';
