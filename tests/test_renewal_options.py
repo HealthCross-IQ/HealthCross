@@ -7,12 +7,13 @@ on the page: at this premium, where does the loss ratio land?
 """
 import pytest
 
-from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.renewal_options import (
     DECISION_ACCEPT,
     DECISION_REJECT,
     DECISION_REVIEW,
+    HOUSE_MAXIMUM_COMBINED_RATIO,
     REVIEW_BAND_PCT,
+    acceptance_loss_ratio,
     minimum_acceptable_premium,
     premium_build_up,
     renewal_options,
@@ -26,6 +27,9 @@ LOADING = 0.265
 PTS = 0.075
 TRENDED = INCURRED + EXPIRING * PTS
 TECHNICAL = (INCURRED + EXPIRING * PTS) / (1 - LOADING)
+# The acceptance line as it comes out on THIS account's expense load:
+# 105% combined less a 26.5% loading is a pure loss ratio of 78.5%.
+ACCEPTANCE_LR = HOUSE_MAXIMUM_COMBINED_RATIO - LOADING
 
 
 def by_key(result, key):
@@ -78,24 +82,56 @@ class TestTheMinimumAcceptable:
     def test_it_is_derived_from_the_claims_not_typed(self):
         # A remembered figure goes stale the moment the claims file is
         # refreshed and nobody notices.
-        assert minimum_acceptable_premium(TRENDED) == pytest.approx(
-            TRENDED / HOUSE_TARGET_LOSS_RATIO, abs=0.01)
+        assert minimum_acceptable_premium(TRENDED, ACCEPTANCE_LR) == pytest.approx(
+            TRENDED / ACCEPTANCE_LR, abs=0.01)
 
-    def test_it_lands_exactly_on_the_house_maximum(self):
+    def test_it_lands_on_the_house_combined_ratio(self):
         result = renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=LOADING)
         minimum = by_key(result, "minimum_acceptable")
-        assert minimum["projected_loss_ratio"] == pytest.approx(
-            HOUSE_TARGET_LOSS_RATIO, abs=0.0001)
+        # The projection is a PURE loss ratio, and at the minimum
+        # acceptable premium it plus the loading is the combined line.
+        assert minimum["projected_loss_ratio"] == pytest.approx(ACCEPTANCE_LR, abs=0.0001)
+        assert minimum["projected_loss_ratio"] + LOADING == pytest.approx(
+            HOUSE_MAXIMUM_COMBINED_RATIO, abs=0.0001)
 
-    def test_a_different_target_moves_it(self):
+    def test_a_tighter_combined_ratio_moves_it_up(self):
         result = renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=LOADING,
-                                 target_loss_ratio=0.85)
-        assert by_key(result, "minimum_acceptable")["projected_loss_ratio"] == pytest.approx(
-            0.85, abs=0.0001)
+                                 combined_ratio=1.00)
+        row = by_key(result, "minimum_acceptable")
+        assert row["projected_loss_ratio"] == pytest.approx(1.00 - LOADING, abs=0.0001)
+        # At break-even there is no room at all: the lowest writable
+        # premium IS the technical premium.
+        assert row["premium"] == pytest.approx(TECHNICAL, abs=1.0)
+
+    def test_the_same_combined_line_is_a_different_loss_ratio_on_each_account(self):
+        # Which is the whole reason the line is held as a combined ratio.
+        # Two accounts at 78.5% claims are not equally acceptable if one
+        # pays 26.5% of premium away in expenses and the other 33%.
+        assert acceptance_loss_ratio(0.265) == pytest.approx(0.785, abs=0.0001)
+        assert acceptance_loss_ratio(0.33) == pytest.approx(0.72, abs=0.0001)
+        assert acceptance_loss_ratio(None) is None
+
+    def test_a_looser_line_than_the_house_is_refused_not_clamped(self):
+        # Tighter is an underwriting judgement about one account. Looser
+        # is a change to the house's own position, and that is an
+        # escalation rather than a text box - clamping it silently would
+        # show a number nobody asked for and say nothing about it.
+        with pytest.raises(ValueError) as refused:
+            renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=LOADING,
+                            combined_ratio=HOUSE_MAXIMUM_COMBINED_RATIO + 0.01)
+        assert "authority sign-off" in str(refused.value)
+
+    def test_no_loading_means_no_acceptance_line_rather_than_a_guess(self):
+        # A renewal with no fee split entered is not priced at all, so
+        # there is nothing to be permissive about.
+        result = renewal_options(EXPIRING, TECHNICAL, TRENDED, loading_pct=None)
+        assert result["target_loss_ratio"] is None
+        assert result["minimum_acceptable_premium"] is None
+        assert by_key(result, "technical")["decision"] is None
 
     def test_no_claims_means_no_minimum_rather_than_a_division(self):
-        assert minimum_acceptable_premium(None) is None
-        assert minimum_acceptable_premium(0.0) is None
+        assert minimum_acceptable_premium(None, ACCEPTANCE_LR) is None
+        assert minimum_acceptable_premium(0.0, ACCEPTANCE_LR) is None
 
     def test_the_house_minimum_increase_floors_it_on_a_good_account(self):
         # NOMADA's shape: an account performing well enough that its own
@@ -104,14 +140,16 @@ class TestTheMinimumAcceptable:
         # REDUCTION on an account whose renewal ask is +24.7%, and the
         # house does not write that - so the table must not print it as
         # though it would.
-        expiring, trended = 103_487.0, 86_453.0
-        by_claims = minimum_acceptable_premium(trended)
+        expiring, trended, loading = 103_487.0, 60_000.0, 0.33
+        acceptance = acceptance_loss_ratio(loading)
+        by_claims = minimum_acceptable_premium(trended, acceptance)
         assert by_claims < expiring
 
-        floored = minimum_acceptable_premium(trended, expiring_annual_premium=expiring)
+        floored = minimum_acceptable_premium(trended, acceptance,
+                                             expiring_annual_premium=expiring)
         assert floored == pytest.approx(expiring * 1.09, abs=0.01)
 
-        result = renewal_options(expiring, 129_034.39, trended, loading_pct=0.33)
+        result = renewal_options(expiring, 129_034.39, trended, loading_pct=loading)
         assert result["minimum_is_house_floor"] is True
         assert result["minimum_by_loss_ratio"] == by_claims
         row = by_key(result, "minimum_acceptable")
@@ -137,19 +175,19 @@ class TestTheDecision:
         return [by_key(result, f"o{i}")["decision"] for i in range(len(premiums))]
 
     def test_at_or_above_the_minimum_is_writable(self):
-        minimum = minimum_acceptable_premium(TRENDED)
+        minimum = minimum_acceptable_premium(TRENDED, ACCEPTANCE_LR)
         assert self._decisions(TECHNICAL, minimum, minimum + 1) == [DECISION_ACCEPT] * 3
 
     def test_just_below_is_a_conversation_not_a_refusal(self):
-        minimum = minimum_acceptable_premium(TRENDED)
+        minimum = minimum_acceptable_premium(TRENDED, ACCEPTANCE_LR)
         assert self._decisions(minimum * (1 - REVIEW_BAND_PCT / 2)) == [DECISION_REVIEW]
 
     def test_well_below_is_refused(self):
-        minimum = minimum_acceptable_premium(TRENDED)
+        minimum = minimum_acceptable_premium(TRENDED, ACCEPTANCE_LR)
         assert self._decisions(minimum * (1 - REVIEW_BAND_PCT) - 1) == [DECISION_REJECT]
 
     def test_the_band_edge_is_still_a_review(self):
-        minimum = minimum_acceptable_premium(TRENDED)
+        minimum = minimum_acceptable_premium(TRENDED, ACCEPTANCE_LR)
         assert self._decisions(minimum * (1 - REVIEW_BAND_PCT)) == [DECISION_REVIEW]
 
     def test_an_option_with_no_premium_yet_gets_no_verdict(self):

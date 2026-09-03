@@ -468,6 +468,32 @@ class TestPricingOptions:
             assert row["projected_loss_ratio"] == pytest.approx(
                 body["target_loss_ratio"], abs=0.001)
 
+    def test_the_acceptance_line_is_a_combined_ratio_the_underwriter_can_tighten(
+            self, client, case):
+        # The house line is a COMBINED ratio - claims plus expenses over
+        # premium - because a pure loss ratio is a different underwriting
+        # position on every account: it cannot see the expense load.
+        house = self.options(client, case)
+        assert house["combined_ratio"] == house["house_maximum_combined_ratio"]
+        assert house["target_loss_ratio"] == pytest.approx(
+            house["combined_ratio"] - house["loading_pct"], abs=0.0001)
+
+        # Tightening the line moves the loss-ratio floor up. Whether it
+        # moves the ANSWER depends on which of the two floors is binding,
+        # and on this account the 9% house minimum increase still is - so
+        # the assertion is about the floor the combined ratio governs.
+        tighter = self.options(client, case, combined_ratio=1.00)
+        assert tighter["target_loss_ratio"] < house["target_loss_ratio"]
+        assert tighter["minimum_by_loss_ratio"] > house["minimum_by_loss_ratio"]
+        assert tighter["minimum_acceptable_premium"] == max(
+            tighter["minimum_by_loss_ratio"],
+            round(tighter["expiring_annual_premium"] * (1 + tighter["minimum_increase_pct"]), 2))
+
+    def test_a_line_looser_than_the_house_is_refused_with_the_reason(self, client, case):
+        resp = client.get(f"/cases/{case}/renewal-options", params={"combined_ratio": 1.20})
+        assert resp.status_code == 400
+        assert "authority sign-off" in resp.json()["detail"]
+
     def test_the_two_reference_rows_carry_no_verdict(self, client, case):
         # The expiring premium is what the other rows are measured
         # against; the minimum acceptable IS the line. A pill on either

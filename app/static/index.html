@@ -6001,11 +6001,29 @@ async function loadRenewalScenarios() {
    measured against a different denominator to the technical one would
    leave you unable to say which option was better, which is the only
    thing the table is for. */
-let renewalOptionInputs = { commercial: null, retention: null, broker: null };
+let renewalOptionInputs = { commercial: null, retention: null, broker: null, combined: null };
 
 function setRenewalOption(key, value) {
   const n = parseFloat(value);
   renewalOptionInputs[key] = (isFinite(n) && n > 0) ? n : null;
+  loadRenewalOptions();
+}
+
+/* The acceptance line, as a combined ratio. Typed in whole percent
+   because that is how it is argued about - "we'll write it to 102" -
+   and held as a fraction everywhere else. Only ever TIGHTER than the
+   house line: the server refuses anything looser with the reason, and
+   the input's max says so before the request is made. */
+function setRenewalCombinedRatio(value, houseMax) {
+  const n = parseFloat(value);
+  if (!isFinite(n) || n <= 0) { renewalOptionInputs.combined = null; }
+  else if (n / 100 > houseMax + 1e-9) {
+    toast(`The house maximum is a ${(houseMax * 100).toFixed(0)}% combined ratio. Writing an ` +
+          `account looser than that needs an authority sign-off.`);
+    renewalOptionInputs.combined = null;
+  } else {
+    renewalOptionInputs.combined = n / 100;
+  }
   loadRenewalOptions();
 }
 
@@ -6017,6 +6035,7 @@ async function loadRenewalOptions() {
     if (renewalOptionInputs.commercial != null) p.set('commercial_premium', renewalOptionInputs.commercial);
     if (renewalOptionInputs.retention != null) p.set('retention_premium', renewalOptionInputs.retention);
     if (renewalOptionInputs.broker != null) p.set('broker_premium', renewalOptionInputs.broker);
+    if (renewalOptionInputs.combined != null) p.set('combined_ratio', renewalOptionInputs.combined);
     const r = await api(`/cases/${currentCase.id}/renewal-options?${p}`);
     area.innerHTML = _rbOptionsHtml(r);
   } catch (err) {
@@ -6069,8 +6088,10 @@ function _rbOptionsHtml(r) {
     ? `the house minimum increase of ${ratio(r.minimum_increase_pct)} on the expiring premium &mdash;
        this account&rsquo;s own claims would allow as little as ${money(r.minimum_by_loss_ratio)},
        which the house does not write`
-    : `this account&rsquo;s trended claims over the ${ratio(r.target_loss_ratio)} house maximum,
-       derived rather than typed`;
+    : `this account&rsquo;s trended claims over ${ratio(r.target_loss_ratio)}, derived rather than typed`;
+
+  const houseMax = r.house_maximum_combined_ratio;
+  const atHouseLine = Math.abs((r.combined_ratio || 0) - houseMax) < 1e-9;
 
   return `
     <div class="rb-card">
@@ -6079,6 +6100,22 @@ function _rbOptionsHtml(r) {
         projected against the same trended claims &mdash; ${money(r.trended_claims)}, what next year is
         expected to cost &mdash; so the table reads straight down the column. Not last year&rsquo;s
         claims: those would flatter every option by the whole of the inflation assumption.</div>
+      <div class="row" style="align-items:flex-end; margin-top:14px; gap:10px;">
+        <div>
+          <label>Accept up to &mdash; combined ratio %</label>
+          <input type="number" step="0.5" min="1" max="${(houseMax * 100).toFixed(0)}"
+            class="rb-opt-input" value="${((r.combined_ratio || 0) * 100).toFixed(1)}"
+            onchange="setRenewalCombinedRatio(this.value, ${houseMax})">
+        </div>
+        <div class="rb-card-sub" style="flex:1; margin:0 0 4px; font-size:11.5px; line-height:1.5;">
+          Claims plus expenses over premium. On this account&rsquo;s ${ratio(r.loading_pct)} expense
+          load that leaves <b>${ratio(r.target_loss_ratio)}</b> for claims.
+          ${atHouseLine
+            ? `The house maximum &mdash; it can be tightened for one account but not loosened,
+               which needs an authority sign-off.`
+            : `Tighter than the ${ratio(houseMax)} house maximum.`}
+        </div>
+      </div>
       <table class="rb-scenario-table" style="margin-top:14px;">
         <thead><tr>
           <th>Option</th><th class="num">Premium</th><th class="num">vs expiring</th>
@@ -6088,11 +6125,14 @@ function _rbOptionsHtml(r) {
       </table>
       <div class="rb-card-sub" style="margin:14px 0 0;">The technical premium lands on
         ${ratio(r.technical_projected_loss_ratio)} because that is (1 &minus; the
-        ${ratio(r.loading_pct)} loading) by construction &mdash; it is the line every other option is
-        measured against. A price is accepted at or above the minimum acceptable premium of
-        ${money(r.minimum_acceptable_premium)}, which is ${floorNote}, and reviewed within
-        ${ratio(r.review_band_pct)} below it. The two reference rows carry no verdict: the expiring
-        premium is what the others are measured against, and the minimum acceptable IS the line.</div>
+        ${ratio(r.loading_pct)} loading) by construction &mdash; it breaks even, and it is the line
+        every other option is measured against. A price is accepted at or above the minimum
+        acceptable premium of ${money(r.minimum_acceptable_premium)}, which is ${floorNote}, and
+        reviewed within ${ratio(r.review_band_pct)} below it. The gap between the technical premium
+        and that minimum is the negotiating room, and it exists only because the house tolerates a
+        combined ratio above 100% &mdash; at break-even there is none. The two reference rows carry
+        no verdict: the expiring premium is what the others are measured against, and the minimum
+        acceptable IS the line.</div>
     </div>`;
 }
 

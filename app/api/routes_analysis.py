@@ -2002,7 +2002,7 @@ def get_renewal_options(
     commercial_premium: Optional[float] = Query(None, description="A price the account would carry commercially"),
     retention_premium: Optional[float] = Query(None, description="A price aimed at keeping the account"),
     broker_premium: Optional[float] = Query(None, description="What the broker is asking for"),
-    target_loss_ratio: Optional[float] = Query(None, description="The maximum loss ratio the minimum acceptable premium is derived from - defaults to the house maximum"),
+    combined_ratio: Optional[float] = Query(None, description="The acceptance line as a COMBINED ratio - claims plus expenses over premium. Defaults to the house maximum, and may be tightened below it but never loosened above it"),
     db: Session = Depends(get_db),
 ):
     """The price points on the table, each with the loss ratio it lands
@@ -2018,8 +2018,11 @@ def get_renewal_options(
     table is for.
 
     The minimum acceptable premium is derived from this account's own
-    trended claims and the house maximum, not typed. A remembered figure
-    goes stale the moment the claims file is refreshed.
+    trended claims and the house COMBINED ratio, not typed. A remembered
+    figure goes stale the moment the claims file is refreshed, and a
+    remembered PURE loss ratio is worse than stale: it is a different
+    underwriting position on every account, because it cannot see the
+    expense load.
     """
     case = db.query(models.Case).filter(models.Case.id == case_id).first()
     if not case:
@@ -2033,16 +2036,20 @@ def get_renewal_options(
                    "and no claims ledger uploaded.",
         )
 
-    return {
-        "case_id": case.id,
-        **_renewal_pricing(
+    try:
+        pricing = _renewal_pricing(
             case, renewal,
             commercial_premium=commercial_premium,
             retention_premium=retention_premium,
             broker_premium=broker_premium,
-            target_loss_ratio=target_loss_ratio,
-        ),
-    }
+            combined_ratio=combined_ratio,
+        )
+    except ValueError as problem:
+        # An acceptance line looser than the house's own is refused with
+        # the reason, not clamped silently - a clamp would show a number
+        # the underwriter did not ask for and say nothing about it.
+        raise HTTPException(status_code=400, detail=str(problem))
+    return {"case_id": case.id, **pricing}
 
 
 def _renewal_pricing(
@@ -2052,7 +2059,7 @@ def _renewal_pricing(
     commercial_premium: Optional[float] = None,
     retention_premium: Optional[float] = None,
     broker_premium: Optional[float] = None,
-    target_loss_ratio: Optional[float] = None,
+    combined_ratio: Optional[float] = None,
 ) -> dict:
     """The options table, the build-up behind it, and the claims under it.
 
@@ -2063,8 +2070,8 @@ def _renewal_pricing(
     is that every row is projected against the same trended claims; two
     implementations of it would not survive one change to that line.
     """
-    from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
     from app.scoring.rules.renewal_options import (
+        HOUSE_MAXIMUM_COMBINED_RATIO,
         claims_performance,
         premium_build_up,
         renewal_options,
@@ -2120,8 +2127,8 @@ def _renewal_pricing(
             renewal.get("required_premium"),
             trended_claims,
             loading_pct=loading,
-            target_loss_ratio=(target_loss_ratio if target_loss_ratio is not None
-                               else HOUSE_TARGET_LOSS_RATIO),
+            combined_ratio=(combined_ratio if combined_ratio is not None
+                            else HOUSE_MAXIMUM_COMBINED_RATIO),
             quoted=quoted,
         ),
     }

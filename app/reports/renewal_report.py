@@ -452,13 +452,24 @@ def _options_table(payload: dict) -> str:
             f'<td class="num">{pill}</td></tr>'
         )
     minimum = pricing.get("minimum_acceptable_premium")
+    combined = pricing.get("combined_ratio")
     floor = (
         f'the house minimum increase of {pct(pricing.get("minimum_increase_pct"), 0)} on the '
         f'expiring premium &mdash; this account&rsquo;s own claims would allow as little as '
         f'{aed(pricing.get("minimum_by_loss_ratio"))}, which the house does not write'
         if pricing.get("minimum_is_house_floor")
-        else f'those same trended claims over the {pct(target)} house maximum, derived rather '
-             f'than typed'
+        else f'those same trended claims over {pct(target)}, derived rather than typed'
+    )
+    # The line is a COMBINED ratio, not a pure loss ratio, and saying so
+    # is the difference between a figure a reader can check and one they
+    # have to accept. A pure maximum is a different underwriting position
+    # on every account, because it cannot see the expense load: 95% of
+    # premium going to claims on a 21.5% load is a 116.5% combined ratio.
+    line = (
+        f'The line is a <strong>combined ratio</strong> of {pct(combined, 0)} &mdash; claims plus '
+        f'expenses over premium &mdash; which on this account&rsquo;s {pct(pricing.get("loading_pct"))} '
+        f'expense load leaves {pct(target)} for claims. '
+        if (combined is not None and target is not None) else ""
     )
     return (
         '<table class="t"><thead><tr><th>Option</th><th class="num">Premium</th>'
@@ -472,9 +483,9 @@ def _options_table(payload: dict) -> str:
             f'flatter every option by the whole of the inflation assumption. '
             f'A price is accepted at or above the minimum acceptable premium of '
             f'{aed(minimum)}, which is {floor}, and reviewed within '
-            f'{pct(pricing.get("review_band_pct"), 0)} below it. The two reference rows carry no '
-            f'verdict: the expiring premium is what the other rows are measured against, and the '
-            f'minimum acceptable IS the line.'
+            f'{pct(pricing.get("review_band_pct"), 0)} below it. {line}'
+            f'The two reference rows carry no verdict: the expiring premium is what the other '
+            f'rows are measured against, and the minimum acceptable IS the line.'
         )
     )
 

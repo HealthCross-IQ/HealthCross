@@ -23,18 +23,42 @@ how much of it.
 
 The MINIMUM ACCEPTABLE premium is derived, not typed. It is the lowest
 premium at which the account still lands inside the house's own maximum
-loss ratio - so it moves with the account's claims rather than being a
-number somebody remembers.
+COMBINED ratio - so it moves with the account's claims and with its own
+expense load rather than being a number somebody remembers.
 """
 from typing import List, Optional, Sequence
 
-from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
 from app.scoring.rules.renewal_rating import MINIMUM_RENEWAL_INCREASE_PCT
 from app.scoring.rules.renewal_scenarios import DEFAULT_LARGE_CLAIM_THRESHOLD
 
 DECISION_ACCEPT = "accept"
 DECISION_REVIEW = "review"
 DECISION_REJECT = "reject"
+
+#: The worst COMBINED ratio the house will write a renewal at: claims
+#: plus expenses over premium.
+#:
+#: Deliberately not experience_pricing.HOUSE_TARGET_LOSS_RATIO, which is
+#: a different quantity answering a different question. That one is a
+#: PURE loss ratio - claims only - and it is what new business is priced
+#: to land on. Used as a renewal ACCEPTANCE line it was far looser than
+#: it looked: 95% of premium going to claims on an account carrying a
+#: 21.5% expense load is a combined ratio of 116.5%, a sixteen-point
+#: underwriting loss accepted as a standing maximum.
+#:
+#: A combined ratio is the honest way to state the line because it is the
+#: only one that survives accounts with different expense loads. Two
+#: accounts at the same pure loss ratio are not equally acceptable if one
+#: pays 15% commission and the other 33%, and a single pure-ratio maximum
+#: cannot see the difference.
+#:
+#: 105% rather than 100% because a renewal is not priced to break even in
+#: the year: the house accepts a small underwriting loss on business it
+#: wants to keep. That tolerance is exactly the gap between the technical
+#: premium and the minimum acceptable one, and it is the underwriter's
+#: negotiating room. At 100% there is none - the minimum acceptable
+#: premium and the technical premium are the same number.
+HOUSE_MAXIMUM_COMBINED_RATIO = 1.05
 
 #: How far below the minimum acceptable premium is still a conversation
 #: rather than a refusal. Inside this band the account is close enough
@@ -44,9 +68,34 @@ DECISION_REJECT = "reject"
 REVIEW_BAND_PCT = 0.10
 
 
+def acceptance_loss_ratio(
+    loading_pct: Optional[float],
+    combined_ratio: float = HOUSE_MAXIMUM_COMBINED_RATIO,
+) -> Optional[float]:
+    """The pure loss ratio a combined ratio comes to on THIS account.
+
+        combined = claims/premium + expenses/premium
+                 = loss ratio + loading
+
+    so the loss ratio the house will accept is the combined maximum less
+    this account's own loading. On a 21.5% load a 105% combined ratio is
+    a pure loss ratio of 83.5%; on a 33% load it is 72%. Those are the
+    same underwriting position stated about two different accounts, which
+    is the entire reason the line is held as a combined ratio.
+
+    None where the loading is not known - a renewal with no fee split
+    entered is not priced at all (app.api.case_loading), so there is
+    nothing to be permissive about.
+    """
+    if loading_pct is None:
+        return None
+    target = combined_ratio - loading_pct
+    return round(target, 4) if target > 0 else None
+
+
 def minimum_acceptable_premium(
     trended_claims: Optional[float],
-    target_loss_ratio: float = HOUSE_TARGET_LOSS_RATIO,
+    target_loss_ratio: Optional[float],
     expiring_annual_premium: Optional[float] = None,
     minimum_increase_pct: Optional[float] = MINIMUM_RENEWAL_INCREASE_PCT,
 ) -> Optional[float]:
@@ -54,9 +103,11 @@ def minimum_acceptable_premium(
     HIGHER of two floors.
 
     The first is the loss-ratio floor: this account's own trended claims
-    over the house maximum. Derived rather than typed, so it moves when
-    the experience does - a remembered figure goes stale the moment the
-    claims file is refreshed and nobody notices.
+    over the pure loss ratio the house will accept, which comes from
+    acceptance_loss_ratio and therefore from the account's own expense
+    load. Derived rather than typed, so it moves when the experience
+    does - a remembered figure goes stale the moment the claims file is
+    refreshed and nobody notices.
 
     The second is the house minimum increase, the same floor the ladder
     applies. On a well-performing account the loss-ratio floor lands
@@ -66,7 +117,7 @@ def minimum_acceptable_premium(
     ask is +24.7%. The house does not write that, so the table must not
     print it as though it would.
     """
-    if not trended_claims or target_loss_ratio <= 0:
+    if not trended_claims or not target_loss_ratio or target_loss_ratio <= 0:
         return None
     by_loss_ratio = trended_claims / target_loss_ratio
     if expiring_annual_premium and minimum_increase_pct is not None:
@@ -119,7 +170,7 @@ def renewal_options(
     technical_premium: Optional[float],
     trended_claims: Optional[float],
     loading_pct: Optional[float] = None,
-    target_loss_ratio: float = HOUSE_TARGET_LOSS_RATIO,
+    combined_ratio: float = HOUSE_MAXIMUM_COMBINED_RATIO,
     quoted: Optional[Sequence[dict]] = None,
 ) -> dict:
     """The price points on the table, each with the loss ratio it lands on.
@@ -130,10 +181,29 @@ def renewal_options(
     different denominator to the technical number would make the table
     unreadable in the only way that matters: you could not tell which
     option was better.
+
+    `combined_ratio` is the acceptance line, and it is the ONLY way to
+    move it. Taking a pure loss-ratio target as well would be two ways to
+    say one thing, and the two would disagree the first time an account's
+    fee split changed under one of them.
     """
     if expiring_annual_premium <= 0:
         raise ValueError("expiring_annual_premium must be positive.")
+    if combined_ratio > HOUSE_MAXIMUM_COMBINED_RATIO:
+        # Tighter than the house line is an underwriting judgement about
+        # one account. Looser is a change to the house's own position,
+        # and that is an escalation, not a text box.
+        raise ValueError(
+            f"A combined ratio of {combined_ratio:.1%} is above the house maximum of "
+            f"{HOUSE_MAXIMUM_COMBINED_RATIO:.1%}. Writing an account looser than the house "
+            f"line needs an authority sign-off, not a different number here."
+        )
 
+    # The pure loss ratio this account's own expense load leaves inside
+    # the combined line. Derived, never typed: two accounts at the same
+    # pure loss ratio are not equally acceptable if one pays 15%
+    # commission and the other 33%.
+    target_loss_ratio = acceptance_loss_ratio(loading_pct, combined_ratio)
     minimum = minimum_acceptable_premium(
         trended_claims, target_loss_ratio,
         expiring_annual_premium=expiring_annual_premium)
@@ -142,12 +212,18 @@ def renewal_options(
     # where it is instead of being a number the reader has to trust.
     floor_is_house_minimum = (
         minimum is not None and by_loss_ratio is not None and minimum > by_loss_ratio)
-    minimum_note = (
-        f"the house minimum increase of {MINIMUM_RENEWAL_INCREASE_PCT:.0%} - this account's "
-        f"claims would allow less"
-        if floor_is_house_minimum
-        else f"lands exactly on the {target_loss_ratio:.0%} house maximum"
-    )
+    if floor_is_house_minimum:
+        minimum_note = (
+            f"the house minimum increase of {MINIMUM_RENEWAL_INCREASE_PCT:.0%} - this account's "
+            f"claims would allow less"
+        )
+    elif target_loss_ratio is not None:
+        minimum_note = (
+            f"lands on a {combined_ratio:.0%} combined ratio - {target_loss_ratio:.1%} of claims "
+            f"plus this account's {loading_pct:.1%} expense load"
+        )
+    else:
+        minimum_note = "no acceptance line: this account's expense load has not been entered"
 
     rows: List[dict] = [
         # No verdict on the expiring premium. It is the reference the
@@ -180,6 +256,12 @@ def renewal_options(
     return {
         "expiring_annual_premium": round(expiring_annual_premium, 2),
         "trended_claims": round(trended_claims, 2) if trended_claims else None,
+        # The line the house holds, and what it comes to on this account.
+        # Both, because the combined ratio is the position and the pure
+        # loss ratio is only its shadow on one expense load - reporting
+        # the second alone is how the first came to be forgotten.
+        "combined_ratio": combined_ratio,
+        "house_maximum_combined_ratio": HOUSE_MAXIMUM_COMBINED_RATIO,
         "target_loss_ratio": target_loss_ratio,
         "minimum_acceptable_premium": minimum,
         # Both floors, and which one is binding. A single number here
