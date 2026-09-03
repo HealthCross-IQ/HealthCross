@@ -478,3 +478,52 @@ class TestAnEarlierYearInTheClaimsFileOnly:
                   / "app" / "static" / "index.html").read_text()
         assert "Only one policy year on the book" in markup
         assert "Re-upload the Membership export including the prior policy year" in markup
+
+    def test_the_note_fires_even_when_last_year_used_different_member_ids(self, client, tmp_path):
+        # An insurer commonly issues new beneficiary ids at renewal.
+        # Scoping the claims read to the CURRENT term's ids alone meant
+        # last year's claims were never fetched, so the note could not
+        # fire on the accounts that most needed it.
+        members = _write_xlsx(tmp_path, "m.xlsx", MEMBERS_HEADER, [
+            _member("Reissued DMCC", "NEW001", 500000),
+            _member("Reissued DMCC", "NEW002", 400000),
+        ])
+        claims = _write_xlsx(tmp_path, "c.xlsx", CLAIMS_HEADER, [
+            _claim("NEW001", "Reissued DMCC", "2026-05-10", 40_000.0),
+            # Same people, last year, under the ids they had then. Those
+            # ids are on no membership row this export carries.
+            _claim("OLD001", "Reissued DMCC", "2025-08-14", 22_000.0),
+        ])
+        for path, endpoint in ((members, "members"), (claims, "claims")):
+            with open(path, "rb") as f:
+                assert client.post(f"/portfolio-analysis/{endpoint}/upload",
+                                   files={"file": (path.name, f, "application/octet-stream")}
+                                   ).status_code == 200
+        data = client.get("/portfolio-analysis/account-overview/Reissued DMCC",
+                          params={"as_of": AS_OF}).json()
+        assert data["policy_years_on_book"] == 1
+        # The claim file carries its own client name, so the earlier year
+        # is still noticed even though the id is on no membership row.
+        earlier = data["earlier_claims"]
+        assert earlier is not None
+        assert earlier["incurred"] == pytest.approx(22_000.0)
+        assert earlier["from"] == "2025-08-14"
+        # And it stays out of the current year's figures - a claim
+        # attributed by NAME has no exposure window to sit inside, so it
+        # can never reach a priced number.
+        charted = sum(m["total"] for m in data["claims_by_month"])
+        assert charted == pytest.approx(40_000.0)
+
+
+class TestTheBookSaysHowManyYearsItHolds:
+    def test_the_count_is_on_the_payload(self, book):
+        assert overview(book)["policy_years_on_book"] == 1
+
+    def test_the_header_shows_it(self):
+        import pathlib
+        markup = (pathlib.Path(__file__).resolve().parent.parent
+                  / "app" / "static" / "index.html").read_text()
+        # "Why can I not see last year" should answer itself: one year on
+        # the book is a fact about the membership export.
+        assert "policy_years_on_book" in markup
+        assert "policy year" in markup

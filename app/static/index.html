@@ -1647,11 +1647,13 @@ function _adPeriodsCard(data) {
   if (periods.length < 2) {
     const earlier = data.earlier_claims;
     if (!earlier) return '';
+    const whose = earlier.member_count
+      ? ` across ${earlier.member_count} member${earlier.member_count === 1 ? '' : 's'}` : '';
     return `
       <div class="card">
         <h3>Only one policy year on the book</h3>
         <div class="hint">This account has <b>${_adMoney(earlier.incurred)}</b> of claims across
-          ${earlier.claim_count} lines dated <b>${escapeHtml(earlier.from)}</b> to
+          ${earlier.claim_count} lines${whose}, dated <b>${escapeHtml(earlier.from)}</b> to
           <b>${escapeHtml(earlier.to)}</b> &mdash; before the policy period above started. The
           claims file reaches back into an earlier year; the membership export does not, so there
           is no premium to measure those claims against and no loss ratio can be struck for them.
@@ -1763,6 +1765,7 @@ function renderAccountDashboard(data) {
           &middot; <b>${data.policy.member_count == null ? '-' : data.policy.member_count}</b> lives
           ${window.from ? `&middot; claims ${escapeHtml(window.from)} to ${escapeHtml(window.to)}` : ''}
           ${data.as_of ? `&middot; measured to <b>${escapeHtml(data.as_of)}</b>` : ''}
+          ${data.policy_years_on_book ? `&middot; <b>${data.policy_years_on_book}</b> policy year${data.policy_years_on_book === 1 ? '' : 's'} on the book` : ''}
         </div>
       </div>
       <div class="right">

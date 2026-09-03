@@ -941,7 +941,13 @@ def account_overview(
 
     current = current_term_members(account)
     windows = term_member_windows(current)
-    account_ids = {m.get("beneficiary_id") for m in current if m.get("beneficiary_id")}
+    # EVERY member row the account has, across every policy year - not
+    # just the renewing term's. An insurer commonly issues new
+    # beneficiary ids at renewal, so scoping the claims read to the
+    # current term's ids alone meant last year's claims were never
+    # fetched at all, and the "your export only holds one year" note
+    # below could not fire on the accounts that most needed it.
+    account_ids = {m.get("beneficiary_id") for m in account if m.get("beneficiary_id")}
 
     claims = [
         {
@@ -952,10 +958,11 @@ def account_overview(
             "ip_op_maternity": ip_op_maternity,
             "medical_category": medical_category,
             "diagnosis_description": diagnosis_description,
+            "client_name": client_name,
         }
         for (
             patient_id, date_of_treatment, final_amount, claim_status,
-            ip_op_maternity, medical_category, diagnosis_description,
+            ip_op_maternity, medical_category, diagnosis_description, client_name,
         ) in db.query(
             models.PortfolioClaimEntry.patient_id,
             models.PortfolioClaimEntry.date_of_treatment,
@@ -964,8 +971,15 @@ def account_overview(
             models.PortfolioClaimEntry.ip_op_maternity,
             models.PortfolioClaimEntry.medical_category,
             models.PortfolioClaimEntry.diagnosis_description,
+            models.PortfolioClaimEntry.client_name,
         ).all()
+        # The member join first, and the claim file's own client name as
+        # a fallback - an insurer commonly issues new beneficiary ids at
+        # renewal, so last year's claims can carry ids that appear on no
+        # membership row this export holds. Used ONLY to notice that the
+        # earlier year exists; nothing priced is scoped this way.
         if patient_id in account_ids
+        or (client_name or "").strip().casefold() == target
     ]
     # Same in-term rule member_claim_ranking uses, so the monthly chart,
     # the encounter split and the claimant list all cover exactly the
@@ -973,6 +987,7 @@ def account_overview(
     in_term = [
         c for c in claims
         if c["date_of_treatment"]
+        and c["patient_id"] in account_ids
         and claim_belongs_to_term(c["patient_id"], c["date_of_treatment"], windows)
     ]
     by_beneficiary = group_claims_by_beneficiary(in_term)
@@ -990,11 +1005,15 @@ def account_overview(
         c for c in claims
         if c["date_of_treatment"] and period_start and c["date_of_treatment"] < period_start
     ] if len(account_rows) < 2 else []
+    earlier_member_count = len({
+        c["patient_id"] for c in earlier if c.get("patient_id")
+    }) if earlier else 0
     earlier_claims = {
         "claim_count": len(earlier),
         "incurred": round(sum(c["final_amount"] or 0.0 for c in earlier), 2),
         "from": min(c["date_of_treatment"] for c in earlier).isoformat() if earlier else None,
         "to": max(c["date_of_treatment"] for c in earlier).isoformat() if earlier else None,
+        "member_count": earlier_member_count,
     } if earlier else None
 
     claimants = member_claim_ranking(current, by_beneficiary, windows, top=top)
@@ -1032,6 +1051,11 @@ def account_overview(
         "master_client": master_client,
         "case_id": case.id if case else None,
         "as_of": (row or {}).get("as_of"),
+        # How many policy years the BOOK holds for this account. On screen
+        # so "why can I not see last year" answers itself: one year on
+        # the book is a fact about the membership export, and the
+        # dashboard should not make anyone guess which.
+        "policy_years_on_book": len(account_rows),
         "policy": {
             "start_date": (row or {}).get("policy_start_date"),
             "days_elapsed": (row or {}).get("days"),
