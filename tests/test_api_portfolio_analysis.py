@@ -468,6 +468,61 @@ def test_summary_requires_rate_card_uploaded(client, members_xlsx):
     assert resp.status_code == 400
 
 
+def test_summary_group_by_age_band_matches_the_rate_card_s_own_bands(client, tmp_path, mapping_xlsx):
+    # Two members, deliberately far enough apart in age (a child vs. a
+    # near-retirement adult) that they land in different bands of the
+    # SAME rate card the standard_premium column already prices off -
+    # age_band must read the same bands price_member itself resolved by,
+    # not some independently-invented bucketing.
+    members_path = _write_xlsx(
+        tmp_path, "members_age_band.xlsx", MEMBERS_HEADER,
+        [
+            ["Acme Sub LLC", "Acme Holdings", "P100", "QC1-ACM-A", "CHILD1",
+             "2016-01-01", "M", "Single", "India", "Child",
+             "Dubai", "QIC/HC/BR/ACM/DXB/A", "PLATINUM",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             1000, 1000, None, None, 100],
+            ["Acme Sub LLC", "Acme Holdings", "P100", "QC1-ACM-A", "ADULT1",
+             "1960-01-01", "M", "Single", "India", "Principal",
+             "Dubai", "QIC/HC/BR/ACM/DXB/A", "PLATINUM",
+             "2025-01-01", "2026-01-01", "2025-01-01", "2026-01-01",
+             1000, 1000, None, None, 100],
+        ],
+    )
+    rate_card_path = _write_xlsx(
+        tmp_path, "pricing_age_bands.xlsx", PRODUCT_PRICING_HEADER,
+        [
+            ["Gold", 0, 30, 100.0, 100.0, 0, "Dubai", "MSH Platinum", "MSH MENA", "Worldwide", "2025-01-01", ""],
+            ["Gold", 31, 99, 200.0, 200.0, 0, "Dubai", "MSH Platinum", "MSH MENA", "Worldwide", "2025-01-01", ""],
+        ],
+    )
+    with open(members_path, "rb") as f:
+        client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})
+    with open(mapping_xlsx, "rb") as f:
+        client.post("/portfolio-analysis/group-product-mapping/upload", files={"file": ("mapping.xlsx", f, "application/octet-stream")})
+    with open(rate_card_path, "rb") as f:
+        client.post("/admin/rate-cards/upload", files={"file": ("pricing.xlsx", f, "application/octet-stream")})
+
+    resp = client.get("/portfolio-analysis/summary", params={"group_by": "age_band"})
+    assert resp.status_code == 200
+    rows = {r["age_band"]: r for r in resp.json()["rows"]}
+    assert rows["0-30"]["member_count"] == 1
+    assert rows["31-99"]["member_count"] == 1
+
+    # Stacks with a filter too - drilling into one product, then breaking
+    # it out by age band, is exactly the Reinsurance Report's own drill-down.
+    resp2 = client.get("/portfolio-analysis/summary", params={"group_by": "age_band", "product": "Gold"})
+    assert resp2.status_code == 200
+    rows2 = {r["age_band"]: r for r in resp2.json()["rows"]}
+    assert set(rows2) == {"0-30", "31-99"}
+
+    resp3 = client.get("/portfolio-analysis/summary", params={"group_by": "relation", "age_band": "0-30"})
+    assert resp3.status_code == 200
+    rows3 = resp3.json()["rows"]
+    assert len(rows3) == 1
+    assert rows3[0]["relation"] == "child"
+
+
 def test_full_pipeline_summary_by_product(client, members_xlsx, claims_xlsx, mapping_xlsx, rate_card_xlsx):
     with open(members_xlsx, "rb") as f:
         client.post("/portfolio-analysis/members/upload", files={"file": ("members.xlsx", f, "application/octet-stream")})

@@ -215,6 +215,10 @@ def _result_filters(
             "group_by=client to see that master's own subgroups broken out"
         ),
     ),
+    age_band: Optional[str] = Query(
+        None,
+        description="Restrict to one age band (e.g. '26-35') - the same bands the loaded rate card actually prices by, see age_bands_from_rate_cards.",
+    ),
 ) -> Dict[str, str]:
     return {
         "product": product,
@@ -225,6 +229,7 @@ def _result_filters(
         "relation": relation,
         "category": category,
         "master_client": master_client,
+        "age_band": age_band,
     }
 
 
@@ -234,7 +239,10 @@ def portfolio_summary(
         "product",
         description=(
             "One of: product, network, region, nationality_zone, client (subgroup), master_client "
-            "(master policy - combines all its subgroups into one row), gender, relation, policy_year"
+            "(master policy - combines all its subgroups into one row), gender, relation, policy_year, "
+            "age_band (the loaded rate card's own age bands - e.g. drill into one Product with "
+            "filters.product=Bronze, then group_by=age_band, or stack filters.age_band with "
+            "group_by=gender for a fixed age slice)"
         ),
     ),
     as_of: Optional[date] = Query(

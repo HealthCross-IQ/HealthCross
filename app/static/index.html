@@ -616,6 +616,7 @@
   .lr-table td.lr-better { font-weight: 700; color: var(--lr-good, #0f7a52); background: color-mix(in srgb, var(--lr-good, #0f7a52) 8%, transparent); }
   .lr-table td { padding: 9px 10px; border-bottom: 1px solid var(--lr-border); color: var(--lr-ink); }
   .lr-table tbody tr:hover td { background: var(--lr-surface-2); }
+  .lr-table tr.rr-clickable { cursor: pointer; }
   .lr-table tfoot td { padding: 11px 10px; font-weight: 700; border-top: 2px solid var(--lr-border-strong); background: var(--lr-surface-2); font-family: 'IBM Plex Mono', monospace; }
   .lr-table tfoot td.lbl { font-family: inherit; }
   .lr-acct { font-weight: 600; white-space: normal; min-width: 190px; }
@@ -976,6 +977,7 @@
         <button class="hc-rail-item" id="hc-rail-lr-tips" onclick="hcRailLossRatioTips()">Tips to Improve LR</button>
         <button class="hc-rail-item" id="hc-rail-claims-explorer" onclick="hcRailClaimsExplorer()">Claims Explorer</button>
         <button class="hc-rail-item" id="hc-rail-utilization" onclick="hcRailUtilization()">Utilization &amp; Trend</button>
+        <button class="hc-rail-item" id="hc-rail-reinsurance-report" onclick="hcRailReinsuranceReport()">Reinsurance Report</button>
       </div>
 
       <div class="hc-rail-group">
@@ -1433,6 +1435,11 @@ function hcRailLossRatio() {
 function hcRailNationalityRisk() {
   _hcRailSetActive('hc-rail-nationality');
   showNationalityRisk();
+}
+
+function hcRailReinsuranceReport() {
+  _hcRailSetActive('hc-rail-reinsurance-report');
+  showReinsuranceReport();
 }
 
 function hcRailClaimsExplorer() {
@@ -9654,6 +9661,429 @@ function portfolioAnalysisPanelHtml() {
       <div id="pa-large-claims-area">${paLastLargeClaims ? paLargeClaimsHtml(paLastLargeClaims) : ''}</div>
     </div>
   </div>`;
+}
+
+/* ---------------- reinsurance report ----------------
+
+   Whole-book claims experience assembled for a reinsurer, not a new
+   calculation of its own: every section below calls the same endpoint
+   the rest of the app already reads that figure from (Loss Ratio's own
+   /summary, /nationality-risk, /group-size-bands, /utilization,
+   /burning-cost-by-product-network, /large-claims, /account-loss-ratio's
+   own shed_impact) - a second implementation of a number this app
+   already computes is exactly how NOMADA came to read two different loss
+   ratios on two different screens (see account_loss_ratio_rows_for_book's
+   own docstring). This screen is purely an assembly/presentation layer
+   over those, so accuracy rides on the same already-tested code paths. */
+let rrState = { drillProduct: null, drillDim: 'relation' };
+
+function _rrKpi(label, value) {
+  return `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${value}</span></div>`;
+}
+
+async function showReinsuranceReport() {
+  currentCase = null;
+  document.getElementById('main').innerHTML = `
+    <div class="lr-scope">
+      <div class="lr-head">
+        <div>
+          <h2 class="lr-title">Reinsurance Report</h2>
+          <p class="lr-sub">Whole-book claims experience for reinsurance review. Every figure here is read from the same screens/endpoints the rest of the app already uses for it - Loss Ratio, Nationality Risk, Group Size, Utilization, Burning Cost Cube and Large Claims - so this is an assembly, not a second calculation.</p>
+        </div>
+        <button class="lr-btn ghost" onclick="loadReinsuranceReport()">Refresh</button>
+      </div>
+      <div id="rr-product-area">${_rrLoadingCard()}</div>
+      <div id="rr-nationality-area">${_rrLoadingCard()}</div>
+      <div id="rr-group-size-area">${_rrLoadingCard()}</div>
+      <div id="rr-benefit-area">${_rrLoadingCard()}</div>
+      <div id="rr-burning-cost-area">${_rrLoadingCard()}</div>
+      <div id="rr-top-claimants-area">${_rrLoadingCard()}</div>
+      <div id="rr-shed-area">${_rrLoadingCard()}</div>
+    </div>
+  `;
+  loadReinsuranceReport();
+}
+
+async function loadReinsuranceReport() {
+  rrState.drillProduct = null;
+  await Promise.all([
+    _rrLoadProductLR(),
+    _rrLoadNationality(),
+    _rrLoadGroupSize(),
+    _rrLoadBenefit(),
+    _rrLoadBurningCostPN(),
+    _rrLoadTopClaimants(),
+    _rrLoadShedImpact(),
+  ]);
+}
+
+function _rrLoadingCard() {
+  // 7 heavy analytical calls fire together (see loadReinsuranceReport);
+  // a real book's size means the browser's own per-origin connection
+  // limit can queue the later ones behind the earlier ones for several
+  // seconds. Every section starts on this placeholder rather than blank
+  // so a still-queued section reads as "coming" rather than "broken".
+  return '<div class="lr-card"><div class="lr-empty">Loading&hellip;</div></div>';
+}
+
+function _rrEmptyCard(title, message) {
+  return `<div class="lr-card"><div class="lr-card-title">${escapeHtml(title)}</div><div class="lr-empty">${escapeHtml(message)}</div></div>`;
+}
+
+// --- 1. Product-wise LR with the house's 30-day IBNR tail, drillable ---
+
+async function _rrLoadProductLR() {
+  const area = document.getElementById('rr-product-area');
+  try {
+    const r = await api('/portfolio-analysis/summary?group_by=product');
+    area.innerHTML = _rrProductTableHtml(r.rows || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Product-wise loss ratio (30-day IBNR)', 'Needs Membership, Claims and a Rate Card uploaded first (see Claims Explorer).');
+  }
+}
+
+function _rrProductTableHtml(rows) {
+  const body = rows.map(r => `
+    <tr class="rr-clickable" onclick="_rrDrillProduct('${escapeHtml(r.product || '')}')">
+      <td>${escapeHtml(r.product || 'Unmapped')}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.actual_premium)}</td>
+      <td class="num">${_lrMoney(r.actual_claims_paid)}</td>
+      <td class="num">${_lrMoney(r.actual_claims_outstanding)}</td>
+      <td class="num">${_lrMoney(r.ibnr)}</td>
+      <td class="num" style="font-weight:600;">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
+      <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}" style="font-weight:600;">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Product-wise loss ratio (30-day IBNR)</div>
+          <div class="lr-card-note">IBNR = Paid &divide; days &times; 30 (the house's flat tail). Click a product to drill into it by Relation/Gender/Age band.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr>
+            <th>Product</th><th class="num">Members</th><th class="num">Premium</th>
+            <th class="num">Paid</th><th class="num">Outstanding</th><th class="num">IBNR</th>
+            <th class="num">Incurred</th><th class="num">LR incl. IBNR</th>
+          </tr></thead>
+          <tbody>${body || '<tr><td colspan="8" class="lr-empty">No priced members yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div id="rr-drill-area"></div>
+    </div>
+  `;
+}
+
+async function _rrDrillProduct(product) {
+  rrState.drillProduct = product;
+  await _rrLoadDrill();
+}
+
+async function _rrSetDrillDim(dim) {
+  rrState.drillDim = dim;
+  await _rrLoadDrill();
+}
+
+async function _rrLoadDrill() {
+  const drillArea = document.getElementById('rr-drill-area');
+  if (!drillArea || !rrState.drillProduct) return;
+  drillArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
+  try {
+    const params = new URLSearchParams({ group_by: rrState.drillDim, product: rrState.drillProduct });
+    const r = await api(`/portfolio-analysis/summary?${params.toString()}`);
+    drillArea.innerHTML = _rrDrillHtml(r.rows || []);
+  } catch (err) {
+    drillArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function _rrDrillHtml(rows) {
+  const dims = [['relation', 'Relation'], ['gender', 'Gender'], ['age_band', 'Age band']];
+  const dimButtons = dims.map(([v, label]) => `
+    <button class="lr-btn ${rrState.drillDim === v ? '' : 'ghost'}" style="padding:4px 10px; font-size:12px;" onclick="_rrSetDrillDim('${v}')">${escapeHtml(label)}</button>
+  `).join('');
+  const body = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(String(r[rrState.drillDim] ?? 'Unmapped'))}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.actual_premium)}</td>
+      <td class="num">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
+      <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
+    </tr>`).join('');
+  return `
+    <div style="margin-top:10px; padding-top:10px; border-top:1px dashed rgba(15,28,46,.16);">
+      <div class="lr-card-note" style="margin-bottom:6px;">Drilling into <b>${escapeHtml(rrState.drillProduct)}</b>, by:
+        ${dimButtons}
+        <button class="lr-btn ghost" style="padding:4px 10px; font-size:12px;" onclick="rrState.drillProduct=null; document.getElementById('rr-drill-area').innerHTML='';">Close</button>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>${escapeHtml(dims.find(d => d[0] === rrState.drillDim)[1])}</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">LR incl. IBNR</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="5" class="lr-empty">No members in this slice.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 2. Nationality LR, burning cost and exposed risk population ---
+
+async function _rrLoadNationality() {
+  const area = document.getElementById('rr-nationality-area');
+  try {
+    const r = await api('/portfolio-analysis/nationality-risk');
+    area.innerHTML = _rrNationalityHtml(r.rows || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Nationality loss ratio &amp; burning cost', 'Needs Membership and Claims uploaded first.');
+  }
+}
+
+function _rrNationalityHtml(rows) {
+  const sorted = [...rows].sort((a, b) => (b.incurred_claims || 0) - (a.incurred_claims || 0));
+  const body = sorted.map(r => `
+    <tr>
+      <td>${escapeHtml(r.nationality)}</td>
+      <td>${escapeHtml(r.nationality_zone || '-')}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.actual_premium)}</td>
+      <td class="num">${_lrMoney(r.incurred_claims)}</td>
+      <td class="num ${_lrBand(r.loss_ratio)}">${_lrPct(r.loss_ratio)}</td>
+      <td class="num">${_lrMoney(r.burning_cost)}</td>
+      <td class="num">${(r.credibility * 100).toFixed(0)}%</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Nationality loss ratio, burning cost &amp; exposed risk population</div>
+          <div class="lr-card-note">Members = exposed risk population (ERP) headcount. Loss ratio = incurred (paid + outstanding + IBNR) &divide; each nationality's own actual premium. Burning cost = AED per earned member-year - see Nationality Risk for the credibility blend behind the rating factor.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr>
+            <th>Nationality</th><th>Zone</th><th class="num">Members (ERP)</th><th class="num">Premium</th>
+            <th class="num">Incurred</th><th class="num">Loss ratio</th><th class="num">Burning cost</th><th class="num">Credibility</th>
+          </tr></thead>
+          <tbody>${body || '<tr><td colspan="8" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 3. Group-size pooled loss ratio ---
+
+async function _rrLoadGroupSize() {
+  const area = document.getElementById('rr-group-size-area');
+  try {
+    const r = await api('/portfolio-analysis/group-size-bands');
+    area.innerHTML = _rrGroupSizeHtml(r.rows || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Loss ratio by group size', 'Needs Membership uploaded first.');
+  }
+}
+
+function _rrGroupSizeHtml(rows) {
+  const body = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.band)} lives</td>
+      <td class="num">${r.group_count.toLocaleString()}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${r.average_group_size ?? '-'}</td>
+      <td class="num">${_lrMoney(r.actual_premium)}</td>
+      <td class="num">${_lrMoney(r.incurred_claims)}</td>
+      <td class="num ${_lrBand(r.loss_ratio)}">${_lrPct(r.loss_ratio)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Loss ratio by group size</div>
+          <div class="lr-card-note">Pools every master client's own experience into credibility bands - small groups lean on the pooled experience of similarly-sized groups, large groups' own claims carry real weight on their own.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr>
+            <th>Group size</th><th class="num">Groups</th><th class="num">Members</th><th class="num">Avg. size</th>
+            <th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th>
+          </tr></thead>
+          <tbody>${body || '<tr><td colspan="7" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 4. Benefit-wise claims (Dental/Optical/Maternity/...) ---
+
+async function _rrLoadBenefit() {
+  const area = document.getElementById('rr-benefit-area');
+  try {
+    const r = await api('/portfolio-analysis/utilization');
+    area.innerHTML = _rrBenefitHtml(r.by_benefit_category || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Benefit-wise claims', 'Needs Claims uploaded first.');
+  }
+}
+
+function _rrBenefitHtml(rows) {
+  const body = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.category)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.total_value)}</td>
+      <td class="num">${_lrMoney(r.average_value)}</td>
+      <td class="num">${r.pct_of_total != null ? r.pct_of_total + '%' : '-'}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Benefit-wise claims</div>
+          <div class="lr-card-note">Which benefit categories drive cost - the friendlier Dental/Optical/Mental Health/Physiotherapy labels roll up the export's own raw categories (e.g. General Dental + Orthodontia + Dental Prosthesis = Dental).</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>Category</th><th class="num">Claim count</th><th class="num">Total claims</th><th class="num">Average claim</th><th class="num">% of total</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="5" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 5. Burning cost per Product x Network ---
+
+async function _rrLoadBurningCostPN() {
+  const area = document.getElementById('rr-burning-cost-area');
+  try {
+    const rows = await api('/portfolio-analysis/burning-cost-by-product-network');
+    area.innerHTML = _rrBurningCostPNHtml(rows || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Burning cost by Product &times; Network', 'Needs Membership, Claims and a Rate Card uploaded first.');
+  }
+}
+
+function _rrBurningCostPNHtml(rows) {
+  const sorted = [...rows].sort((a, b) => (a.product || '').localeCompare(b.product || '') || (a.network || '').localeCompare(b.network || ''));
+  const body = sorted.map(r => `
+    <tr>
+      <td>${escapeHtml(r.product)}</td>
+      <td>${escapeHtml(r.network)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.earned_member_years, 2)}</td>
+      <td class="num">${_lrMoney(r.actual_claims)}</td>
+      <td class="num" style="font-weight:600;">${_lrMoney(r.burning_cost)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Burning cost by Product &times; Network</div>
+          <div class="lr-card-note">Actual claims cost per earned member-year (AED), for every Product/Network pairing actually on the book - the same real-experience reference New Business Rating shows alongside the rate card's own price.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>Product</th><th>Network</th><th class="num">Members</th><th class="num">Member-years</th><th class="num">Claims</th><th class="num">Burning cost</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 6. Top 20 claimants ---
+
+async function _rrLoadTopClaimants() {
+  const area = document.getElementById('rr-top-claimants-area');
+  try {
+    const r = await api('/portfolio-analysis/large-claims?top_n_members=20');
+    area.innerHTML = _rrTopClaimantsHtml(r.top_members || []);
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Top 20 claimants', 'Needs Claims uploaded first.');
+  }
+}
+
+function _rrStatusPill(status) {
+  const cls = status === 'Active' ? 'good' : status === 'Deleted' ? 'bad' : 'thin';
+  const label = status === 'Deleted' ? 'Left' : (status || 'Unknown');
+  return `<span class="lr-exp" style="background:${cls === 'good' ? 'rgba(34,197,94,.14)' : cls === 'bad' ? 'rgba(239,68,68,.14)' : 'rgba(100,116,139,.14)'}; color:${cls === 'good' ? '#16803d' : cls === 'bad' ? '#b91c1c' : '#475569'};">${escapeHtml(label)}</span>`;
+}
+
+function _rrTopClaimantsHtml(rows) {
+  const body = rows.map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.patient_id || '-')}</td>
+      <td>${escapeHtml(r.client_name || r.group_name || '-')}</td>
+      <td class="num">${_lrMoney(r.total_claims)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td>${escapeHtml((r.diagnoses || []).slice(0, 3).join('; ')) || '-'}</td>
+      <td>${_rrStatusPill(r.member_status)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Top 20 claimants</div>
+          <div class="lr-card-note">Ranked by cumulative claims total across every line. Status: Active = still enrolled through the scheme's own policy end date; Left = enrollment ended earlier (joined late or left early); Unknown = one of the two dates is missing on file.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>#</th><th>Patient ID</th><th>Account</th><th class="num">Total claims</th><th class="num">Claim count</th><th>Medical conditions</th><th>Status</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="7" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- 7. Worst-5 clients' shed impact ---
+
+async function _rrLoadShedImpact() {
+  const area = document.getElementById('rr-shed-area');
+  try {
+    const r = await api('/portfolio-analysis/account-loss-ratio');
+    area.innerHTML = _rrShedHtml((r.shed_impact && r.shed_impact.accounts || []).slice(0, 5));
+  } catch (err) {
+    area.innerHTML = _rrEmptyCard('Worst 5 accounts - impact if not renewed', 'Needs Membership and Claims uploaded first.');
+  }
+}
+
+function _rrShedHtml(rows) {
+  const body = rows.map(r => `
+    <tr>
+      <td>${escapeHtml(r.master_client)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
+      <td class="num">${_lrMoney(r.premium_at_risk)}</td>
+      <td class="num">${_lrPct(r.book_net_loss_ratio_without)}</td>
+      <td class="num" style="font-weight:600;">${r.net_lr_change != null ? (r.net_lr_change * 100).toFixed(1) + ' pts' : '-'}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Worst 5 accounts - impact if not renewed</div>
+          <div class="lr-card-note">Ranked by improvement actually on offer (size &times; how far over book average), not by loss ratio alone. Premium at risk is what leaving permanently gives up - not netted into a recommendation, since that trade-off is a portfolio decision, not an arithmetic one.</div>
+        </div>
+      </div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>Account</th><th class="num">Members</th><th class="num">Its own net LR</th><th class="num">Premium at risk</th><th class="num">Book LR without it</th><th class="num">Book LR change</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 async function showPortfolioAnalysis() {

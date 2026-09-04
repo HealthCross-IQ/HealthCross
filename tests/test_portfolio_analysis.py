@@ -642,6 +642,27 @@ def test_top_claims_by_value_ranks_individual_claim_lines_highest_first():
     assert top[0]["final_amount"] == 250000.0
 
 
+def test_top_members_by_total_claims_carries_diagnoses_and_member_status():
+    from datetime import date as _d
+    claims = [
+        _claim(patient_id="P1", final_amount=60_000.0, diagnosis_description="Cancer treatment",
+               policy_end_date=_d(2026, 1, 1), member_end_date=_d(2026, 1, 1)),
+        _claim(patient_id="P1", final_amount=55_000.0, diagnosis_description="Cancer follow-up",
+               policy_end_date=_d(2026, 1, 1), member_end_date=_d(2026, 1, 1)),
+        # Left early - member_end_date falls short of the policy's own end date.
+        _claim(patient_id="P2", final_amount=90_000.0, diagnosis_description="Appendicitis",
+               policy_end_date=_d(2026, 1, 1), member_end_date=_d(2025, 6, 1)),
+        # Neither date on file at all.
+        _claim(patient_id="P3", final_amount=70_000.0, diagnosis_description="Fracture"),
+    ]
+    rows = {r["patient_id"]: r for r in top_members_by_total_claims(claims, top_n=10)}
+    assert rows["P1"]["total_claims"] == 115_000.0
+    assert rows["P1"]["diagnoses"] == ["Cancer follow-up", "Cancer treatment"]
+    assert rows["P1"]["member_status"] == "Active"
+    assert rows["P2"]["member_status"] == "Deleted"
+    assert rows["P3"]["member_status"] == "Unknown"
+
+
 def test_utilization_by_encounter_type_splits_op_ip_maternity():
     claims = [
         _claim(ip_op_maternity="OP", final_amount=100.0),
@@ -652,6 +673,7 @@ def test_utilization_by_encounter_type_splits_op_ip_maternity():
     rows = {r["encounter_type"]: r for r in utilization_by_encounter_type(claims)}
     assert rows["Op"]["claim_count"] == 2
     assert rows["Op"]["total_value"] == 300.0
+    assert rows["Op"]["average_value"] == 150.0
     assert rows["Ip"]["total_value"] == 5000.0
     assert rows["Maternity"]["total_value"] == 3000.0
     # Percentages should sum to ~100% across all rows (each row's own
@@ -1756,12 +1778,14 @@ def test_utilization_still_labels_the_other_categories_as_before():
     assert rows["Pharmacy"]["total_value"] == 100.0
     assert rows["Optical"]["total_value"] == 50.0
     assert rows["Dental"]["total_value"] == 50.0  # the dental categories still combine
+    assert rows["Dental"]["average_value"] == 25.0  # 50.0 across 2 claims (General Dental + Orthodontia)
 
 
-def _nat_member(nationality, zone, claims, exposure, age=35, gender="M"):
+def _nat_member(nationality, zone, claims, exposure, age=35, gender="M", premium=None, ibnr=0.0):
     return {
         "nationality": nationality, "nationality_zone": zone,
-        "actual_claims": claims, "ibnr": 0.0,
+        "actual_claims": claims, "ibnr": ibnr,
+        "actual_premium": premium,
         "earned_premium_fraction": exposure, "age": age, "gender": gender,
     }
 
@@ -1822,6 +1846,29 @@ def test_nationality_risk_table_skips_members_with_no_nationality():
                _nat_member("Indian", "zone_1_asia", 1_000.0, 1.0)]
     rows = nationality_risk_table(members)
     assert [r["nationality"] for r in rows] == ["Indian"]
+
+
+def test_nationality_risk_table_reports_erp_headcount_premium_and_plain_loss_ratio():
+    # member_count doubles as the exposed risk population (ERP) headcount;
+    # loss_ratio is incurred (claims + IBNR) over the nationality's own
+    # actual premium - the reinsurance-facing reading sitting alongside
+    # burning_cost's per-member-year one.
+    members = [
+        _nat_member("Indian", "zone_1_asia", 800.0, 1.0, premium=1000.0, ibnr=200.0),
+        _nat_member("Indian", "zone_1_asia", 800.0, 1.0, premium=1000.0, ibnr=200.0),
+    ]
+    row = nationality_risk_table(members)[0]
+    assert row["member_count"] == 2
+    assert row["actual_premium"] == 2000.0
+    assert row["incurred_claims"] == 2000.0  # (800+200) * 2
+    assert row["loss_ratio"] == 1.0
+
+
+def test_nationality_risk_table_loss_ratio_is_none_without_premium():
+    members = [_nat_member("Indian", "zone_1_asia", 800.0, 1.0)]
+    row = nationality_risk_table(members)[0]
+    assert row["actual_premium"] == 0.0
+    assert row["loss_ratio"] is None
 
 
 def test_nationality_risk_table_marks_which_nationalities_can_be_priced_on_today():

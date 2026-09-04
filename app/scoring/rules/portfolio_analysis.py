@@ -615,13 +615,36 @@ def top_claims_by_value(claims: List[dict], top_n: int = 10) -> List[dict]:
     ]
 
 
+def _member_status(policy_end_date, member_end_date) -> str:
+    """"Active" if this member's own enrollment ran at least to the
+    scheme's own policy end date, "Deleted" if it fell short (joined
+    late or left early), "Unknown" when either date is missing so
+    there's nothing to compare. Same convention as
+    claims_ledger_analysis.top_patients_by_final_amount's single-case
+    version, applied here book-wide.
+    """
+    if not policy_end_date or not member_end_date:
+        return "Unknown"
+    return "Active" if member_end_date >= policy_end_date else "Deleted"
+
+
 def top_members_by_total_claims(claims: List[dict], top_n: int = 20) -> List[dict]:
     """Every claim line's final_amount summed per patient_id, ranked
     highest total first - a member driving high cost through many
     moderate claims shows up here even if no single line of theirs would
     make top_claims_by_value on its own.
+
+    Also carries each member's distinct diagnoses (the "medical
+    conditions" behind the cost) and member_status (Active/Deleted/
+    Unknown - see _member_status), so a reinsurance-facing top-claimants
+    view doesn't need a second pass over the same claim lines.
     """
-    by_patient: Dict[str, dict] = defaultdict(lambda: {"total": 0.0, "claim_count": 0, "group_name": None, "client_name": None})
+    by_patient: Dict[str, dict] = defaultdict(
+        lambda: {
+            "total": 0.0, "claim_count": 0, "group_name": None, "client_name": None,
+            "diagnoses": set(), "policy_end_date": None, "member_end_date": None,
+        }
+    )
     for c in claims:
         patient_id = c.get("patient_id")
         if not patient_id:
@@ -633,6 +656,12 @@ def top_members_by_total_claims(claims: List[dict], top_n: int = 20) -> List[dic
             bucket["group_name"] = c["group_name"]
         if bucket["client_name"] is None and c.get("client_name"):
             bucket["client_name"] = c["client_name"]
+        if c.get("diagnosis_description"):
+            bucket["diagnoses"].add(c["diagnosis_description"])
+        if c.get("policy_end_date") and (not bucket["policy_end_date"] or c["policy_end_date"] > bucket["policy_end_date"]):
+            bucket["policy_end_date"] = c["policy_end_date"]
+        if c.get("member_end_date") and (not bucket["member_end_date"] or c["member_end_date"] > bucket["member_end_date"]):
+            bucket["member_end_date"] = c["member_end_date"]
 
     ranked = sorted(by_patient.items(), key=lambda item: item[1]["total"], reverse=True)[:top_n]
     return [
@@ -642,6 +671,8 @@ def top_members_by_total_claims(claims: List[dict], top_n: int = 20) -> List[dic
             "client_name": bucket["client_name"],
             "total_claims": round(bucket["total"], 2),
             "claim_count": bucket["claim_count"],
+            "diagnoses": sorted(bucket["diagnoses"]),
+            "member_status": _member_status(bucket["policy_end_date"], bucket["member_end_date"]),
         }
         for patient_id, bucket in ranked
     ]
@@ -759,6 +790,7 @@ def utilization_by_encounter_type(claims: List[dict]) -> List[dict]:
             "encounter_type": key,
             "claim_count": bucket["claim_count"],
             "total_value": round(bucket["total_value"], 2),
+            "average_value": round(bucket["total_value"] / bucket["claim_count"], 2) if bucket["claim_count"] else None,
             "pct_of_total": round(bucket["total_value"] / total_value_all * 100, 1) if total_value_all else None,
         }
         for key, bucket in buckets.items()
@@ -803,6 +835,7 @@ def utilization_by_benefit_category(claims: List[dict]) -> List[dict]:
             "category": key,
             "claim_count": bucket["claim_count"],
             "total_value": round(bucket["total_value"], 2),
+            "average_value": round(bucket["total_value"] / bucket["claim_count"], 2) if bucket["claim_count"] else None,
             "pct_of_total": round(bucket["total_value"] / total_value_all * 100, 1) if total_value_all else None,
         }
         for key, bucket in buckets.items()
@@ -813,7 +846,7 @@ def utilization_by_benefit_category(claims: List[dict]) -> List[dict]:
 
 _GROUP_BY_FIELDS = {
     "product", "network", "region", "nationality_zone", "client", "master_client",
-    "gender", "relation", "policy_year", "category",
+    "gender", "relation", "policy_year", "category", "age_band",
 }
 
 
@@ -991,6 +1024,19 @@ def _matching_age_band(age: Optional[int], bands: List[tuple]) -> Optional[tuple
         if from_age <= age <= to_age:
             return (from_age, to_age)
     return None
+
+
+def age_band_label(age: Optional[int], bands: List[tuple]) -> Optional[str]:
+    """"from-to" display label for whichever of `bands` (see
+    age_bands_from_rate_cards) this age falls in, or None for an age with
+    no matching band (missing age, or a band gap in the rate card).
+    Public wrapper so a caller outside this module (run_analysis, which
+    injects this onto every member result as its own "age_band" field for
+    group_by/filter purposes) doesn't need to reach into the private
+    band-matching helper directly.
+    """
+    band = _matching_age_band(age, bands)
+    return f"{band[0]}-{band[1]}" if band else None
 
 
 # A bucket's burning cost is one claims-total divided by one member-years
@@ -2233,9 +2279,15 @@ def nationality_risk_table(
 
     relativity is the figure a quote would actually use - the blended rate
     over the whole book's rate, capped (see credibility.relativity).
+
+    `member_count` doubles as the exposed risk population (ERP) headcount
+    behind each nationality, and `loss_ratio` (incurred_claims over the
+    nationality's own actual_premium) sits alongside burning_cost - the
+    premium-relative reading a reinsurance report wants next to the
+    per-member-year one underwriting rates off.
     """
     by_nationality: Dict[str, dict] = defaultdict(
-        lambda: {"claims": 0.0, "exposure": 0.0, "members": 0, "zone": None,
+        lambda: {"claims": 0.0, "exposure": 0.0, "premium": 0.0, "members": 0, "zone": None,
                  "ages": [], "female": 0, "gendered": 0}
     )
     by_zone: Dict[str, dict] = defaultdict(lambda: {"claims": 0.0, "exposure": 0.0})
@@ -2253,6 +2305,7 @@ def nationality_risk_table(
         bucket = by_nationality[nationality]
         bucket["claims"] += claims
         bucket["exposure"] += exposure
+        bucket["premium"] += r.get("actual_premium") or 0.0
         bucket["members"] += 1
         if bucket["zone"] is None and zone:
             bucket["zone"] = zone
@@ -2295,6 +2348,8 @@ def nationality_risk_table(
                 "member_count": b["members"],
                 "earned_member_years": round(b["exposure"], 4),
                 "incurred_claims": round(b["claims"], 2),
+                "actual_premium": round(b["premium"], 2),
+                "loss_ratio": round(b["claims"] / b["premium"], 4) if b["premium"] else None,
                 "burning_cost": round(own_rate, 2) if own_rate is not None else None,
                 "zone_burning_cost": round(complement, 2) if complement is not None else None,
                 "credibility": blend["credibility"],

@@ -26,6 +26,8 @@ from app.scoring.rules.portfolio_analysis import (
     account_loss_ratio_rows,
     top_claimant_by_account,
     analyze_portfolio_member,
+    age_band_label,
+    age_bands_from_rate_cards,
     group_claims_by_beneficiary,
 )
 
@@ -35,7 +37,7 @@ from app.scoring.rules.portfolio_analysis import (
 #: once, unlike group_by which only picks what's shown in rows.
 FILTERABLE_RESULT_FIELDS = (
     "product", "network", "region", "nationality_zone",
-    "gender", "relation", "category", "master_client",
+    "gender", "relation", "category", "master_client", "age_band",
 )
 
 
@@ -148,6 +150,16 @@ def _analyse(
         )
         for m in members
     ]
+
+    # Computed once here (not inside analyze_portfolio_member, which runs
+    # per member) since age_bands_from_rate_cards scans the whole rate
+    # card - doing that tens of thousands of times over would be wasted
+    # work for a value that's the same for every member. Rides the same
+    # rate card bands summarize_burning_cost_by_age_gender already prices
+    # against, so a "26-35" bucket here means the same thing there.
+    bands = age_bands_from_rate_cards(rate_cards)
+    for r in results:
+        r["age_band"] = age_band_label(r.get("age"), bands)
 
     for field, value in (filters or {}).items():
         if value:

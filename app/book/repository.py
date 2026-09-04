@@ -173,6 +173,12 @@ def large_claim_lines(db: Session) -> List[dict]:
         # flagged for exclusion) and mean the same line on the next call -
         # patient_id + amount + date is not unique enough on its own.
         models.PortfolioClaimEntry.claim_id,
+        # The pair top_members_by_total_claims' member_status reads - same
+        # "member_end_date >= policy_end_date is Active" convention
+        # claims_ledger_analysis.top_patients_by_final_amount already uses
+        # for a single case's own ledger, applied here book-wide.
+        models.PortfolioClaimEntry.policy_end_date,
+        models.PortfolioClaimEntry.member_end_date,
     ).all()
     return [
         {
@@ -186,9 +192,12 @@ def large_claim_lines(db: Session) -> List[dict]:
             "date_reception": date_reception,
             "final_amount": final_amount,
             "claim_id": claim_id,
+            "policy_end_date": policy_end_date,
+            "member_end_date": member_end_date,
         }
         for patient_id, group_name, client_name, provider_name, diagnosis_description,
-        diagnosis_code, date_of_treatment, date_reception, final_amount, claim_id in rows
+        diagnosis_code, date_of_treatment, date_reception, final_amount, claim_id,
+        policy_end_date, member_end_date in rows
     ]
 
 
