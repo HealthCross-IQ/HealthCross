@@ -9700,6 +9700,14 @@ let rrState = {
   // the report reads as SME business unless asked to include it - same
   // convention as the Loss Ratio screen's own product filter.
   products: ['Platinum', 'Gold', 'Silver', 'Bronze'],
+  // Benefit-wise/Maternity/Top-claimants scan every claim LINE on the
+  // whole book and are the slowest of the 8 concurrent loads - false
+  // until loadReinsuranceReport()'s Promise.all fully resolves, so Print
+  // can refuse a click that lands after the fast sections (Nationality,
+  // Group size, Burning cost) are already visible but these three are
+  // still mid-flight, which would otherwise print "No data" for real,
+  // present claims and pass a reinsurer a report that understates them.
+  loaded: false,
 };
 
 // Every section's own last-fetched rows, kept so Print/Save as PDF builds
@@ -9774,6 +9782,7 @@ async function showReinsuranceReport() {
 
 async function loadReinsuranceReport() {
   rrState.drillProduct = null;
+  rrState.loaded = false;
   // Product loads first and is awaited on its own - Benefit-wise claims'
   // average-member-spend needs the SAME products-filtered exposure total
   // Product LR just computed (see _rrBenefitHtml), and Promise.all gives
@@ -9789,6 +9798,7 @@ async function loadReinsuranceReport() {
     _rrLoadTopClaimants(),
     _rrLoadShedImpact(),
   ]);
+  rrState.loaded = true;
 }
 
 function _rrLoadingCard() {
@@ -9993,7 +10003,7 @@ function _rrNationalityHtml(rows) {
   const zones = _rrNationalityByZone(rows);
   const zoneBody = zones.map(z => `
     <tr>
-      <td>${escapeHtml(z.zone)}</td>
+      <td>${escapeHtml(ZONE_LABELS[z.zone] || z.zone)}</td>
       <td class="num">${z.member_count.toLocaleString()}</td>
       <td class="num">${_lrMoney(z.actual_premium)}</td>
       <td class="num">${_lrMoney(z.incurred_claims)}</td>
@@ -10006,7 +10016,7 @@ function _rrNationalityHtml(rows) {
   const body = top10.map(r => `
     <tr>
       <td>${escapeHtml(r.nationality)}</td>
-      <td>${escapeHtml(r.nationality_zone || '-')}</td>
+      <td>${escapeHtml(ZONE_LABELS[r.nationality_zone] || r.nationality_zone || '-')}</td>
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_lrMoney(r.actual_premium)}</td>
       <td class="num">${_lrMoney(r.incurred_claims)}</td>
@@ -10453,6 +10463,11 @@ function _rrPrintBand(v) {
 
 function printReinsuranceReport() {
   if (!rrData.product) { toast('Load the report first', true); return; }
+  // Benefit-wise/Maternity/Top-claimants scan every claim line on the
+  // whole book and are the slowest of the report's 8 concurrent loads -
+  // printing while they're still in flight has shipped a reinsurer a
+  // report reading "No data" for claims that are actually on file.
+  if (!rrState.loaded) { toast('Still loading the report - wait a moment and try again', true); return; }
 
   const generated = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
   const asOf = rrData.asOf || '';
@@ -10486,7 +10501,7 @@ function printReinsuranceReport() {
   const natZones = _rrNationalityByZone(rrData.nationality || []);
   const natZoneRows = natZones.map(z => `
     <tr>
-      <td>${escapeHtml(z.zone)}</td>
+      <td>${escapeHtml(ZONE_LABELS[z.zone] || z.zone)}</td>
       <td class="num">${z.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(z.actual_premium)}</td>
       <td class="num">${_rrPrintMoney(z.incurred_claims)}</td>
@@ -10499,7 +10514,7 @@ function printReinsuranceReport() {
   const natRows = natByLives.slice(0, 10).map(r => `
     <tr>
       <td>${escapeHtml(r.nationality)}</td>
-      <td>${escapeHtml(r.nationality_zone || '-')}</td>
+      <td>${escapeHtml(ZONE_LABELS[r.nationality_zone] || r.nationality_zone || '-')}</td>
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
       <td class="num">${_rrPrintMoney(r.incurred_claims)}</td>
