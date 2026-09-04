@@ -1738,7 +1738,9 @@ def _calendar_windows(policy_start, policy_end, as_of):
 #: at, since they match a row to a case by master client name. "client"
 #: breaks the same book out by its raw subgroup instead - each
 #: PortfolioMember.contract (falling back to master_contract) gets its
-#: own row, "with Group" and "without Group" in Loss Ratio board terms.
+#: own row. Not to be confused with the "Group" Product (Platinum/Gold/
+#: Silver/Bronze/Group) - see the products filter on account_loss_ratio_
+#: rows_for_book/the account-loss-ratio endpoint for that.
 LOSS_RATIO_GROUP_BY = ("master_client", "client")
 
 
@@ -1768,14 +1770,14 @@ def account_loss_ratio_rows(
     would blend an expired year's settled claims into the current year's
     open one.
 
-    `group_by="client"` keys by each raw SUBGROUP instead - "without
-    Group" in Loss Ratio board terms, breaking a master policy's own
-    combined row back out into the individual contracts that make it up.
-    The output field is still named "master_client" either way, because
-    every existing reader already treats that field as "this row's own
-    identity" - under group_by="client" it holds the subgroup's name,
-    which is exactly what a reader of a "without Group" table wants to
-    see there. Callers that MATCH a row to a case by company name
+    `group_by="client"` keys by each raw SUBGROUP instead, breaking a
+    master policy's own combined row back out into the individual
+    contracts that make it up. The output field is still named
+    "master_client" either way, because every existing reader already
+    treats that field as "this row's own identity" - under
+    group_by="client" it holds the subgroup's name, which is exactly
+    what a reader of a by-subgroup table wants to see there. Callers
+    that MATCH a row to a case by company name
     (renewal_rating, the printed reports) must never pass anything but
     the default - a subgroup's own name is not the master client name a
     case is opened under, and matching against it would silently price

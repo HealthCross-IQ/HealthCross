@@ -336,7 +336,11 @@ def portfolio_account_loss_ratio(
     ),
     group_by: str = Query(
         "master_client",
-        description="'master_client' (default - combines a client's own subgroups into one row per policy period, the pricing and underwriting basis) or 'client' (breaks the book out by raw subgroup instead - 'without Group').",
+        description="'master_client' (default - combines a client's own subgroups into one row per policy period, the pricing and underwriting basis) or 'client' (breaks the book out by raw subgroup instead).",
+    ),
+    products: List[str] = Query(
+        [],
+        description="Restrict to members on these Products (each member's own PRODUCTNAME - Platinum/Gold/Silver/Bronze/Group). Omit for every product. Group is HealthCross's non-SME product line, not one of the four SME tiers - pass products=Platinum&products=Gold&products=Silver&products=Bronze for an SME-only read.",
     ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
@@ -382,6 +386,8 @@ def portfolio_account_loss_ratio(
         policy_year=None if calendar_basis else policy_year,
         client=client, filters=filters, require_rate_card=False,
     )
+    if products:
+        results = [r for r in results if r.get("product") in products]
     opex_records_by_client: Dict[str, List[dict]] = defaultdict(list)
     for cm in db.query(models.ClientMasterInfo).all():
         if cm.opex_pct is not None:
@@ -397,8 +403,8 @@ def portfolio_account_loss_ratio(
         # account_calendar_loss_ratio_rows buckets its own way (by
         # calendar year, splitting a policy across the years it spans)
         # and does not yet take a group_by of its own - refused rather
-        # than silently ignored, which would show "Master client" rows
-        # under a "without Group" heading.
+        # than silently ignored, which would show master-client rows
+        # under a "by subgroup" heading.
         raise HTTPException(
             status_code=400,
             detail="group_by='client' is not yet supported on the calendar year basis.",
@@ -440,6 +446,7 @@ def portfolio_account_loss_ratio(
                 premium_basis=premium_basis,
                 default_loading_pct=default_loading_pct,
                 group_by=group_by,
+                products=products or None,
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -456,6 +463,7 @@ def portfolio_account_loss_ratio(
         "year_basis": year_basis,
         "status": status,
         "group_by": group_by,
+        "products": products,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
         # What the book's loss ratio becomes if each account is not

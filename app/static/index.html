@@ -7394,7 +7394,7 @@ async function loadRenewalPremiumBuildUp() {
 
 /* ---------------- Loss Ratio board (portfolio level) ---------------- */
 
-let lrState = { rows: [], totals: null, shed: null, shedCumulative: [], sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting', status: '', groupBy: 'master_client' };
+let lrState = { rows: [], totals: null, shed: null, shedCumulative: [], sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting', status: '', groupBy: 'master_client', products: ['Platinum', 'Gold', 'Silver', 'Bronze'] };
 
 function _lrMoney(v, dp) {
   if (v == null) return '-';
@@ -7463,7 +7463,7 @@ function _lrTableHtml() {
     return '<div class="lr-card"><div class="lr-empty">No accounts to report yet - upload the Membership and Claims exports on the Claims Explorer screen first.</div></div>';
   }
   // Account Dashboard is keyed by resolved master client, not by raw
-  // subgroup - "without Group" rows carry a subgroup's own name in this
+  // subgroup - "by subgroup" rows carry a subgroup's own name in this
   // same field, and linking that through would open the wrong account
   // (or nothing at all). Plain text there instead of a broken link.
   const grouped = lrState.groupBy !== 'client';
@@ -7497,6 +7497,7 @@ function _lrTableHtml() {
         </div>
         <div class="lr-card-note">Basis: <b>${lrState.yearBasis === 'calendar' ? 'Calendar year' : 'Underwriting year'}</b> &middot; <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b>
           ${lrState.status ? ` &middot; <b>${lrState.status === 'active' ? 'Active only' : 'Expired only'}</b>` : ''}
+          &middot; Product: <b>${(lrState.products || []).length ? escapeHtml(lrState.products.join(', ')) : 'none selected'}</b>
           &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
       </div>
       <div class="lr-table-wrap">
@@ -7624,12 +7625,23 @@ function lossRatioBoardHtml() {
           </select>
         </div>
         <div class="lr-field">
-          <label>Group</label>
+          <label>Rows</label>
           <select id="lr-group-by" onchange="loadLossRatioBoard()" style="min-width:150px;"
-              title="Master client combines a client's own subgroups into one row - Without Group breaks the same book out by raw subgroup instead. Without Group is not available on the calendar year basis.">
-            <option value="master_client">With group (master client)</option>
-            <option value="client">Without group (subgroup)</option>
+              title="Account combines a client's own subgroups into one row - By subgroup breaks the same book out by raw subgroup instead. By subgroup is not available on the calendar year basis.">
+            <option value="master_client">By account</option>
+            <option value="client">By subgroup</option>
           </select>
+        </div>
+        <div class="lr-field">
+          <label>Product</label>
+          <div id="lr-product-filter" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:280px; padding-bottom:4px;"
+              title="Each account's own PRODUCTNAME. Group is HealthCross's non-SME product line, unchecked by default so Loss Ratio reads as SME business (Platinum/Gold/Silver/Bronze) only.">
+            <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;"><input type="checkbox" class="lr-product-cb" value="Platinum" checked onchange="loadLossRatioBoard()"> Platinum</label>
+            <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;"><input type="checkbox" class="lr-product-cb" value="Gold" checked onchange="loadLossRatioBoard()"> Gold</label>
+            <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;"><input type="checkbox" class="lr-product-cb" value="Silver" checked onchange="loadLossRatioBoard()"> Silver</label>
+            <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;"><input type="checkbox" class="lr-product-cb" value="Bronze" checked onchange="loadLossRatioBoard()"> Bronze</label>
+            <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;"><input type="checkbox" class="lr-product-cb" value="Group" onchange="loadLossRatioBoard()"> Group</label>
+          </div>
         </div>
         <div class="lr-field">
           <label>Loading fallback %</label>
@@ -7696,6 +7708,10 @@ async function loadLossRatioBoard() {
   const groupByEl = document.getElementById('lr-group-by');
   if (groupByEl && groupByEl.value) params.set('group_by', groupByEl.value);
   lrState.groupBy = (groupByEl && groupByEl.value) || 'master_client';
+  const productEls = Array.from(document.querySelectorAll('.lr-product-cb'));
+  const checkedProducts = productEls.filter(el => el.checked).map(el => el.value);
+  checkedProducts.forEach(p => params.append('products', p));
+  lrState.products = checkedProducts;
   const ybEl = document.getElementById('lr-year-basis');
   if (ybEl && ybEl.value) params.set('year_basis', ybEl.value);
   lrState.yearBasis = (ybEl && ybEl.value) || 'underwriting';
@@ -7988,6 +8004,7 @@ function printLossRatioReport() {
     <span>Period <b>${escapeHtml(period)}</b></span>
     <span>Premium <b>${escapeHtml(premLabel)}</b></span>
     <span>Scope <b>${acctSel ? escapeHtml(acctSel) : 'Whole portfolio'}</b></span>
+    <span>Product <b>${(lrState.products || []).length ? escapeHtml(lrState.products.join(', ')) : 'none selected'}</b></span>
     <span>Currency <b>AED</b></span>
   </div>
 

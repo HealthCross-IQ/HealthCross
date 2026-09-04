@@ -162,6 +162,7 @@ def account_loss_ratio_rows_for_book(
     premium_basis: str = "actual",
     default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
     group_by: str = "master_client",
+    products: Optional[List[str]] = None,
 ) -> List[dict]:
     """The Portfolio Loss Ratio rows, on the underwriting-year basis, for
     the whole book or one account.
@@ -172,6 +173,13 @@ def account_loss_ratio_rows_for_book(
     claims ledger and reported NOMADA at 75.6% while this view had the
     same account at 83.6% - a second implementation drifts, and the
     reader has no way to know which screen to believe.
+
+    `products` restricts to members on one of these Products (Platinum/
+    Gold/Silver/Bronze/Group, each member's own PRODUCTNAME - see
+    resolve_group_product). Group is HealthCross's non-SME product line,
+    not one of the four SME tiers, so a Loss Ratio read meant to be
+    "SME only" passes products=["Platinum","Gold","Silver","Bronze"] to
+    exclude it. None/omitted means no product filtering at all.
     """
     # No book uploaded is a normal state for a hand-built case, not an
     # error - run_analysis raises a 400 for it, which is right for the
@@ -190,6 +198,10 @@ def account_loss_ratio_rows_for_book(
         return []
     if not results:
         return []
+    if products:
+        results = [r for r in results if r.get("product") in products]
+        if not results:
+            return []
     rows = account_loss_ratio_rows(
         results,
         as_of=effective_as_of,

@@ -9,13 +9,14 @@ from app.models import db_models as models
 
 
 def _member(bid, contract, master_contract, policy_start, policy_end,
-            gross=100_000.0, actual=100_000.0):
+            gross=100_000.0, actual=100_000.0, product_name=None):
     return {
         "beneficiary_id": bid, "contract": contract, "master_contract": master_contract,
         "relation": "employee", "age": 35, "gender": "M",
         "policy_start_date": policy_start, "policy_end_date": policy_end,
         "member_start_date": policy_start, "member_end_date": policy_end,
         "gross_premium": gross, "actual_gross_premium": actual,
+        "product_name": product_name,
     }
 
 
@@ -23,11 +24,12 @@ def _member(bid, contract, master_contract, policy_start, policy_end,
 def seeded(client):
     db = client.db_session_local()
     db.bulk_insert_mappings(models.PortfolioMember, [
-        # ACME GROUP: two subgroups, both on a currently-open policy.
-        _member("A1", "ACME DXB", "ACME GROUP", date(2026, 1, 1), date(2027, 1, 1)),
-        _member("A2", "ACME AUH", "ACME GROUP", date(2026, 1, 1), date(2027, 1, 1)),
+        # ACME GROUP: two subgroups, both on a currently-open policy - one
+        # on the SME Platinum tier, the other on the non-SME Group product.
+        _member("A1", "ACME DXB", "ACME GROUP", date(2026, 1, 1), date(2027, 1, 1), product_name="Platinum"),
+        _member("A2", "ACME AUH", "ACME GROUP", date(2026, 1, 1), date(2027, 1, 1), product_name="Group"),
         # ZETA CO: a policy that has already fully run its term.
-        _member("Z1", "ZETA CO", "ZETA CO", date(2024, 1, 1), date(2025, 1, 1)),
+        _member("Z1", "ZETA CO", "ZETA CO", date(2024, 1, 1), date(2025, 1, 1), product_name="Gold"),
     ])
     db.add(models.PortfolioDataSnapshot(data_as_of_date=date(2026, 6, 1)))
     db.commit()
@@ -80,3 +82,37 @@ class TestGroupByFilter:
         resp = client.get("/portfolio-analysis/account-loss-ratio",
                           params={"group_by": "client", "year_basis": "calendar"})
         assert resp.status_code == 400
+
+
+class TestProductFilter:
+    def test_no_products_param_returns_every_product(self, client, seeded):
+        r = client.get("/portfolio-analysis/account-loss-ratio").json()
+        assert r["products"] == []
+        acme = next(row for row in r["rows"] if row["master_client"] == "ACME GROUP")
+        # Both the Platinum subgroup and the Group subgroup are on file.
+        assert acme["member_count"] == 2
+
+    def test_sme_only_excludes_the_group_product_member(self, client, seeded):
+        r = client.get("/portfolio-analysis/account-loss-ratio", params={
+            "products": ["Platinum", "Gold", "Silver", "Bronze"],
+        }).json()
+        names = {row["master_client"] for row in r["rows"]}
+        assert names == {"ACME GROUP", "ZETA CO"}
+        acme = next(row for row in r["rows"] if row["master_client"] == "ACME GROUP")
+        assert acme["member_count"] == 1
+
+    def test_group_only_keeps_just_the_group_product_member(self, client, seeded):
+        r = client.get("/portfolio-analysis/account-loss-ratio", params={"products": ["Group"]}).json()
+        names = {row["master_client"] for row in r["rows"]}
+        assert names == {"ACME GROUP"}
+        assert r["rows"][0]["member_count"] == 1
+
+    def test_products_filter_also_applies_on_the_calendar_basis(self, client, seeded):
+        r = client.get("/portfolio-analysis/account-loss-ratio", params={
+            "products": ["Platinum", "Gold", "Silver", "Bronze"],
+            "year_basis": "calendar",
+        }).json()
+        names = {row["master_client"] for row in r["rows"]}
+        assert "ACME GROUP" in names
+        acme = next(row for row in r["rows"] if row["master_client"] == "ACME GROUP")
+        assert acme["member_count"] == 1
