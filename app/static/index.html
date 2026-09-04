@@ -27,8 +27,8 @@
     --ink-2: #46586e;
     --ink-muted: #8496a8;
     --grid: #dde6ef;
-    --accent: #5cd9ff;
-    --accent-ink: #06121c;
+    --accent: #0E7A82;
+    --accent-ink: #ffffff;
     --deep: #1c2a48;
     --deep-ink: #eaf6ff;
     --good: #16855c;
@@ -39,15 +39,24 @@
     --serious-bg: rgba(212,120,63,0.14);
     --critical: #c0392b;
     --critical-bg: rgba(192,57,43,0.12);
-    --series-1: #5cd9ff;
+    --series-1: #0E7A82;
     --series-2: #eb6834;
     --series-3: #16855c;
     --series-4: #eda100;
-    --series-1-wash: rgba(92,217,255,0.20);
+    --series-1-wash: rgba(14,122,130,0.16);
     --shadow: 0 1px 2px rgba(15,28,46,0.05), 0 10px 30px -18px rgba(15,28,46,0.30);
     --font-body: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-display: 'Fraunces', Georgia, serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* Fixed dark-navy sidebar chrome, held constant across both themes per
+       the approved Portfolio Dashboard mockup (the rail is app "chrome",
+       not a themed content surface, so it does not flip with color-scheme). */
+    --rail-bg: #0B2038;
+    --rail-bg-2: #0F2A4A;
+    --rail-text: #C9D6E4;
+    --rail-text-dim: #7C8FA6;
+    --rail-active-bg: #15385E;
+    --rail-border: rgba(255,255,255,0.08);
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -61,9 +70,9 @@
       --ink-2: #b3c2d3;
       --ink-muted: #7b8ca0;
       --grid: #223044;
-      --accent: #5cd9ff;
+      --accent: #3FC3C9;
       --accent-ink: #06121c;
-      --deep: #5cd9ff;
+      --deep: #3FC3C9;
       --deep-ink: #06121c;
       --good: #3fcf94;
       --good-bg: rgba(63,207,148,0.14);
@@ -73,11 +82,11 @@
       --serious-bg: rgba(229,154,106,0.16);
       --critical: #ef6f60;
       --critical-bg: rgba(239,111,96,0.16);
-      --series-1: #5cd9ff;
+      --series-1: #3FC3C9;
       --series-2: #e07a4a;
       --series-3: #3fcf94;
       --series-4: #e0b24f;
-      --series-1-wash: rgba(92,217,255,0.22);
+      --series-1-wash: rgba(63,195,201,0.18);
       --shadow: 0 1px 2px rgba(0,0,0,0.35), 0 10px 30px -18px rgba(0,0,0,0.60);
     }
   }
@@ -131,34 +140,40 @@
      approved Renewal Bench mockup, layered above the existing case
      list/filters rather than replacing them. ---------- */
   .hc-rail {
-    /* Aliases the root design tokens - no palette of its own, so the rail
-       can never drift away from the shell it sits in (it used to carry
-       green-tinted neutrals left over from an earlier theme). */
-    --hcr-ink: var(--ink); --hcr-ink-2: var(--ink-2); --hcr-muted: var(--ink-muted);
-    --hcr-border: var(--border);
-    --hcr-accent: var(--accent); --hcr-accent-soft: var(--series-1-wash);
-    --hcr-secondary: var(--serious); --hcr-secondary-soft: var(--serious-bg);
-    --hcr-surface-3: var(--surface-2);
+    /* Fixed dark-navy chrome (see --rail-* tokens at :root) - deliberately
+       does NOT alias the page's light/dark surface tokens: this is the
+       app's primary navigation, styled per the approved Portfolio
+       Dashboard mockup, and stays constant across both themes. */
+    --hcr-ink: #ffffff; --hcr-ink-2: var(--rail-text); --hcr-muted: var(--rail-text-dim);
+    --hcr-border: var(--rail-border);
+    --hcr-accent: #3FC3C9; --hcr-accent-soft: var(--rail-active-bg);
+    --hcr-secondary: #E3B23C; --hcr-secondary-soft: rgba(227,178,60,0.16);
+    --hcr-surface-3: rgba(255,255,255,0.07);
     font-family: var(--font-body);
+    background: linear-gradient(180deg, var(--rail-bg-2), var(--rail-bg));
+    color: var(--rail-text);
+    margin: -16px -16px 12px;
+    padding: 18px 14px 16px;
+    border-radius: 0 0 14px 14px;
   }
   .hc-rail-brand { display: flex; align-items: center; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--hcr-border); margin-bottom: 4px; }
   .hc-rail-brand .mark {
     width: 27px; height: 27px; border-radius: 7px; flex-shrink: 0;
-    background: linear-gradient(160deg, var(--hcr-accent), color-mix(in srgb, var(--hcr-accent) 60%, black));
+    background: linear-gradient(135deg, var(--hcr-accent), #1D5A63);
     display: flex; align-items: center; justify-content: center;
-    color: #f5faf8; font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
+    color: #ffffff; font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
   }
-  .hc-rail-brand .name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; color: var(--hcr-ink); line-height: 1.2; }
+  .hc-rail-brand .name { font-family: 'Fraunces', serif; font-weight: 600; font-size: 14px; color: #ffffff; line-height: 1.2; }
   .hc-rail-brand .sub { font-size: 10px; color: var(--hcr-muted); }
   .hc-rail-group { display: flex; flex-direction: column; gap: 1px; }
   .hc-rail-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; font-weight: 700; color: var(--hcr-muted); margin: 6px 2px 3px; }
   .hc-rail-item {
     display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
     font-size: 12.5px; font-weight: 500; color: var(--hcr-ink-2);
-    background: none; border: none; border-radius: 8px; padding: 7px 9px; cursor: pointer;
+    background: none; border: none; border-left: 2.5px solid transparent; border-radius: 8px; padding: 7px 9px; cursor: pointer;
   }
   .hc-rail-item:hover { background: var(--hcr-surface-3); color: var(--hcr-ink); }
-  .hc-rail-item.active { background: var(--hcr-accent-soft); color: var(--hcr-accent); font-weight: 600; }
+  .hc-rail-item.active { background: var(--hcr-accent-soft); color: #ffffff; font-weight: 600; border-left-color: var(--hcr-accent); }
   .hc-rail-tag {
     font-size: 9px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 700;
     padding: 1px 6px; border-radius: 5px; margin-left: auto; flex-shrink: 0;
@@ -577,11 +592,13 @@
   /* ---------- Loss Ratio board (scoped - portfolio-level per-account
      loss ratio, the underwriting view the book is tracked on) ---------- */
   .lr-scope {
-    /* Aliases the root design tokens - see .hc-rail above. */
+    /* Aliases the root design tokens - see .hc-rail above. Redesigned per the
+       approved Portfolio Dashboard mockup: flat sans headings, individual
+       accent-bar KPI cards instead of a single gradient banner, teal accent. */
     --lr-bg: var(--bg); --lr-surface: var(--surface); --lr-surface-2: var(--surface-2);
     --lr-ink: var(--ink); --lr-ink-2: var(--ink-2); --lr-muted: var(--ink-muted);
     --lr-border: var(--border); --lr-border-strong: var(--border-strong);
-    --lr-accent: var(--accent); --lr-deep: var(--deep);
+    --lr-accent: #0E7A82; --lr-deep: var(--deep);
     --lr-good: var(--good); --lr-good-soft: var(--good-bg);
     --lr-warn: var(--warning); --lr-warn-soft: var(--warning-bg);
     --lr-bad: var(--critical); --lr-bad-soft: var(--critical-bg);
@@ -592,20 +609,22 @@
   }
 
   .lr-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 18px; }
-  .lr-title { font-family: 'Fraunces', serif; font-size: 23px; font-weight: 600; letter-spacing: -0.015em; margin: 0 0 5px; color: var(--lr-ink); }
+  .lr-title { font-family: var(--font-body); font-size: 20px; font-weight: 800; letter-spacing: -0.02em; margin: 0 0 5px; color: var(--lr-ink); }
   .lr-sub { font-size: 12.5px; color: var(--lr-muted); margin: 0; max-width: 68ch; line-height: 1.5; }
 
-  .lr-banner { background: linear-gradient(135deg, var(--lr-accent), color-mix(in srgb, var(--lr-accent) 62%, #ffffff)); color: #0c2233; border-radius: 16px; padding: 22px 24px; box-shadow: var(--lr-shadow); margin-bottom: 18px; }
-  .lr-banner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 20px 26px; }
-  .lr-b-item .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.07em; color: rgba(12,34,51,0.66); font-weight: 600; margin-bottom: 6px; }
-  .lr-b-item .v { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; letter-spacing: -0.02em; }
-  .lr-b-item .v small { font-size: 13px; color: rgba(12,34,51,0.62); font-weight: 500; }
-  .lr-b-item.hero .v { font-size: 30px; }
-  .lr-b-sep { height: 1px; background: rgba(12,34,51,0.18); margin: 18px 0; }
+  .lr-banner { background: transparent; padding: 0; margin-bottom: 20px; }
+  .lr-banner-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+  .lr-b-item { background: var(--lr-surface); border: 1px solid var(--lr-border); border-left: 3px solid var(--lr-accent); border-radius: 10px; box-shadow: var(--lr-shadow); padding: 14px 16px; }
+  .lr-b-item .k { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--lr-muted); font-weight: 700; margin-bottom: 8px; }
+  .lr-b-item .v { font-family: 'IBM Plex Mono', monospace; font-size: 19px; font-weight: 700; letter-spacing: -0.01em; color: var(--lr-ink); }
+  .lr-b-item .v small { font-size: 12px; color: var(--lr-muted); font-weight: 600; }
+  .lr-b-item.hero { background: linear-gradient(180deg, color-mix(in srgb, var(--lr-accent) 7%, var(--lr-surface)), var(--lr-surface)); }
+  .lr-b-item.hero .v { font-size: 25px; color: var(--lr-accent); }
+  .lr-b-sep { height: 14px; background: transparent; margin: 0; }
 
-  .lr-card { background: var(--lr-surface); border: 1px solid var(--lr-border); border-radius: 14px; box-shadow: var(--lr-shadow); margin-bottom: 16px; overflow: hidden; }
+  .lr-card { background: var(--lr-surface); border: 1px solid var(--lr-border); border-radius: 12px; box-shadow: var(--lr-shadow); margin-bottom: 16px; overflow: hidden; }
   .lr-card-head { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px 18px; border-bottom: 1px solid var(--lr-border); flex-wrap: wrap; }
-  .lr-card-title { font-family: 'Fraunces', serif; font-size: 15px; font-weight: 600; margin: 0; color: var(--lr-ink); }
+  .lr-card-title { font-family: var(--font-body); font-size: 14.5px; font-weight: 700; margin: 0; color: var(--lr-ink); }
   .lr-card-note { font-size: 11.5px; color: var(--lr-muted); }
 
   .lr-table-wrap { overflow-x: auto; }
@@ -622,7 +641,7 @@
   .lr-acct { font-weight: 600; white-space: normal; min-width: 190px; }
   .lr-acct .yr { display: block; font-size: 10.5px; color: var(--lr-muted); font-weight: 500; font-family: 'IBM Plex Mono', monospace; }
 
-  .lr-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; padding: 2px 8px; border-radius: 999px; }
+  .lr-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 700; font-family: 'IBM Plex Mono', monospace; padding: 3px 9px; border-radius: 999px; }
   .lr-chip.good { background: var(--lr-good-soft); color: var(--lr-good); }
   .lr-chip.warn { background: var(--lr-warn-soft); color: var(--lr-warn); }
   .lr-chip.bad { background: var(--lr-bad-soft); color: var(--lr-bad); }
@@ -632,11 +651,11 @@
   .lr-bar span { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; }
   .lr-bar .mark { position: absolute; top: -2px; bottom: -2px; width: 1.5px; background: var(--lr-ink-2); opacity: 0.55; }
 
-  .lr-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
-  .lr-field { display: flex; flex-direction: column; gap: 4px; font-size: 11px; color: var(--lr-ink-2); }
-  .lr-field input, .lr-field select { font: inherit; font-size: 12.5px; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--lr-border-strong); background: var(--lr-surface); color: var(--lr-ink); }
-  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 9px; border: 1px solid transparent; background: var(--lr-deep); color: var(--deep-ink); padding: 9px 16px; }
-  .lr-btn:hover { filter: brightness(1.15); }
+  .lr-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; background: var(--lr-surface-2); border: 1px solid var(--lr-border); border-radius: 12px; padding: 12px 14px; }
+  .lr-field { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--lr-muted); }
+  .lr-field input, .lr-field select { font: inherit; font-size: 12.5px; font-weight: 500; text-transform: none; letter-spacing: normal; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--lr-border); background: var(--lr-surface); color: var(--lr-ink); }
+  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid transparent; background: var(--lr-accent); color: #fff; padding: 9px 16px; }
+  .lr-btn:hover { filter: brightness(1.1); }
   .lr-btn.ghost { background: transparent; border-color: var(--lr-border-strong); color: var(--lr-ink-2); }
   .lr-btn.ghost:hover { background: var(--lr-surface-2); filter: none; }
   .lr-empty { padding: 42px 24px; text-align: center; color: var(--lr-muted); font-size: 13px; }
