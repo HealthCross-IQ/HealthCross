@@ -2052,6 +2052,96 @@ def get_renewal_options(
     return {"case_id": case.id, **pricing}
 
 
+@router.get("/{case_id}/claims-development")
+def get_claims_development(
+    case_id: int,
+    exclude_claim_ids: List[str] = Query([], description="Large claim lines to pull out of their month before it is averaged"),
+    include_months: Optional[List[str]] = Query(None, description="Which of the account's own months (YYYY-MM) feed the projection - defaults to every month available"),
+    db: Session = Depends(get_db),
+):
+    """An account's own claims, month by month, true'd up by how long
+    this book's claims actually take to be received - not the house's
+    flat 30-day tail.
+
+    A second reading, not a replacement for Method 1 or the pricing
+    options table: this is what an underwriter builds by hand when they
+    want to see whether the account's own recent months, cleaned of a
+    one-off event or a member who has left, tell a different story to
+    the ladder. It is deliberately interactive rather than a single
+    number - large claims are flagged, not stripped, and which months
+    count toward the average is a call this endpoint takes as an input,
+    not one it makes.
+
+    Requires the book's claims to carry date_reception - see
+    app.scoring.rules.claims_completion. A book uploaded before that
+    field existed has none, in which case this reports insufficient_data
+    rather than a curve built on nothing.
+    """
+    from app.scoring.rules.claims_completion import (
+        annual_claims_projection,
+        completion_adjusted_monthly,
+        completion_curve,
+        large_claims_by_month,
+        price_annual_claims,
+    )
+    from app.scoring.rules.renewal_rating import MINIMUM_RENEWAL_INCREASE_PCT
+
+    case = _get_case_or_404(db, case_id)
+    renewal = _case_renewal_rating(case)
+    if renewal is None:
+        raise HTTPException(
+            status_code=400,
+            detail="This case has no renewal experience yet - no claims on the book for it, "
+                   "and no claims ledger uploaded.",
+        )
+
+    book = book_repo.measurement_date(db) or date.today()
+    curve = completion_curve(book_repo.large_claim_lines(db), book)
+    if curve.get("insufficient_data"):
+        return {
+            "case_id": case.id,
+            "insufficient_data": True,
+            "reason": "Not enough of the book's own claims carry a reception date yet to "
+                      "build a completion curve - re-upload the book once its export "
+                      "includes DATE_RECEPTION, or wait for more months to mature.",
+        }
+
+    lines = _case_claim_lines(case)
+    leaver_ids = set(lines["leaving_ids"])
+    continuing = [c for c in lines["claims"] if c.get("patient_id") not in leaver_ids]
+    leaver_claims = [c for c in lines["claims"] if c.get("patient_id") in leaver_ids]
+
+    monthly = completion_adjusted_monthly(continuing, book, curve, exclude_claim_ids=exclude_claim_ids)
+    large_claims = large_claims_by_month(continuing)
+    projection = annual_claims_projection(monthly, included_months=include_months)
+
+    assumptions = renewal.get("assumptions_used") or {}
+    pricing = price_annual_claims(
+        projection.get("annual_claims"),
+        expiring_annual_premium=renewal.get("renewal_base_premium") or 0.0,
+        loading_pct=assumptions.get("loading_pct") or 0.0,
+        inflation_pct=assumptions.get("inflation_pct") or 0.0,
+        minimum_increase_pct=MINIMUM_RENEWAL_INCREASE_PCT,
+    )
+
+    return {
+        "case_id": case.id,
+        "insufficient_data": False,
+        "as_of": book.isoformat(),
+        "claims_source": lines["source"],
+        "monthly": monthly,
+        "large_claims_flagged": large_claims,
+        "excluded_claim_ids": list(exclude_claim_ids),
+        "leavers": [
+            {"patient_id": pid, "incurred": round(sum(
+                c.get("final_amount") or 0.0 for c in leaver_claims if c.get("patient_id") == pid), 2)}
+            for pid in sorted(leaver_ids)
+        ],
+        "projection": projection,
+        "pricing": pricing,
+    }
+
+
 def _renewal_pricing(
     case: models.Case,
     renewal: dict,
@@ -2440,8 +2530,10 @@ def _case_claim_dicts(case: models.Case) -> List[dict]:
             "provider_name": c.provider_name,
             "diagnosis_description": c.diagnosis_description,
             "date_of_treatment": c.date_of_treatment,
+            "date_reception": c.date_reception,
             "final_amount": c.final_amount,
             "ip_op_maternity": c.ip_op_maternity,
+            "claim_id": c.claim_id,
         }
         for c in case.claims_ledger_entries
     ]

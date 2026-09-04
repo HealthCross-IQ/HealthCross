@@ -11,15 +11,21 @@ import pytest
 
 from app.scoring.rules.claims_completion import (
     DEFAULT_MIN_COHORT_AMOUNT,
+    annual_claims_projection,
     completion_adjusted_monthly,
     completion_curve,
+    large_claims_by_month,
+    price_annual_claims,
 )
 
 AS_OF = date(2026, 8, 31)  # month (2026, 8)
 
 
-def _claim(treated: date, received, amount: float) -> dict:
-    return {"date_of_treatment": treated, "date_reception": received, "final_amount": amount}
+def _claim(treated: date, received, amount: float, claim_id=None, patient_id=None, diagnosis=None) -> dict:
+    return {
+        "date_of_treatment": treated, "date_reception": received, "final_amount": amount,
+        "claim_id": claim_id, "patient_id": patient_id, "diagnosis_description": diagnosis,
+    }
 
 
 def _spread(origin: date, amounts_by_lag: dict) -> list:
@@ -189,3 +195,121 @@ class TestMonthlyBuildUp:
         )
         rows = completion_adjusted_monthly(claims, AS_OF, curve)
         assert [r["month"] for r in rows] == ["2026-01", "2026-03"]
+
+    def test_a_named_claim_line_is_pulled_out_before_completion_is_applied(self):
+        curve = completion_curve(
+            _spread(date(2025, 1, 1), {0: 500_000.0}) +
+            _spread(date(2025, 2, 1), {0: 500_000.0}),
+            AS_OF, min_maturity_months=6,
+        )
+        ordinary = _claim(date(2026, 7, 1), date(2026, 7, 5), 40_000.0, claim_id="C1")
+        large = _claim(date(2026, 7, 1), date(2026, 7, 5), 130_000.0, claim_id="C2")
+
+        with_it = completion_adjusted_monthly([ordinary, large], AS_OF, curve)
+        without_it = completion_adjusted_monthly(
+            [ordinary, large], AS_OF, curve, exclude_claim_ids=["C2"])
+
+        assert with_it[0]["received"] == pytest.approx(170_000.0, abs=0.01)
+        assert without_it[0]["received"] == pytest.approx(40_000.0, abs=0.01)
+        # The completion factor itself is unchanged by which claims are
+        # in the month - it describes the book's own reporting lag, not
+        # this account's claim mix.
+        assert with_it[0]["completion"] == without_it[0]["completion"]
+
+
+class TestLargeClaimsByMonth:
+    def test_only_lines_at_or_above_the_threshold_are_flagged(self):
+        claims = [
+            _claim(date(2026, 3, 1), date(2026, 3, 5), 49_999.0, claim_id="small"),
+            _claim(date(2026, 3, 1), date(2026, 3, 5), 50_000.0, claim_id="big",
+                   patient_id="M1", diagnosis="Osteonecrosis"),
+        ]
+        flagged = large_claims_by_month(claims, threshold=50_000.0)
+        assert list(flagged.keys()) == ["2026-03"]
+        assert [c["claim_id"] for c in flagged["2026-03"]] == ["big"]
+        assert flagged["2026-03"][0]["patient_id"] == "M1"
+        assert flagged["2026-03"][0]["diagnosis"] == "Osteonecrosis"
+
+    def test_a_month_with_nothing_large_is_not_a_key_at_all(self):
+        claims = [_claim(date(2026, 3, 1), date(2026, 3, 5), 1_000.0, claim_id="c1")]
+        assert large_claims_by_month(claims, threshold=50_000.0) == {}
+
+
+class TestAnnualClaimsProjection:
+    def test_every_month_included_is_the_ordinary_case(self):
+        rows = [{"month": "2026-01", "completed": 100_000.0},
+                {"month": "2026-02", "completed": 200_000.0}]
+        result = annual_claims_projection(rows)
+        assert result["included_months"] == ["2026-01", "2026-02"]
+        assert result["months_filled"] == 10
+        # 300,000 real + 10 months at the 150,000 average.
+        assert result["annual_claims"] == pytest.approx(300_000.0 + 150_000.0 * 10, abs=0.01)
+
+    def test_excluding_a_month_removes_it_from_the_total_and_the_average(self):
+        rows = [{"month": "2026-01", "completed": 100_000.0},
+                {"month": "2026-02", "completed": 200_000.0},
+                {"month": "2026-03", "completed": 900_000.0}]  # a spike, excluded
+        result = annual_claims_projection(rows, included_months=["2026-01", "2026-02"])
+        assert result["excluded_months"] == ["2026-03"]
+        assert result["average_included"] == pytest.approx(150_000.0, abs=0.01)
+        assert result["months_filled"] == 10
+        assert result["annual_claims"] == pytest.approx(300_000.0 + 150_000.0 * 10, abs=0.01)
+        # The excluded month's own huge figure plays no part at all -
+        # neither in the total nor in what fills the other ten months.
+        assert 900_000.0 not in [result["annual_claims"]]
+
+    def test_a_month_can_be_fed_back_in_as_its_own_row_by_including_it(self):
+        # The excluded-then-added-back technique: March counts at its OWN
+        # value (not the average), while the months that are genuinely
+        # unobserved still get the average.
+        rows = [{"month": "2026-01", "completed": 100_000.0},
+                {"month": "2026-02", "completed": 200_000.0},
+                {"month": "2026-03", "completed": 900_000.0}]
+        result = annual_claims_projection(
+            rows, included_months=["2026-01", "2026-02", "2026-03"])
+        assert result["average_included"] == pytest.approx(400_000.0, abs=0.01)
+        assert result["months_filled"] == 9
+        assert result["annual_claims"] == pytest.approx(
+            1_200_000.0 + 400_000.0 * 9, abs=0.01)
+
+    def test_no_months_included_returns_no_projection_rather_than_zero(self):
+        rows = [{"month": "2026-01", "completed": 100_000.0}]
+        result = annual_claims_projection(rows, included_months=[])
+        assert result["annual_claims"] is None
+        assert result["months_filled"] == 12
+
+    def test_more_observed_months_than_the_policy_year_fills_nothing_further(self):
+        rows = [{"month": f"2026-{m:02d}", "completed": 10_000.0} for m in range(1, 13)]
+        result = annual_claims_projection(rows, total_policy_months=12)
+        assert result["months_filled"] == 0
+        assert result["annual_claims"] == pytest.approx(120_000.0, abs=0.01)
+
+
+class TestPriceAnnualClaims:
+    def test_trends_as_a_straight_percentage_not_points_on_a_ratio(self):
+        # 1,000,000 claims, 10% trend -> 1,100,000, NOT the house ladder's
+        # "add 10 points to a loss ratio" convention - there is no ratio
+        # here, only money.
+        result = price_annual_claims(
+            1_000_000.0, expiring_annual_premium=800_000.0,
+            loading_pct=0.25, inflation_pct=0.10)
+        assert result["trended_claims"] == pytest.approx(1_100_000.0, abs=0.01)
+        assert result["required_premium"] == pytest.approx(1_100_000.0 / 0.75, abs=0.01)
+
+    def test_the_projected_loss_ratio_is_exactly_one_minus_loading(self):
+        result = price_annual_claims(
+            1_000_000.0, expiring_annual_premium=800_000.0,
+            loading_pct=0.25, inflation_pct=0.10)
+        assert result["projected_loss_ratio"] == pytest.approx(0.75, abs=0.0001)
+
+    def test_the_house_floor_lifts_a_low_ask(self):
+        result = price_annual_claims(
+            100.0, expiring_annual_premium=1_000_000.0,
+            loading_pct=0.25, inflation_pct=0.10, minimum_increase_pct=0.09)
+        assert result["floor_applied"] is True
+        assert result["required_premium"] == pytest.approx(1_090_000.0, abs=0.01)
+
+    def test_no_claims_withholds_the_price_rather_than_dividing_by_zero(self):
+        result = price_annual_claims(
+            None, expiring_annual_premium=800_000.0, loading_pct=0.25, inflation_pct=0.10)
+        assert result["required_premium"] is None

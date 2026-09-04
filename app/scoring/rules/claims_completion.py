@@ -42,6 +42,12 @@ from collections import defaultdict
 from datetime import date as date_cls
 from typing import Dict, List, Optional, Sequence
 
+#: A claim LINE at or above this is a candidate for exclusion from a
+#: "typical month" - the same AED 50,000 line large-loss analysis and the
+#: pricing options table already use, so "large claim" cannot come to
+#: mean two different amounts depending on which screen is open.
+from app.scoring.rules.renewal_scenarios import DEFAULT_LARGE_CLAIM_THRESHOLD
+
 #: How many months a treatment-month cohort must have had to develop
 #: before its own current total is trusted as a stand-in for "ultimate".
 #: The curve is essentially flat by month 4 in the data this was built
@@ -190,6 +196,7 @@ def completion_adjusted_monthly(
     claims: Sequence[dict],
     as_of: date_cls,
     curve: Dict[str, object],
+    exclude_claim_ids: Sequence[str] = (),
 ) -> List[dict]:
     """One account's own treatment months, each true-up'd by the book's
     completion curve.
@@ -202,6 +209,13 @@ def completion_adjusted_monthly(
     received with an unknown lag) keeps this function and the curve that
     feeds it reading the same population of claims.
 
+    `exclude_claim_ids` pulls named claim LINES out before the month is
+    totalled - a large one-off event an underwriter has decided not to
+    carry forward (see large_claims_by_month for finding candidates). It
+    comes out before completion is applied, not after, so the completion
+    factor used still describes what it always describes: how much of
+    the claims actually being carried forward has been received.
+
     Returns one row per treatment month, oldest first: {"month" (YYYY-MM),
     "lag_months", "received", "completion", "completed"}. `completed` is
     `received` where the curve is insufficient to say more.
@@ -209,11 +223,14 @@ def completion_adjusted_monthly(
     if curve.get("insufficient_data"):
         return []
 
+    excluded = set(exclude_claim_ids)
     by_month: Dict[tuple, float] = defaultdict(float)
     for claim in claims:
         treated = claim.get("date_of_treatment")
         received = claim.get("date_reception")
         if not treated or not received:
+            continue
+        if claim.get("claim_id") in excluded:
             continue
         by_month[_month_key(treated)] += claim.get("final_amount") or 0.0
 
@@ -234,3 +251,132 @@ def completion_adjusted_monthly(
             "completed": completed,
         })
     return rows
+
+
+def large_claims_by_month(
+    claims: Sequence[dict],
+    threshold: float = DEFAULT_LARGE_CLAIM_THRESHOLD,
+) -> Dict[str, List[dict]]:
+    """Candidate one-off events, grouped by the month they would otherwise
+    inflate.
+
+    Named as candidates, not decisions - the same reasoning
+    renewal_scenarios.large_claim_total states: a member who reaches the
+    same total through forty ordinary claims has an ordinary year, this
+    only catches a single LINE large enough that one event moved a whole
+    month. Whether it recurs is a clinical or membership question no
+    threshold can answer (see the SERVICEPLAN case this was built from -
+    two flagged lines in the same month, one a confirmed leaver, the
+    other an open question nothing in the claims file could settle).
+    """
+    by_month: Dict[str, List[dict]] = defaultdict(list)
+    for claim in claims:
+        amount = claim.get("final_amount") or 0.0
+        treated = claim.get("date_of_treatment")
+        if amount < threshold or not treated:
+            continue
+        by_month[f"{treated.year}-{treated.month:02d}"].append({
+            "claim_id": claim.get("claim_id"),
+            "patient_id": claim.get("patient_id"),
+            "amount": round(amount, 2),
+            "diagnosis": claim.get("diagnosis_description"),
+        })
+    return dict(by_month)
+
+
+def annual_claims_projection(
+    monthly_rows: Sequence[dict],
+    included_months: Optional[Sequence[str]] = None,
+    total_policy_months: int = 12,
+) -> dict:
+    """A year's claims, built from however many of an account's own
+    months are trusted, not a blanket average x 12.
+
+    Each month named in `included_months` counts at its own
+    completion-adjusted figure. Every month of the policy year NOT
+    included - because it has not happened yet, or because an
+    underwriter has judged it unrepresentative (a large one-off event,
+    a month still too immature to trust even after completion) - is
+    filled at the average of the months that ARE included, rather than
+    being silently absent from a twelve-month total or forcing a choice
+    between "use its real number" and "pretend the month does not
+    exist".
+
+    `included_months` defaults to every month `monthly_rows` has - the
+    ordinary case where nothing needs to be excluded. Passing a shorter
+    list is how a specific month (August, at 48% complete; March, with a
+    large one-off claim) is left out of both the average and, unless it
+    is also fed back in as its own row, the total.
+    """
+    by_month = {row["month"]: row["completed"] for row in monthly_rows}
+    included = [m for m in (included_months if included_months is not None else list(by_month))
+                if m in by_month]
+
+    if not included:
+        return {
+            "included_months": [],
+            "excluded_months": sorted(set(by_month) - set(included)),
+            "average_included": None,
+            "months_filled": total_policy_months,
+            "annual_claims": None,
+        }
+
+    values = [by_month[m] for m in included]
+    average = sum(values) / len(values)
+    months_filled = max(0, total_policy_months - len(included))
+    annual = sum(values) + average * months_filled
+
+    return {
+        "included_months": included,
+        "excluded_months": sorted(set(by_month) - set(included)),
+        "average_included": round(average, 2),
+        "months_filled": months_filled,
+        "annual_claims": round(annual, 2),
+    }
+
+
+def price_annual_claims(
+    annual_claims: Optional[float],
+    expiring_annual_premium: float,
+    loading_pct: float,
+    inflation_pct: float,
+    minimum_increase_pct: Optional[float] = None,
+) -> dict:
+    """The annual claims figure this method built, carried onto a premium
+    the way a burning cost always is.
+
+    Trended as a straight PERCENTAGE of the money, deliberately not the
+    house ladder's own convention of adding inflation in points to a loss
+    ratio - that rule is defined for a RATIO, and this is a claims total.
+    Multiplying it by anything else would be applying Method 1's formula
+    to a number Method 1 never produces, which is exactly the mixed-basis
+    mistake this whole build exists to avoid making a second way.
+
+    The house floor still applies - a renewal is a renewal regardless of
+    which of the house's methods priced it, and two methods that agreed
+    on everything except whether the minimum increase binds would be
+    worse than either alone.
+    """
+    if not annual_claims or expiring_annual_premium <= 0 or loading_pct >= 1:
+        return {
+            "annual_claims": round(annual_claims, 2) if annual_claims else annual_claims,
+            "trended_claims": None, "required_premium": None,
+            "renewal_increase_pct": None, "projected_loss_ratio": None,
+            "floor_applied": False,
+        }
+    trended = annual_claims * (1 + inflation_pct)
+    required = trended / (1 - loading_pct)
+    floor_applied = False
+    if minimum_increase_pct is not None:
+        floor_premium = expiring_annual_premium * (1 + minimum_increase_pct)
+        if required < floor_premium:
+            required = floor_premium
+            floor_applied = True
+    return {
+        "annual_claims": round(annual_claims, 2),
+        "trended_claims": round(trended, 2),
+        "required_premium": round(required, 2),
+        "renewal_increase_pct": round((required / expiring_annual_premium - 1) * 100, 2),
+        "projected_loss_ratio": round(trended / required, 4) if required else None,
+        "floor_applied": floor_applied,
+    }

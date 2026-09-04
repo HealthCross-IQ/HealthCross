@@ -3467,6 +3467,7 @@ function renderCaseWorkspace() {
         <div data-rb-step="adjustments" id="renewal-bench-repricing-area"></div>
         <div data-rb-step="adjustments" id="renewal-bench-scenarios-area"></div>
         <div data-rb-step="pricing" id="renewal-bench-options-area"></div>
+        <div data-rb-step="pricing" id="claims-development-area"></div>
         <div data-rb-step="pricing" id="renewal-premium-buildup-area"></div>
         <div data-rb-step="claims" id="renewal-bench-claims-area"></div>
         <div data-rb-step="pricing" id="renewal-bench-scorecard-area"></div>
@@ -3529,6 +3530,7 @@ function renderCaseWorkspace() {
   loadRenewalBenchSummary();
   loadRenewalScenarios();
   loadRenewalOptions();
+  loadClaimsDevelopment();
   loadRenewalBenchScorecard();
   loadRenewalBenchNbComparison();
   loadRenewalBenchLargeClaims();
@@ -4151,7 +4153,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -4162,7 +4164,7 @@ async function uploadFile(kind) {
       await loadClaimsReportBreakdown();
       await loadDiagnosisExposure();
     }
-    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); }
+    if (kind === 'claims-ledger') { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
     // Auto-run the scorecard whenever a data source that feeds it changes,
     // so it's always current without a manual "Compute scorecard" click -
     // only re-runs on a new upload, never just from viewing the case.
@@ -4360,7 +4362,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -4371,7 +4373,7 @@ async function quickUploadConfirm() {
     await loadClaimsReportBreakdown();
     await loadDiagnosisExposure();
   }
-  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); }
+  if (uploadedKinds.has('claims-ledger')) { await loadClaimsLedgerAnalysis(); await loadRenewalRating(); await loadRenewalBenchmark(); await loadMemberRates(); await loadRenewalBenchScorecard(); await loadRenewalBenchNbComparison(); await loadRenewalBenchLargeClaims(); await loadRenewalBenchSummary(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
   if (['census', 'benefits', 'claims', 'claims-ledger'].some(k => uploadedKinds.has(k))) await autoComputeScore();
   await loadCaseCompleteness();
   // The executive summary sits ABOVE the upload panel and reads the case
@@ -5688,6 +5690,7 @@ async function adoptComputedExistingPremium(computedTotal) {
     await loadRenewalBenchSummary();
     await loadRenewalScenarios();
     await loadRenewalOptions();
+    await loadClaimsDevelopment();
     await loadRenewalBenchScorecard();
     await loadRenewalBenchNbComparison();
     await loadExecutiveSummary();
@@ -5755,6 +5758,7 @@ async function fillMemberRatesFromBook() {
     await loadRenewalBenchSummary();
     await loadRenewalScenarios();
     await loadRenewalOptions();
+    await loadClaimsDevelopment();
   } catch (err) {
     toast(err.message || 'Could not fill rates from the book', true);
   }
@@ -6438,6 +6442,126 @@ function _rbOptionsHtml(r) {
         combined ratio above 100% &mdash; at break-even there is none. The two reference rows carry
         no verdict: the expiring premium is what the others are measured against, and the minimum
         acceptable IS the line.</div>
+    </div>`;
+}
+
+/* ---------------- claims development ----------------
+
+   A second reading of this account's own claims, built from how long
+   this book's claims actually take to be received - not the house's
+   flat 30-day IBNR tail. Deliberately interactive rather than a single
+   number: large claims are FLAGGED, never auto-stripped (whether one
+   recurs is a clinical or membership question, not something a
+   threshold can answer), and which months feed the projection is
+   something the underwriter chooses here, not something this panel
+   decides on its own. Sits beside Method 1 and the pricing options
+   table as a comparison, never as a silent replacement for either. */
+let claimsDevInputs = { excludeClaimIds: new Set(), includeMonths: null };
+
+function _cdToggleClaim(claimId) {
+  if (claimsDevInputs.excludeClaimIds.has(claimId)) claimsDevInputs.excludeClaimIds.delete(claimId);
+  else claimsDevInputs.excludeClaimIds.add(claimId);
+  loadClaimsDevelopment();
+}
+
+function _cdToggleMonth(month, allMonthsCsv) {
+  // Comma-joined, not JSON - a JSON array's own double quotes collide
+  // with the double-quoted JS string this is passed as inside an inline
+  // onchange attribute. Month strings are always "YYYY-MM", so a comma
+  // can never appear inside one and needs no escaping either way.
+  const allMonths = allMonthsCsv.split(',');
+  // null means "everything is included" implicitly - unticking one month
+  // switches to an explicit list rather than requiring every month to
+  // already be named.
+  let months = claimsDevInputs.includeMonths === null ? allMonths.slice() : claimsDevInputs.includeMonths.slice();
+  months = months.includes(month) ? months.filter(m => m !== month) : months.concat([month]);
+  claimsDevInputs.includeMonths = (months.length === allMonths.length) ? null : months;
+  loadClaimsDevelopment();
+}
+
+async function loadClaimsDevelopment() {
+  const area = document.getElementById('claims-development-area');
+  if (!area || !currentCase) return;
+  try {
+    const p = new URLSearchParams();
+    claimsDevInputs.excludeClaimIds.forEach(id => p.append('exclude_claim_ids', id));
+    if (claimsDevInputs.includeMonths !== null) {
+      claimsDevInputs.includeMonths.forEach(m => p.append('include_months', m));
+    }
+    const r = await api(`/cases/${currentCase.id}/claims-development?${p}`);
+    area.innerHTML = _claimsDevelopmentHtml(r);
+  } catch (err) {
+    area.innerHTML = '';
+  }
+}
+
+function _claimsDevelopmentHtml(r) {
+  const money = v => v == null ? '&mdash;' : Math.round(v).toLocaleString();
+  const pct = v => v == null ? '&mdash;' : (v * 100).toFixed(1) + '%';
+
+  if (r.insufficient_data) {
+    return `
+      <div class="rb-card">
+        <div class="rb-card-title">Claims development</div>
+        <div class="rb-card-sub">${escapeHtml(r.reason || 'Not enough data yet to build a completion curve.')}</div>
+      </div>`;
+  }
+
+  const allMonths = r.monthly.map(m => m.month);
+  const allMonthsCsv = allMonths.join(',');
+  const included = new Set(r.projection.included_months);
+
+  const rows = r.monthly.map(m => {
+    const large = r.large_claims_flagged[m.month] || [];
+    const isIncluded = included.has(m.month);
+    const largeHtml = large.map(c => {
+      const excluded = r.excluded_claim_ids.includes(c.claim_id);
+      return `<label style="display:block;cursor:pointer;font-weight:400;">
+          <input type="checkbox" ${excluded ? '' : 'checked'}
+            onchange="_cdToggleClaim('${escapeHtml(c.claim_id)}')">
+          ${escapeHtml(c.patient_id || '')} &middot; ${money(c.amount)} &middot; ${escapeHtml(c.diagnosis || 'no diagnosis on file')}
+        </label>`;
+    }).join('');
+    return `<tr${isIncluded ? '' : ' class="inert"'}>
+        <td><label style="cursor:pointer;"><input type="checkbox" ${isIncluded ? 'checked' : ''}
+            onchange='_cdToggleMonth("${m.month}", "${allMonthsCsv}")'> ${escapeHtml(m.month)}</label></td>
+        <td class="num">${money(m.received)}</td>
+        <td class="num">${pct(m.completion)}</td>
+        <td class="num">${money(m.completed)}</td>
+        <td>${largeHtml || '&mdash;'}</td>
+      </tr>`;
+  }).join('');
+
+  const leaversHtml = (r.leavers || []).length
+    ? r.leavers.map(l => `${escapeHtml(l.patient_id)} (${money(l.incurred)})`).join(', ')
+    : 'none on this term';
+
+  return `
+    <div class="rb-card">
+      <div class="rb-card-title">Claims development</div>
+      <div class="rb-card-sub">This account's own months, true&rsquo;d up by how long this
+        book&rsquo;s claims actually take to be received &mdash; not the flat 30-day IBNR tail.
+        Tick which months should count toward the year; a month left unticked is filled at the
+        average of the ones that are, rather than silently vanishing from the total. Large
+        claims are flagged, never stripped automatically &mdash; untick one only once you have
+        decided it will not recur.</div>
+      <table class="rb-scenario-table" style="margin-top:14px;">
+        <thead><tr>
+          <th>Month</th><th class="num">Received</th><th class="num">Completion</th>
+          <th class="num">Completed</th><th>Large claims &mdash; untick to exclude</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <div class="rb-card-sub" style="margin-top:12px;">Leavers, excluded automatically and never
+        counted above: ${leaversHtml}.</div>
+      <div class="rb-kpi-strip" style="margin-top:14px;">
+        ${_rbKpi('Annual claims', money(r.projection.annual_claims),
+            `${r.projection.included_months.length} month(s) counted, ${r.projection.months_filled} filled at the average`)}
+        ${_rbKpi('Trended claims', money(r.pricing.trended_claims), '')}
+        ${_rbKpi('Required premium', money(r.pricing.required_premium),
+            r.pricing.floor_applied ? 'house floor applied' : 'this method’s own ask')}
+        ${_rbKpi('Projected loss ratio', pct(r.pricing.projected_loss_ratio), '')}
+      </div>
     </div>`;
 }
 

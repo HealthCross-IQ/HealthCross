@@ -161,7 +161,18 @@ def large_claim_lines(db: Session) -> List[dict]:
         # free text an operator typed.
         models.PortfolioClaimEntry.diagnosis_code,
         models.PortfolioClaimEntry.date_of_treatment,
+        # When the claim was actually received, not just treated - the
+        # pair a real completion-factor IBNR needs (see
+        # app.scoring.rules.claims_completion). NULL on anything ingested
+        # before that field existed, which callers must not read as "not
+        # yet received" - see that module's own handling of the gap.
+        models.PortfolioClaimEntry.date_reception,
         models.PortfolioClaimEntry.final_amount,
+        # A stable per-line identifier, so a UI can let someone toggle one
+        # specific claim line in or out of a calculation (a large claim
+        # flagged for exclusion) and mean the same line on the next call -
+        # patient_id + amount + date is not unique enough on its own.
+        models.PortfolioClaimEntry.claim_id,
     ).all()
     return [
         {
@@ -172,10 +183,12 @@ def large_claim_lines(db: Session) -> List[dict]:
             "diagnosis_description": diagnosis_description,
             "diagnosis_code": diagnosis_code,
             "date_of_treatment": date_of_treatment,
+            "date_reception": date_reception,
             "final_amount": final_amount,
+            "claim_id": claim_id,
         }
         for patient_id, group_name, client_name, provider_name, diagnosis_description,
-        diagnosis_code, date_of_treatment, final_amount in rows
+        diagnosis_code, date_of_treatment, date_reception, final_amount, claim_id in rows
     ]
 
 
