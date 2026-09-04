@@ -9956,9 +9956,35 @@ async function _rrLoadNationality() {
   }
 }
 
+function _rrNationalityByZone(rows) {
+  const buckets = {};
+  for (const r of rows) {
+    const zone = r.nationality_zone || 'Unmapped';
+    const b = buckets[zone] || (buckets[zone] = { zone, member_count: 0, actual_premium: 0, incurred_claims: 0 });
+    b.member_count += r.member_count || 0;
+    b.actual_premium += r.actual_premium || 0;
+    b.incurred_claims += r.incurred_claims || 0;
+  }
+  return Object.values(buckets)
+    .map(b => ({ ...b, loss_ratio: b.actual_premium ? b.incurred_claims / b.actual_premium : null }))
+    .sort((a, b) => b.member_count - a.member_count);
+}
+
 function _rrNationalityHtml(rows) {
-  const sorted = [...rows].sort((a, b) => (b.incurred_claims || 0) - (a.incurred_claims || 0));
-  const body = sorted.map(r => `
+  const zones = _rrNationalityByZone(rows);
+  const zoneBody = zones.map(z => `
+    <tr>
+      <td>${escapeHtml(z.zone)}</td>
+      <td class="num">${z.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(z.actual_premium)}</td>
+      <td class="num">${_lrMoney(z.incurred_claims)}</td>
+      <td class="num ${_lrBand(z.loss_ratio)}" style="font-weight:600;">${_lrPct(z.loss_ratio)}</td>
+    </tr>`).join('');
+
+  const byLives = [...rows].sort((a, b) => (b.member_count || 0) - (a.member_count || 0));
+  const top10 = byLives.slice(0, 10);
+  const omitted = byLives.length - top10.length;
+  const body = top10.map(r => `
     <tr>
       <td>${escapeHtml(r.nationality)}</td>
       <td>${escapeHtml(r.nationality_zone || '-')}</td>
@@ -9977,6 +10003,14 @@ function _rrNationalityHtml(rows) {
           <div class="lr-card-note">Members = exposed risk population (ERP) headcount. Loss ratio = incurred (paid + outstanding + IBNR) &divide; each nationality's own actual premium. Burning cost = AED per earned member-year - see Nationality Risk for the credibility blend behind the rating factor.</div>
         </div>
       </div>
+      <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">By zone</div>
+      <div class="lr-table-wrap" style="margin-bottom:14px;">
+        <table class="lr-table">
+          <thead><tr><th>Zone</th><th class="num">Members (ERP)</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th></tr></thead>
+          <tbody>${zoneBody || '<tr><td colspan="5" class="lr-empty">No data yet.</td></tr>'}</tbody>
+        </table>
+      </div>
+      <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">Top 10 nationalities by lives${omitted > 0 ? ` (${omitted} more not shown)` : ''}</div>
       <div class="lr-table-wrap">
         <table class="lr-table">
           <thead><tr>
@@ -10430,12 +10464,20 @@ function printReinsuranceReport() {
       <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
     </tr>`).join('');
 
-  // Top 25 by incurred - the whole nationality table can run to 100+ rows
-  // on a real book, most carrying negligible exposure.
-  const natRows = [...(rrData.nationality || [])]
-    .sort((a, b) => (b.incurred_claims || 0) - (a.incurred_claims || 0))
-    .slice(0, 25)
-    .map(r => `
+  const natZones = _rrNationalityByZone(rrData.nationality || []);
+  const natZoneRows = natZones.map(z => `
+    <tr>
+      <td>${escapeHtml(z.zone)}</td>
+      <td class="num">${z.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(z.actual_premium)}</td>
+      <td class="num">${_rrPrintMoney(z.incurred_claims)}</td>
+      <td class="num b ${_rrPrintBand(z.loss_ratio)}">${_rrPrintPct(z.loss_ratio)}</td>
+    </tr>`).join('');
+
+  // Top 10 by lives - the whole nationality table can run to 100+ rows on
+  // a real book, most carrying negligible exposure.
+  const natByLives = [...(rrData.nationality || [])].sort((a, b) => (b.member_count || 0) - (a.member_count || 0));
+  const natRows = natByLives.slice(0, 10).map(r => `
     <tr>
       <td>${escapeHtml(r.nationality)}</td>
       <td>${escapeHtml(r.nationality_zone || '-')}</td>
@@ -10445,7 +10487,7 @@ function printReinsuranceReport() {
       <td class="num ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</td>
       <td class="num">${_rrPrintMoney(r.burning_cost)}</td>
     </tr>`).join('');
-  const natOmitted = Math.max(0, (rrData.nationality || []).length - 25);
+  const natOmitted = Math.max(0, natByLives.length - 10);
 
   const groupSizeRows = (rrData.groupSize || []).map(r => `
     <tr>
@@ -10641,7 +10683,13 @@ function printReinsuranceReport() {
   </table>
 
   <h2>Nationality loss ratio, burning cost &amp; exposed risk population</h2>
-  <div class="note">Top 25 by incurred claims${natOmitted ? ` - ${natOmitted} more nationalities not shown (thin exposure)` : ''}. Members = exposed risk population (ERP).</div>
+  <div class="note">Members = exposed risk population (ERP).</div>
+  <div class="note" style="font-weight:600;">By zone</div>
+  <table>
+    <thead><tr><th>Zone</th><th class="num">Members (ERP)</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th></tr></thead>
+    <tbody>${natZoneRows || '<tr><td colspan="5">No data.</td></tr>'}</tbody>
+  </table>
+  <div class="note" style="font-weight:600; margin-top:8px;">Top 10 nationalities by lives${natOmitted ? ` - ${natOmitted} more not shown` : ''}</div>
   <table>
     <thead><tr><th>Nationality</th><th>Zone</th><th class="num">Members (ERP)</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th><th class="num">Burning cost</th></tr></thead>
     <tbody>${natRows || '<tr><td colspan="7">No data.</td></tr>'}</tbody>
