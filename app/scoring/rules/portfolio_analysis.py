@@ -427,6 +427,8 @@ def analyze_portfolio_member(
     claims_by_beneficiary: Dict[str, List[dict]],
     as_of: Optional[date_cls] = None,
     subgroup_master_by_name: Optional[Dict[str, str]] = None,
+    opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
+    default_loading_pct: Optional[float] = None,
 ) -> dict:
     """member: one row from app/ingestion/portfolio_members.py."""
     beneficiary_id = member["beneficiary_id"]
@@ -444,6 +446,21 @@ def analyze_portfolio_member(
     actual_premium = actual_gross_premium * earned_fraction if actual_gross_premium is not None else None
     claims_breakdown = actual_claims_for_member(member, claims_by_beneficiary)
     ibnr = ibnr_for_member(member, claims_by_beneficiary, as_of)
+
+    # This member's own account's REAL expense loading (see
+    # resolve_client_opex_pct) - never a flat book-wide assumption. The
+    # house default is a last resort for an account with literally no
+    # OPEX record on file, not something applied across the board; a
+    # reinsurance-facing Net LR must be struck against each account's own
+    # real figure wherever one exists. Computed here (not only inside
+    # account_loss_ratio_rows) so every per-dimension rollup
+    # (summarize_portfolio's Product/Network/Relation/... breakdowns) can
+    # also report a real Net LR, not just the per-account Loss Ratio view.
+    master_client_for_loading = resolve_master_client(member, subgroup_master_by_name)
+    loading_pct = resolve_client_opex_pct(
+        master_client_for_loading, member.get("policy_start_date"), opex_records_by_client,
+        default_loading_pct if default_loading_pct is not None else DEFAULT_EXPENSE_RATIO_PCT,
+    )
 
     if is_out_of_scope_network_type(member.get("network_type_raw")):
         # Still a real person in the population even though no rate-card
@@ -469,7 +486,7 @@ def analyze_portfolio_member(
             "nationality": member.get("nationality"),
             "nationality_zone": member.get("nationality_zone"),
             "client": member.get("contract") or member.get("master_contract"),
-            "master_client": resolve_master_client(member, subgroup_master_by_name),
+            "master_client": master_client_for_loading,
             "gender": member.get("gender"),
             "relation": member.get("relation"),
             "marital_status": member.get("marital_status"),
@@ -489,6 +506,7 @@ def analyze_portfolio_member(
             "claim_count": claims_breakdown["count"],
             "ibnr": round(ibnr, 2),
             "earned_premium_fraction": round(earned_fraction, 4),
+            "loading_pct": loading_pct,
         }
 
     warnings: List[str] = []
@@ -533,7 +551,7 @@ def analyze_portfolio_member(
         # shows each subgroup separately. Lets loss ratio/burning cost be
         # seen at the master level first, then drilled into subgroups via
         # the master_client filter + group_by=client.
-        "master_client": resolve_master_client(member, subgroup_master_by_name),
+        "master_client": master_client_for_loading,
         "gender": member.get("gender"),
         "relation": member.get("relation"),
         "marital_status": member.get("marital_status"),
@@ -567,6 +585,7 @@ def analyze_portfolio_member(
         "claim_count": claims_breakdown["count"],
         "ibnr": round(ibnr, 2),
         "earned_premium_fraction": round(earned_fraction, 4),
+        "loading_pct": loading_pct,
         "warnings": warnings,
     }
 
@@ -844,9 +863,175 @@ def utilization_by_benefit_category(claims: List[dict]) -> List[dict]:
     return rows
 
 
+#: MEDICAL_ACT is a free-text (French/English) description of the actual
+#: act billed, not a coded field - "Frais hopital accouchement cesarienne"
+#: / "C-section - hospital fees" for a caesarean delivery line, "Frais
+#: hospitaliers d'accouchement" / "Delivery - hospital fees" for a normal
+#: one. Deliberately NOT read from diagnosis code/description: a real
+#: maternity claim carries diagnosis codes for indications and
+#: complications (a scar from a PRIOR caesarean, fetal distress, breech
+#: presentation...), not the mode of THIS delivery - classifying by
+#: diagnosis would misread "history of caesarean" as a caesarean delivery
+#: happening now. Order matters below: a caesarean line's own act text
+#: also contains "accouchement"/"delivery", so caesarean is checked first.
+_CSECTION_ACT_MARKERS = ("cesarienne", "césarienne", "c-section", "cesarean", "caesarean")
+_DELIVERY_ACT_MARKERS = ("accouchement", "delivery")
+
+
+def _delivery_type_from_medical_act(medical_act: Optional[str]) -> Optional[str]:
+    text = (medical_act or "").strip().lower()
+    if any(marker in text for marker in _CSECTION_ACT_MARKERS):
+        return "C-section"
+    if any(marker in text for marker in _DELIVERY_ACT_MARKERS):
+        return "Normal delivery"
+    return None
+
+
+def maternity_cost_by_case(claims: List[dict]) -> dict:
+    """Every MATERNITY-category claim line rolled up to one CASE per
+    patient (one pregnancy, on the assumption a patient does not appear
+    twice in one policy period's worth of claims) - the whole episode's
+    cost (antenatal care, the delivery itself, postnatal/newborn care),
+    not one claim line at a time, since "cost per claim" understates what
+    a pregnancy actually costs the book.
+
+    Each case is classified Normal delivery / C-section by whichever of
+    its own claim lines is itself a delivery line (see
+    _delivery_type_from_medical_act) - prenatal/postnatal/newborn lines
+    don't carry that signal, only the delivery line itself does. A case
+    with no delivery line on file yet (still-ongoing antenatal care, or a
+    delivery not yet billed) is "Not yet delivered", counted and costed
+    separately rather than folded into either delivery type.
+
+    provider_name is read off that SAME delivery line (not just any
+    line for the patient), since prenatal visits can run at a different
+    clinic than the hospital where the birth itself happened - a case
+    with no delivery line has no delivery provider to attribute cost to,
+    so it doesn't appear in by_provider.
+
+    Returns {"by_delivery_type": [...], "by_provider": [...], "case_count", "total_cost"}.
+    """
+    by_patient: Dict[str, dict] = defaultdict(
+        lambda: {"total": 0.0, "delivery_type": None, "provider": None, "delivery_amount_seen": -1.0}
+    )
+    for c in claims:
+        if (c.get("medical_category") or "").strip().upper() != "MATERNITY":
+            continue
+        patient_id = c.get("patient_id")
+        if not patient_id:
+            continue
+        bucket = by_patient[patient_id]
+        amount = c.get("final_amount") or 0.0
+        bucket["total"] += amount
+        delivery_type = _delivery_type_from_medical_act(c.get("medical_act"))
+        # The largest-value delivery-labelled line is trusted as THE
+        # delivery event, in the rare case more than one line for a
+        # patient carries a delivery marker (a data entry duplicate, or a
+        # line correction) - the smaller one is very unlikely to be the
+        # real billed delivery.
+        if delivery_type and amount >= bucket["delivery_amount_seen"]:
+            bucket["delivery_type"] = delivery_type
+            bucket["provider"] = c.get("provider_name")
+            bucket["delivery_amount_seen"] = amount
+
+    cases = list(by_patient.values())
+
+    by_type: Dict[str, dict] = defaultdict(lambda: {"case_count": 0, "total_cost": 0.0})
+    for case in cases:
+        label = case["delivery_type"] or "Not yet delivered"
+        by_type[label]["case_count"] += 1
+        by_type[label]["total_cost"] += case["total"]
+
+    by_delivery_type = [
+        {
+            "delivery_type": label,
+            "case_count": bucket["case_count"],
+            "total_cost": round(bucket["total_cost"], 2),
+            "average_cost_per_case": round(bucket["total_cost"] / bucket["case_count"], 2) if bucket["case_count"] else None,
+        }
+        for label, bucket in by_type.items()
+    ]
+    by_delivery_type.sort(key=lambda r: r["total_cost"], reverse=True)
+
+    by_provider_bucket: Dict[str, dict] = defaultdict(lambda: {"case_count": 0, "total_cost": 0.0})
+    for case in cases:
+        if not case["provider"]:
+            continue
+        by_provider_bucket[case["provider"]]["case_count"] += 1
+        by_provider_bucket[case["provider"]]["total_cost"] += case["total"]
+
+    by_provider = [
+        {
+            "provider_name": provider,
+            "case_count": bucket["case_count"],
+            "total_cost": round(bucket["total_cost"], 2),
+            "average_cost_per_case": round(bucket["total_cost"] / bucket["case_count"], 2) if bucket["case_count"] else None,
+        }
+        for provider, bucket in by_provider_bucket.items()
+    ]
+    by_provider.sort(key=lambda r: r["total_cost"], reverse=True)
+
+    return {
+        "by_delivery_type": by_delivery_type,
+        "by_provider": by_provider,
+        "case_count": len(cases),
+        "total_cost": round(sum(case["total"] for case in cases), 2),
+    }
+
+
+def provider_cost_comparison(
+    claims: List[dict], provider_name_markers: tuple, network: Optional[str] = None, region: Optional[str] = None,
+) -> dict:
+    """Total spend/claim count/average cost per claim at providers whose
+    own name contains any of `provider_name_markers` (case-insensitive)
+    vs every other provider - NOT a burning cost (claims over exposed
+    member-years): exposure belongs to a MEMBER, not to which hospital
+    they happened to visit, so there is no member-year denominator to
+    strike a provider's own claims against. This is a claims-only cost
+    comparison, the same basis Utilization of Benefits and Large Claims
+    already use.
+
+    `network`/`region` scope which claim lines count at all - e.g.
+    Mediclinic vs every other provider, but only within the Comprehensive
+    network and Dubai, so the comparison is apples-to-apples rather than
+    Mediclinic's Dubai volume against a lower-cost network's book-wide one.
+    Both are read off each claim's own already-resolved network/region
+    (see the caller, which must have attached them - large_claim_lines/
+    _claim_dicts_for_utilization do not carry these on their own since
+    they are member facts, not claim-line facts).
+    """
+    scoped = claims
+    if network:
+        scoped = [c for c in scoped if c.get("network") == network]
+    if region:
+        scoped = [c for c in scoped if c.get("region") == region]
+
+    def _is_marked_provider(provider: Optional[str]) -> bool:
+        text = (provider or "").strip().lower()
+        return any(marker.lower() in text for marker in provider_name_markers)
+
+    groups: Dict[str, dict] = {
+        "matched": {"claim_count": 0, "total_cost": 0.0},
+        "other": {"claim_count": 0, "total_cost": 0.0},
+    }
+    for c in scoped:
+        key = "matched" if _is_marked_provider(c.get("provider_name")) else "other"
+        groups[key]["claim_count"] += 1
+        groups[key]["total_cost"] += c.get("final_amount") or 0.0
+
+    return {
+        label: {
+            "claim_count": g["claim_count"],
+            "total_cost": round(g["total_cost"], 2),
+            "average_cost_per_claim": round(g["total_cost"] / g["claim_count"], 2) if g["claim_count"] else None,
+        }
+        for label, g in groups.items()
+    }
+
+
 _GROUP_BY_FIELDS = {
     "product", "network", "region", "nationality_zone", "client", "master_client",
-    "gender", "relation", "policy_year", "category", "age_band",
+    "gender", "relation", "policy_year", "category", "age_band", "enrollment_type",
 }
 
 
@@ -892,6 +1077,13 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             "priced_actual_claims": 0.0,
             "out_of_scope_member_count": 0,
             "actual_premium": 0.0,
+            # Each member's own actual_premium net of THEIR OWN account's
+            # real expense loading (see analyze_portfolio_member's
+            # loading_pct - resolve_client_opex_pct, never a flat
+            # book-wide assumption) - summed member-by-member so a bucket
+            # spanning several accounts blends each one's own real figure
+            # rather than applying one rate to the whole bucket.
+            "net_premium": 0.0,
             "actual_claims": 0.0,
             "actual_claims_paid": 0.0,
             "actual_claims_outstanding": 0.0,
@@ -912,6 +1104,7 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
             bucket["out_of_scope_member_count"] += 1
         if r.get("actual_premium") is not None:
             bucket["actual_premium"] += r["actual_premium"]
+            bucket["net_premium"] += r["actual_premium"] * (1 - (r.get("loading_pct") or 0.0))
             if in_scope:
                 bucket["priced_actual_premium"] += r["actual_premium"]
         if in_scope:
@@ -971,6 +1164,14 @@ def summarize_portfolio(member_results: List[dict], group_by: str) -> List[dict]
                 # which omits IBNR entirely.
                 "loss_ratio_incl_ibnr": round((actual_claims + bucket["ibnr"]) / actual_premium, 4)
                 if actual_premium
+                else None,
+                # Net of each member's own account's REAL expense loading
+                # (never a flat assumption - see analyze_portfolio_member's
+                # loading_pct), same Paid+Outstanding+IBNR numerator as
+                # loss_ratio_incl_ibnr above.
+                "net_premium": round(bucket["net_premium"], 2),
+                "net_loss_ratio": round((actual_claims + bucket["ibnr"]) / bucket["net_premium"], 4)
+                if bucket["net_premium"]
                 else None,
                 # Positive = actual premium sits above standard (charging
                 # more than the rate card); negative = discounted below it.
@@ -1039,6 +1240,25 @@ def age_band_label(age: Optional[int], bands: List[tuple]) -> Optional[str]:
     return f"{band[0]}-{band[1]}" if band else None
 
 
+def enrollment_type_label(member_start_date, policy_start_date) -> Optional[str]:
+    """"Initial" for a member enrolled the same day the policy itself
+    incepted (the original census), "Addition" for one whose own
+    enrollment started later - joined via endorsement after the policy
+    was already running. None when either date is missing, so there's
+    nothing to compare (rolls up under "Unmapped" wherever this is used
+    as a group_by/filter dimension, same as age_band).
+
+    Distinguishes the loss ratio the ORIGINAL group was underwritten on
+    from what mid-term additions are actually costing - additions are
+    frequently a different risk (a new joiner is not medically
+    underwritten the same way inception members were, on most UAE group
+    schemes), and blending the two together hides that.
+    """
+    if not member_start_date or not policy_start_date:
+        return None
+    return "Initial" if member_start_date <= policy_start_date else "Addition"
+
+
 # A bucket's burning cost is one claims-total divided by one member-years
 # total - with only a couple of member-years behind it, a single large
 # claim can swing the per-member-year rate by 100x, which reads as a wild
@@ -1099,8 +1319,15 @@ def summarize_burning_cost_by_product_network(member_results: List[dict]) -> Lis
     Network, the book's own real claims experience runs Y" side by side,
     a reference for the underwriter to weigh rather than something that
     silently overrides the rate card itself.
+
+    `premium_pmpy` (actual premium per earned member-year) is struck on
+    the SAME basis as burning_cost (AED per member-year, not per head),
+    so the two are directly comparable - premium_pmpy above burning_cost
+    is real margin on that Product/Network before expenses; below it, the
+    segment is running claims-negative regardless of what the rate card
+    would have charged.
     """
-    buckets: Dict[tuple, dict] = defaultdict(lambda: {"member_count": 0, "actual_claims": 0.0, "earned_member_years": 0.0})
+    buckets: Dict[tuple, dict] = defaultdict(lambda: {"member_count": 0, "actual_claims": 0.0, "actual_premium": 0.0, "earned_member_years": 0.0})
 
     for r in member_results:
         if not r.get("in_scope", True):
@@ -1113,6 +1340,7 @@ def summarize_burning_cost_by_product_network(member_results: List[dict]) -> Lis
         bucket = buckets[key]
         bucket["member_count"] += 1
         bucket["actual_claims"] += r.get("actual_claims") or 0.0
+        bucket["actual_premium"] += r.get("actual_premium") or 0.0
         bucket["earned_member_years"] += r.get("earned_premium_fraction") or 0.0
 
     rows = []
@@ -1124,8 +1352,10 @@ def summarize_burning_cost_by_product_network(member_results: List[dict]) -> Lis
                 "network": network,
                 "member_count": bucket["member_count"],
                 "actual_claims": round(bucket["actual_claims"], 2),
+                "actual_premium": round(bucket["actual_premium"], 2),
                 "earned_member_years": round(earned_member_years, 4),
                 "burning_cost": round(bucket["actual_claims"] / earned_member_years, 2) if earned_member_years else None,
+                "premium_pmpy": round(bucket["actual_premium"] / earned_member_years, 2) if earned_member_years else None,
             }
         )
     rows.sort(key=lambda r: (r["product"], r["network"]))

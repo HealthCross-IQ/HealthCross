@@ -108,6 +108,41 @@ def test_analyze_portfolio_member_computes_standard_premium_via_the_rate_card():
     assert result["warnings"] == []
 
 
+def test_analyze_portfolio_member_uses_the_account_s_own_real_opex_not_a_flat_assumption():
+    mapping = {"Acme Sub LLC": "Bronze"}
+    opex_records = {"Acme Holdings": [{"start_date": None, "end_date": None, "opex_pct": 0.20}]}
+    result = analyze_portfolio_member(_member(), mapping, RATE_CARDS, [], {}, opex_records_by_client=opex_records)
+    assert result["loading_pct"] == 0.20  # this account's own real figure, not the house default
+
+
+def test_analyze_portfolio_member_falls_back_to_the_house_default_with_no_real_opex_on_file():
+    mapping = {"Acme Sub LLC": "Bronze"}
+    result = analyze_portfolio_member(_member(), mapping, RATE_CARDS, [], {}, opex_records_by_client={})
+    assert result["loading_pct"] == DEFAULT_EXPENSE_RATIO_PCT
+
+
+def test_summarize_portfolio_net_loss_ratio_blends_each_member_s_own_real_loading():
+    # Two members on the SAME product/bucket but different accounts with
+    # different real OPEX - net_premium must blend each member's own real
+    # figure, not apply one flat rate across the whole bucket.
+    cheap_client = _member(beneficiary_id="A1", contract="Cheap Co", master_contract="Cheap Co",
+                            actual_gross_premium=1000.0)
+    pricey_client = _member(beneficiary_id="A2", contract="Pricey Co", master_contract="Pricey Co",
+                             actual_gross_premium=1000.0)
+    mapping = {"Cheap Co": "Bronze", "Pricey Co": "Bronze"}
+    opex_records = {
+        "Cheap Co": [{"start_date": None, "end_date": None, "opex_pct": 0.10}],
+        "Pricey Co": [{"start_date": None, "end_date": None, "opex_pct": 0.40}],
+    }
+    results = [
+        analyze_portfolio_member(cheap_client, mapping, RATE_CARDS, [], {}, opex_records_by_client=opex_records),
+        analyze_portfolio_member(pricey_client, mapping, RATE_CARDS, [], {}, opex_records_by_client=opex_records),
+    ]
+    row = summarize_portfolio(results, "product")[0]
+    # 1000*(1-0.10) + 1000*(1-0.40) = 900 + 600 = 1500, not 2000*(1-flat rate)
+    assert row["net_premium"] == 1500.0
+
+
 def test_analyze_portfolio_member_carries_nationality_and_marital_status_through():
     # Both are read from the member for pricing/zone purposes already but
     # weren't being surfaced in the result dict - needed for a demographic
@@ -943,6 +978,10 @@ def test_summarize_portfolio_groups_unmapped_members_together():
             "loss_ratio_vs_standard": None,
             "loss_ratio_vs_actual": 0.0,
             "loss_ratio_incl_ibnr": 0.0,
+            # No opex_records_by_client passed - falls back to the house
+            # default (33%), same as account_loss_ratio_rows' own fallback.
+            "net_premium": 1675.0,
+            "net_loss_ratio": 0.0,
             "actual_vs_standard_pct": None,
             "earned_member_years": 1.0,
             "burning_cost": 0.0,

@@ -17,7 +17,11 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.models import db_models as models
-from app.scoring.rules.portfolio_analysis import normalize_subgroup_key, resolve_master_client
+from app.scoring.rules.portfolio_analysis import (
+    normalize_subgroup_key,
+    resolve_group_product,
+    resolve_master_client,
+)
 
 
 # --- what the book is measured to ----------------------------------------
@@ -145,6 +149,7 @@ def large_claim_lines(db: Session) -> List[dict]:
     one group across its own subgroups.
     """
     master_by_beneficiary = master_client_by_beneficiary(db)
+    product_by_ben = product_by_beneficiary(db)
 
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
@@ -185,6 +190,7 @@ def large_claim_lines(db: Session) -> List[dict]:
             "patient_id": patient_id,
             "group_name": group_name,
             "client_name": master_by_beneficiary.get(patient_id) or client_name,
+            "product": product_by_ben.get(patient_id),
             "provider_name": provider_name,
             "diagnosis_description": diagnosis_description,
             "diagnosis_code": diagnosis_code,
@@ -234,6 +240,47 @@ def master_client_by_beneficiary(db: Session) -> Dict[str, str]:
         for m in db.query(
             models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
             models.PortfolioMember.master_contract, models.PortfolioMember.master_client_name,
+        ).all()
+        if m.beneficiary_id
+    }
+
+
+def product_by_beneficiary(db: Session) -> Dict[str, str]:
+    """beneficiary_id -> resolved Product (Platinum/Gold/Silver/Bronze/
+    Group - see resolve_group_product), for attributing a raw claim line
+    to the same Product every other view uses. Shared by the claims-only
+    views (Large Claims, Utilization of Benefits) that need to filter by
+    Product without a full membership/rate-card join.
+    """
+    by_group = group_product_by_name(db)
+    return {
+        m.beneficiary_id: resolve_group_product(
+            {"contract": m.contract, "master_contract": m.master_contract, "product_name": m.product_name},
+            by_group,
+        )
+        for m in db.query(
+            models.PortfolioMember.beneficiary_id, models.PortfolioMember.contract,
+            models.PortfolioMember.master_contract, models.PortfolioMember.product_name,
+        ).all()
+        if m.beneficiary_id
+    }
+
+
+def network_region_by_beneficiary(db: Session) -> Dict[str, dict]:
+    """beneficiary_id -> {"network", "region"}, resolved the same way
+    analyze_portfolio_member does (map_network_type off the member's own
+    raw network type; region is already a stored, ingestion-resolved
+    column) - for scoping a claims-only view (Utilization, provider cost
+    comparisons) to one network/region without a full membership/rate-
+    card join.
+    """
+    from app.reference.network_type_mapping import map_network_type
+
+    return {
+        m.beneficiary_id: {"network": map_network_type(m.network_type_raw), "region": m.region}
+        for m in db.query(
+            models.PortfolioMember.beneficiary_id, models.PortfolioMember.network_type_raw,
+            models.PortfolioMember.region,
         ).all()
         if m.beneficiary_id
     }

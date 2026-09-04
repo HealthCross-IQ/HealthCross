@@ -49,6 +49,8 @@ from app.scoring.rules.portfolio_analysis import (
     summarize_burning_cost_by_product_network_age_gender,
     summarize_new_vs_renewal,
     summarize_portfolio,
+    maternity_cost_by_case,
+    provider_cost_comparison,
     top_claims_by_value,
     top_members_by_total_claims,
     utilization_by_benefit_category,
@@ -219,6 +221,10 @@ def _result_filters(
         None,
         description="Restrict to one age band (e.g. '26-35') - the same bands the loaded rate card actually prices by, see age_bands_from_rate_cards.",
     ),
+    enrollment_type: Optional[str] = Query(
+        None,
+        description="Restrict to 'Initial' (enrolled the day the policy incepted) or 'Addition' (joined later, via endorsement).",
+    ),
 ) -> Dict[str, str]:
     return {
         "product": product,
@@ -230,6 +236,7 @@ def _result_filters(
         "category": category,
         "master_client": master_client,
         "age_band": age_band,
+        "enrollment_type": enrollment_type,
     }
 
 
@@ -263,10 +270,17 @@ def portfolio_summary(
     client: Optional[str] = Query(
         None, description="Restrict to one client (matches PortfolioMember.contract, falling back to master_contract) for a client-level drill-down"
     ),
+    products: List[str] = Query(
+        [],
+        description="Restrict to members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
-    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(
+        db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client,
+        filters=filters, products=products or None,
+    )
     in_scope = [r for r in results if r.get("in_scope", True)]
     out_of_scope_count = len(results) - len(in_scope)
     unmapped_product_count = sum(1 for r in in_scope if not r.get("product"))
@@ -499,6 +513,10 @@ def portfolio_nationality_risk(
         DEFAULT_PRICING_CREDIBILITY,
         description="Credibility at which a nationality is marked ready to price on - below it the factor is still shown, just flagged as resting on partial data",
     ),
+    products: List[str] = Query(
+        [],
+        description="Restrict to members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
@@ -516,7 +534,7 @@ def portfolio_nationality_risk(
     """
     results = book_analysis.run_analysis(
         db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year,
-        filters=filters, require_rate_card=False,
+        filters=filters, require_rate_card=False, products=products or None,
     )
     rows = nationality_risk_table(
         results,
@@ -1552,6 +1570,10 @@ def portfolio_group_size_bands(
     as_of: Optional[date] = Query(None, description="Date to compute earned premium as of - defaults to the stored data-as-of date, or today if none is set"),
     policy_year: Optional[str] = Query(None, description="Restrict to members whose own policy started in this year"),
     client: Optional[str] = Query(None, description="Restrict to one client for a client-level drill-down"),
+    products: List[str] = Query(
+        [],
+        description="Restrict to members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
@@ -1562,7 +1584,10 @@ def portfolio_group_size_bands(
     Size Distribution view (group_count/member_count/average_group_size
     per band) - see summarize_by_group_size_band for the full rationale.
     """
-    results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client, filters=filters)
+    results = book_analysis.run_analysis(
+        db, as_of=as_of or book_repo.stored_as_of(db), policy_year=policy_year, client=client,
+        filters=filters, products=products or None,
+    )
     return {"rows": summarize_by_group_size_band(results)}
 
 
@@ -1694,6 +1719,10 @@ def burning_cost_by_age_gender(
 @router.get("/burning-cost-by-product-network", response_model=List[dict])
 def burning_cost_by_product_network(
     as_of: Optional[date] = Query(None, description="Date to compute earned premium as of"),
+    products: List[str] = Query(
+        [],
+        description="Restrict to members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
+    ),
     db: Session = Depends(get_db),
 ):
     """Actual burning cost from the already-booked book for every (Product,
@@ -1706,7 +1735,7 @@ def burning_cost_by_product_network(
     not something that page requires to function.
     """
     try:
-        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db))
+        results = book_analysis.run_analysis(db, as_of=as_of or book_repo.stored_as_of(db), products=products or None)
     except HTTPException:
         return []
     return summarize_burning_cost_by_product_network(results)
@@ -1831,33 +1860,44 @@ def portfolio_filter_options(db: Session = Depends(get_db)):
 def _claim_dicts_for_utilization(db: Session) -> List[dict]:
     """Every uploaded claim line's own ip_op_maternity/medical_category/
     medical_act/final_amount, plus its resolved master client (see
-    book_repo.master_client_by_beneficiary) so this can be scoped to one client for
-    a client-level report - a Utilization of Benefits view, like Large
-    Claims, is purely about the claim lines themselves and needs no
-    member/rate-card join otherwise (see book_repo.large_claim_lines's
-    own docstring).
+    book_repo.master_client_by_beneficiary) and resolved Product (see
+    book_repo.product_by_beneficiary) so this can be scoped to one client
+    or filtered to a set of Products - a Utilization of Benefits view,
+    like Large Claims, is purely about the claim lines themselves and
+    needs no member/rate-card join otherwise (see book_repo.
+    large_claim_lines's own docstring).
     """
     master_client_by_beneficiary = book_repo.master_client_by_beneficiary(db)
+    product_by_beneficiary = book_repo.product_by_beneficiary(db)
+    network_region_by_beneficiary = book_repo.network_region_by_beneficiary(db)
 
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
         models.PortfolioClaimEntry.client_name,
+        models.PortfolioClaimEntry.provider_name,
         models.PortfolioClaimEntry.ip_op_maternity,
         models.PortfolioClaimEntry.medical_category,
         # Needed to split PARAMEDICAL into physiotherapy vs alternative
-        # treatment - the category alone cannot tell them apart.
+        # treatment - the category alone cannot tell them apart. Also the
+        # only field that distinguishes a C-section delivery line from a
+        # normal delivery line - see maternity_cost_by_case.
         models.PortfolioClaimEntry.medical_act,
         models.PortfolioClaimEntry.final_amount,
     ).all()
     return [
         {
+            "patient_id": patient_id,
             "master_client": master_client_by_beneficiary.get(patient_id) or client_name,
+            "product": product_by_beneficiary.get(patient_id),
+            "network": (network_region_by_beneficiary.get(patient_id) or {}).get("network"),
+            "region": (network_region_by_beneficiary.get(patient_id) or {}).get("region"),
+            "provider_name": provider_name,
             "ip_op_maternity": ip_op_maternity,
             "medical_category": medical_category,
             "medical_act": medical_act,
             "final_amount": final_amount,
         }
-        for patient_id, client_name, ip_op_maternity, medical_category, medical_act, final_amount in rows
+        for patient_id, client_name, provider_name, ip_op_maternity, medical_category, medical_act, final_amount in rows
     ]
 
 
@@ -1865,6 +1905,10 @@ def _claim_dicts_for_utilization(db: Session) -> List[dict]:
 def portfolio_utilization(
     master_client: Optional[str] = Query(
         None, description="Restrict to one master client's own claims (for a client-level report) - matches the resolved master client name, same as /large-claims"
+    ),
+    products: List[str] = Query(
+        [],
+        description="Restrict to claims from members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
     ),
     db: Session = Depends(get_db),
 ):
@@ -1884,12 +1928,66 @@ def portfolio_utilization(
     claims = _claim_dicts_for_utilization(db)
     if master_client:
         claims = [c for c in claims if c.get("master_client") == master_client]
+    if products:
+        claims = [c for c in claims if c.get("product") in products]
     if not claims:
         raise HTTPException(status_code=400, detail="No claims uploaded yet")
     return {
         "by_encounter_type": utilization_by_encounter_type(claims),
         "by_benefit_category": utilization_by_benefit_category(claims),
     }
+
+
+@router.get("/maternity-cost-by-case")
+def portfolio_maternity_cost_by_case(
+    master_client: Optional[str] = Query(None, description="Restrict to one master client's own claims"),
+    products: List[str] = Query(
+        [],
+        description="Restrict to claims from members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
+    ),
+    db: Session = Depends(get_db),
+):
+    """Maternity cost per CASE (one pregnancy's whole episode - antenatal,
+    delivery, postnatal/newborn - not one claim line at a time), split
+    Normal delivery vs C-section, and by the delivery's own provider. See
+    maternity_cost_by_case for exactly how a case is classified and why
+    diagnosis codes aren't used for it.
+
+    Whole-book by default, independent of any rate card or membership
+    upload - purely a claims analysis, same as /utilization.
+    """
+    claims = _claim_dicts_for_utilization(db)
+    if master_client:
+        claims = [c for c in claims if c.get("master_client") == master_client]
+    if products:
+        claims = [c for c in claims if c.get("product") in products]
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims uploaded yet")
+    return maternity_cost_by_case(claims)
+
+
+@router.get("/provider-cost-comparison")
+def portfolio_provider_cost_comparison(
+    provider_markers: List[str] = Query(
+        ..., description="Match providers whose own name contains any of these (case-insensitive), e.g. provider_markers=Mediclinic"
+    ),
+    network: Optional[str] = Query(None, description="Scope to one resolved Network (e.g. 'MSH Comprehensive') - both sides of the comparison are scoped the same way"),
+    region: Optional[str] = Query(None, description="Scope to one region (Dubai/Abu Dhabi/Northern Emirates)"),
+    master_client: Optional[str] = Query(None, description="Restrict to one master client's own claims"),
+    db: Session = Depends(get_db),
+):
+    """Total spend/claim count/average cost per claim at providers whose
+    name matches `provider_markers` vs every other provider, scoped to
+    one network/region so the comparison is apples-to-apples. NOT a
+    burning cost - see provider_cost_comparison's own docstring for why
+    that denominator doesn't exist at provider granularity.
+    """
+    claims = _claim_dicts_for_utilization(db)
+    if master_client:
+        claims = [c for c in claims if c.get("master_client") == master_client]
+    if not claims:
+        raise HTTPException(status_code=400, detail="No claims uploaded yet")
+    return provider_cost_comparison(claims, tuple(provider_markers), network=network, region=region)
 
 
 @router.get("/large-claims")
@@ -1905,6 +2003,10 @@ def large_claims(
     ),
     master_client: Optional[str] = Query(
         None, description="Restrict to one master client's own claims (for a client-level report) - matches the resolved master client name, same as elsewhere"
+    ),
+    products: List[str] = Query(
+        [],
+        description="Restrict to claims from members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
     ),
     db: Session = Depends(get_db),
 ):
@@ -1934,6 +2036,8 @@ def large_claims(
     claims = book_repo.large_claim_lines(db)
     if master_client:
         claims = [c for c in claims if c.get("client_name") == master_client]
+    if products:
+        claims = [c for c in claims if c.get("product") in products]
     if not claims:
         raise HTTPException(status_code=400, detail="No claims uploaded yet")
 

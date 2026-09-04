@@ -28,6 +28,7 @@ from app.scoring.rules.portfolio_analysis import (
     analyze_portfolio_member,
     age_band_label,
     age_bands_from_rate_cards,
+    enrollment_type_label,
     group_claims_by_beneficiary,
 )
 
@@ -37,7 +38,7 @@ from app.scoring.rules.portfolio_analysis import (
 #: once, unlike group_by which only picks what's shown in rows.
 FILTERABLE_RESULT_FIELDS = (
     "product", "network", "region", "nationality_zone",
-    "gender", "relation", "category", "master_client", "age_band",
+    "gender", "relation", "category", "master_client", "age_band", "enrollment_type",
 )
 
 
@@ -48,6 +49,7 @@ def run_analysis(
     client: Optional[str] = None,
     filters: Optional[Dict[str, str]] = None,
     require_rate_card: bool = True,
+    products: Optional[List[str]] = None,
 ) -> List[dict]:
     """Every member priced against the rate card, with their own claims.
 
@@ -56,6 +58,13 @@ def run_analysis(
     several times over, and re-pricing the whole book each time is what
     made the report slow enough for the browser to block its own print
     tab.
+
+    `products` restricts to members on one of these Products (each
+    member's own resolved Product - Platinum/Gold/Silver/Bronze/Group,
+    see resolve_group_product) - a membership-in-list test, unlike
+    `filters`' single-value equality checks, since a reinsurance-facing
+    read commonly wants several tiers at once (e.g. every SME tier,
+    excluding the non-SME Group product line).
 
     Callers must treat the returned rows as read-only: the list is
     shared between everyone who asked the same question.
@@ -67,10 +76,11 @@ def run_analysis(
         client,
         tuple(sorted((k, v) for k, v in (filters or {}).items() if v)),
         require_rate_card,
+        tuple(sorted(products)) if products else None,
     )
     return cache.cached(db, key, lambda: _analyse(
         db, as_of=as_of, policy_year=policy_year, client=client,
-        filters=filters, require_rate_card=require_rate_card,
+        filters=filters, require_rate_card=require_rate_card, products=products,
     ))
 
 
@@ -114,6 +124,7 @@ def _analyse(
     client: Optional[str] = None,
     filters: Optional[Dict[str, str]] = None,
     require_rate_card: bool = True,
+    products: Optional[List[str]] = None,
 ) -> List[dict]:
     # NOTE: the HTTPExceptions below are the book layer reaching up into
     # HTTP, which it should not do - a "no rate card uploaded" is a fact
@@ -142,11 +153,17 @@ def _analyse(
     variant_rates = book.variant_rates(db)
     group_product_by_name = book.group_product_by_name(db)
     subgroup_master_by_name = book.subgroup_master_by_name(db)
+    # Each master client's own real expense loading, so every per-member
+    # result carries a real Net LR (see analyze_portfolio_member's
+    # loading_pct) rather than only the per-account Loss Ratio view
+    # knowing about real OPEX.
+    opex_records_by_client = book.opex_records_by_client(db)
 
     results = [
         analyze_portfolio_member(
             m, group_product_by_name, rate_cards, variant_rates, claims_by_beneficiary,
             as_of=as_of, subgroup_master_by_name=subgroup_master_by_name,
+            opex_records_by_client=opex_records_by_client,
         )
         for m in members
     ]
@@ -160,10 +177,13 @@ def _analyse(
     bands = age_bands_from_rate_cards(rate_cards)
     for r in results:
         r["age_band"] = age_band_label(r.get("age"), bands)
+        r["enrollment_type"] = enrollment_type_label(r.get("member_start_date"), r.get("policy_start_date"))
 
     for field, value in (filters or {}).items():
         if value:
             results = [r for r in results if str(r.get(field)) == value]
+    if products:
+        results = [r for r in results if r.get("product") in products]
     return results
 
 

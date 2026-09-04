@@ -9675,15 +9675,43 @@ function portfolioAnalysisPanelHtml() {
    ratios on two different screens (see account_loss_ratio_rows_for_book's
    own docstring). This screen is purely an assembly/presentation layer
    over those, so accuracy rides on the same already-tested code paths. */
-let rrState = { drillProduct: null, drillDim: 'relation' };
+let rrState = {
+  drillProduct: null,
+  // Group is HealthCross's non-SME product line, unchecked by default so
+  // the report reads as SME business unless asked to include it - same
+  // convention as the Loss Ratio screen's own product filter.
+  products: ['Platinum', 'Gold', 'Silver', 'Bronze'],
+};
 
 // Every section's own last-fetched rows, kept so Print/Save as PDF builds
-// from what's already on screen instead of re-running all 7 heavy
+// from what's already on screen instead of re-running all these heavy
 // analytical calls a second time - see printReinsuranceReport.
 let rrData = {};
 
 function _rrKpi(label, value) {
   return `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${value}</span></div>`;
+}
+
+// Every section-loading function appends its own products=... query
+// params on top of whatever base params it already builds, via this.
+function _rrProductParams(base) {
+  const params = base ? new URLSearchParams(base) : new URLSearchParams();
+  (rrState.products || []).forEach(p => params.append('products', p));
+  return params;
+}
+
+function _rrReadProductCheckboxes() {
+  const boxes = Array.from(document.querySelectorAll('.rr-product-cb'));
+  rrState.products = boxes.filter(b => b.checked).map(b => b.value);
+  loadReinsuranceReport();
+}
+
+function _rrProductCheckboxesHtml() {
+  const all = ['Platinum', 'Gold', 'Silver', 'Bronze', 'Group'];
+  return all.map(p => `
+    <label style="font-weight:400; display:flex; gap:4px; align-items:center; white-space:nowrap;">
+      <input type="checkbox" class="rr-product-cb" value="${p}" ${rrState.products.includes(p) ? 'checked' : ''} onchange="_rrReadProductCheckboxes()"> ${p}
+    </label>`).join('');
 }
 
 async function showReinsuranceReport() {
@@ -9695,27 +9723,49 @@ async function showReinsuranceReport() {
           <h2 class="lr-title">Reinsurance Report</h2>
           <p class="lr-sub">Whole-book claims experience for reinsurance review. Every figure here is read from the same screens/endpoints the rest of the app already uses for it - Loss Ratio, Nationality Risk, Group Size, Utilization, Burning Cost Cube and Large Claims - so this is an assembly, not a second calculation.</p>
         </div>
-        <button class="lr-btn ghost" onclick="loadReinsuranceReport()">Refresh</button>
+        <div style="display:flex; gap:8px;">
+          <button class="lr-btn ghost" onclick="loadReinsuranceReport()">Refresh</button>
+          <button class="lr-btn" onclick="printReinsuranceReport()">Print / Save as PDF</button>
+        </div>
+      </div>
+      <div class="lr-toolbar">
+        <div class="lr-field">
+          <label>Product</label>
+          <div id="rr-product-filter" style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; max-width:340px; padding-top:2px;"
+              title="Group is HealthCross's non-SME product line, unchecked by default so the report reads as SME business unless included.">
+            ${_rrProductCheckboxesHtml()}
+          </div>
+        </div>
       </div>
       <div id="rr-product-area">${_rrLoadingCard()}</div>
+      <div id="rr-enrollment-area">${_rrLoadingCard()}</div>
       <div id="rr-nationality-area">${_rrLoadingCard()}</div>
       <div id="rr-group-size-area">${_rrLoadingCard()}</div>
       <div id="rr-benefit-area">${_rrLoadingCard()}</div>
+      <div id="rr-maternity-area">${_rrLoadingCard()}</div>
       <div id="rr-burning-cost-area">${_rrLoadingCard()}</div>
+      <div id="rr-provider-compare-area"></div>
       <div id="rr-top-claimants-area">${_rrLoadingCard()}</div>
       <div id="rr-shed-area">${_rrLoadingCard()}</div>
     </div>
   `;
+  _rrProviderCompareToolHtml();
   loadReinsuranceReport();
 }
 
 async function loadReinsuranceReport() {
   rrState.drillProduct = null;
+  // Product loads first and is awaited on its own - Benefit-wise claims'
+  // average-member-spend needs the SAME products-filtered exposure total
+  // Product LR just computed (see _rrBenefitHtml), and Promise.all gives
+  // no ordering guarantee among the rest, so this one has to land first.
+  await _rrLoadProductLR();
   await Promise.all([
-    _rrLoadProductLR(),
+    _rrLoadEnrollmentType(),
     _rrLoadNationality(),
     _rrLoadGroupSize(),
     _rrLoadBenefit(),
+    _rrLoadMaternity(),
     _rrLoadBurningCostPN(),
     _rrLoadTopClaimants(),
     _rrLoadShedImpact(),
@@ -9740,7 +9790,8 @@ function _rrEmptyCard(title, message) {
 async function _rrLoadProductLR() {
   const area = document.getElementById('rr-product-area');
   try {
-    const r = await api('/portfolio-analysis/summary?group_by=product');
+    const params = _rrProductParams({ group_by: 'product' });
+    const r = await api(`/portfolio-analysis/summary?${params.toString()}`);
     rrData.product = r.rows || [];
     area.innerHTML = _rrProductTableHtml(rrData.product);
   } catch (err) {
@@ -9760,13 +9811,14 @@ function _rrProductTableHtml(rows) {
       <td class="num">${_lrMoney(r.ibnr)}</td>
       <td class="num" style="font-weight:600;">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
       <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}" style="font-weight:600;">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
+      <td class="num ${_lrBand(r.net_loss_ratio)}" style="font-weight:600;">${_lrPct(r.net_loss_ratio)}</td>
     </tr>`).join('');
   return `
     <div class="lr-card">
       <div class="lr-card-head">
         <div>
           <div class="lr-card-title">Product-wise loss ratio (30-day IBNR)</div>
-          <div class="lr-card-note">IBNR = Paid &divide; days &times; 30 (the house's flat tail). Click a product to drill into it by Relation/Gender/Age band.</div>
+          <div class="lr-card-note">IBNR = Paid &divide; days &times; 30 (the house's flat tail). Net LR is struck against each account's own REAL expense loading (Client Master OPEX where on file), never a flat assumption. Click a product to drill into it by Relation/Gender/Age band/Network.</div>
         </div>
       </div>
       <div class="lr-table-wrap">
@@ -9774,9 +9826,9 @@ function _rrProductTableHtml(rows) {
           <thead><tr>
             <th>Product</th><th class="num">Members</th><th class="num">Premium</th>
             <th class="num">Paid</th><th class="num">Outstanding</th><th class="num">IBNR</th>
-            <th class="num">Incurred</th><th class="num">LR incl. IBNR</th>
+            <th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th>
           </tr></thead>
-          <tbody>${body || '<tr><td colspan="8" class="lr-empty">No priced members yet.</td></tr>'}</tbody>
+          <tbody>${body || '<tr><td colspan="9" class="lr-empty">No priced members yet.</td></tr>'}</tbody>
         </table>
       </div>
       <div id="rr-drill-area"></div>
@@ -9784,52 +9836,105 @@ function _rrProductTableHtml(rows) {
   `;
 }
 
+//: All 4 shown together on a click, not one dimension at a time - the
+//: point of drilling into a product is to see EVERY risky segment inside
+//: it in one look, for a New Business pricing review.
+const RR_DRILL_DIMENSIONS = [['relation', 'Relation'], ['gender', 'Gender'], ['age_band', 'Age band'], ['network', 'Network']];
+
 async function _rrDrillProduct(product) {
   rrState.drillProduct = product;
-  await _rrLoadDrill();
-}
-
-async function _rrSetDrillDim(dim) {
-  rrState.drillDim = dim;
-  await _rrLoadDrill();
-}
-
-async function _rrLoadDrill() {
   const drillArea = document.getElementById('rr-drill-area');
-  if (!drillArea || !rrState.drillProduct) return;
+  if (!drillArea) return;
   drillArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
   try {
-    const params = new URLSearchParams({ group_by: rrState.drillDim, product: rrState.drillProduct });
-    const r = await api(`/portfolio-analysis/summary?${params.toString()}`);
-    drillArea.innerHTML = _rrDrillHtml(r.rows || []);
+    const results = await Promise.all(RR_DRILL_DIMENSIONS.map(([dim]) => {
+      const params = _rrProductParams({ group_by: dim, product });
+      return api(`/portfolio-analysis/summary?${params.toString()}`);
+    }));
+    rrData.drill = { product, byDimension: Object.fromEntries(RR_DRILL_DIMENSIONS.map(([dim], i) => [dim, results[i].rows || []])) };
+    drillArea.innerHTML = _rrDrillHtml(rrData.drill);
   } catch (err) {
     drillArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
   }
 }
 
-function _rrDrillHtml(rows) {
-  const dims = [['relation', 'Relation'], ['gender', 'Gender'], ['age_band', 'Age band']];
-  const dimButtons = dims.map(([v, label]) => `
-    <button class="lr-btn ${rrState.drillDim === v ? '' : 'ghost'}" style="padding:4px 10px; font-size:12px;" onclick="_rrSetDrillDim('${v}')">${escapeHtml(label)}</button>
-  `).join('');
-  const body = rows.map(r => `
+function _rrDrillDimensionTableHtml(dim, label, rows) {
+  const sorted = [...rows].sort((a, b) => (b.member_count || 0) - (a.member_count || 0));
+  const body = sorted.map(r => `
     <tr>
-      <td>${escapeHtml(String(r[rrState.drillDim] ?? 'Unmapped'))}</td>
+      <td>${escapeHtml(String(r[dim] ?? 'Unmapped'))}</td>
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_lrMoney(r.actual_premium)}</td>
       <td class="num">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
       <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
+      <td class="num ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
     </tr>`).join('');
   return `
+    <div>
+      <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">By ${escapeHtml(label)}</div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>${escapeHtml(label)}</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No members in this slice.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+function _rrDrillHtml(drill) {
+  const tables = RR_DRILL_DIMENSIONS.map(([dim, label]) => _rrDrillDimensionTableHtml(dim, label, drill.byDimension[dim] || [])).join('');
+  return `
     <div style="margin-top:10px; padding-top:10px; border-top:1px dashed rgba(15,28,46,.16);">
-      <div class="lr-card-note" style="margin-bottom:6px;">Drilling into <b>${escapeHtml(rrState.drillProduct)}</b>, by:
-        ${dimButtons}
-        <button class="lr-btn ghost" style="padding:4px 10px; font-size:12px;" onclick="rrState.drillProduct=null; document.getElementById('rr-drill-area').innerHTML='';">Close</button>
+      <div class="lr-card-note" style="margin-bottom:8px;">Drilling into <b>${escapeHtml(drill.product)}</b> - which segments are risky, for New Business pricing to weigh in.
+        <button class="lr-btn ghost" style="padding:4px 10px; font-size:12px; margin-left:8px;" onclick="rrData.drill=null; document.getElementById('rr-drill-area').innerHTML='';">Close</button>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
+        ${tables}
+      </div>
+    </div>
+  `;
+}
+
+// --- Additions vs Initial members ---
+
+async function _rrLoadEnrollmentType() {
+  const area = document.getElementById('rr-enrollment-area');
+  try {
+    const params = _rrProductParams({ group_by: 'enrollment_type' });
+    const r = await api(`/portfolio-analysis/summary?${params.toString()}`);
+    rrData.enrollmentType = r.rows || [];
+    area.innerHTML = _rrEnrollmentTypeHtml(rrData.enrollmentType);
+  } catch (err) {
+    rrData.enrollmentType = null;
+    area.innerHTML = _rrEmptyCard('Loss ratio: Additions vs. Initial members', 'Needs Membership, Claims and a Rate Card uploaded first.');
+  }
+}
+
+function _rrEnrollmentTypeHtml(rows) {
+  const order = ['Initial', 'Addition', 'Unmapped'];
+  const sorted = [...rows].sort((a, b) => order.indexOf(a.enrollment_type) - order.indexOf(b.enrollment_type));
+  const body = sorted.map(r => `
+    <tr>
+      <td>${escapeHtml(r.enrollment_type)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(r.actual_premium)}</td>
+      <td class="num">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
+      <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
+      <td class="num ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Loss ratio: Additions vs. Initial members</div>
+          <div class="lr-card-note">Initial = enrolled the day the policy itself incepted (the original census). Addition = joined later via endorsement - often a different risk from the group that was actually underwritten, since a mid-term joiner isn't medically underwritten the same way. "Unmapped" = missing member-start or policy-start date to compare.</div>
+        </div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
-          <thead><tr><th>${escapeHtml(dims.find(d => d[0] === rrState.drillDim)[1])}</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">LR incl. IBNR</th></tr></thead>
-          <tbody>${body || '<tr><td colspan="5" class="lr-empty">No members in this slice.</td></tr>'}</tbody>
+          <thead><tr><th>Enrollment</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -9841,7 +9946,8 @@ function _rrDrillHtml(rows) {
 async function _rrLoadNationality() {
   const area = document.getElementById('rr-nationality-area');
   try {
-    const r = await api('/portfolio-analysis/nationality-risk');
+    const params = _rrProductParams();
+    const r = await api(`/portfolio-analysis/nationality-risk?${params.toString()}`);
     rrData.nationality = r.rows || [];
     area.innerHTML = _rrNationalityHtml(rrData.nationality);
   } catch (err) {
@@ -9889,7 +9995,8 @@ function _rrNationalityHtml(rows) {
 async function _rrLoadGroupSize() {
   const area = document.getElementById('rr-group-size-area');
   try {
-    const r = await api('/portfolio-analysis/group-size-bands');
+    const params = _rrProductParams();
+    const r = await api(`/portfolio-analysis/group-size-bands?${params.toString()}`);
     rrData.groupSize = r.rows || [];
     area.innerHTML = _rrGroupSizeHtml(rrData.groupSize);
   } catch (err) {
@@ -9935,7 +10042,8 @@ function _rrGroupSizeHtml(rows) {
 async function _rrLoadBenefit() {
   const area = document.getElementById('rr-benefit-area');
   try {
-    const r = await api('/portfolio-analysis/utilization');
+    const params = _rrProductParams();
+    const r = await api(`/portfolio-analysis/utilization?${params.toString()}`);
     rrData.benefit = r.by_benefit_category || [];
     area.innerHTML = _rrBenefitHtml(rrData.benefit);
   } catch (err) {
@@ -9944,13 +10052,22 @@ async function _rrLoadBenefit() {
   }
 }
 
+// Same products-filtered population Product LR just computed - loaded
+// first and awaited in loadReinsuranceReport specifically so this total
+// is ready by the time Benefit-wise claims renders.
+function _rrTotalEarnedMemberYears() {
+  return (rrData.product || []).reduce((sum, r) => sum + (r.earned_member_years || 0), 0);
+}
+
 function _rrBenefitHtml(rows) {
+  const totalMemberYears = _rrTotalEarnedMemberYears();
   const body = rows.map(r => `
     <tr>
       <td>${escapeHtml(r.category)}</td>
       <td class="num">${r.claim_count.toLocaleString()}</td>
       <td class="num">${_lrMoney(r.total_value)}</td>
       <td class="num">${_lrMoney(r.average_value)}</td>
+      <td class="num">${totalMemberYears ? _lrMoney(r.total_value / totalMemberYears) : '-'}</td>
       <td class="num">${r.pct_of_total != null ? r.pct_of_total + '%' : '-'}</td>
     </tr>`).join('');
   return `
@@ -9958,14 +10075,79 @@ function _rrBenefitHtml(rows) {
       <div class="lr-card-head">
         <div>
           <div class="lr-card-title">Benefit-wise claims</div>
-          <div class="lr-card-note">Which benefit categories drive cost - the friendlier Dental/Optical/Mental Health/Physiotherapy labels roll up the export's own raw categories (e.g. General Dental + Orthodontia + Dental Prosthesis = Dental).</div>
+          <div class="lr-card-note">Which benefit categories drive cost - the friendlier Dental/Optical/Mental Health/Physiotherapy labels roll up the export's own raw categories (e.g. General Dental + Orthodontia + Dental Prosthesis = Dental). Average member spend/year = category total &divide; the same products-filtered population's earned member-years (from the Product table above) - a per-capita utilization read, distinct from the per-claim average next to it.</div>
         </div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
-          <thead><tr><th>Category</th><th class="num">Claim count</th><th class="num">Total claims</th><th class="num">Average claim</th><th class="num">% of total</th></tr></thead>
-          <tbody>${body || '<tr><td colspan="5" class="lr-empty">No data yet.</td></tr>'}</tbody>
+          <thead><tr><th>Category</th><th class="num">Claim count</th><th class="num">Total claims</th><th class="num">Average claim</th><th class="num">Avg. member spend/year</th><th class="num">% of total</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
         </table>
+      </div>
+    </div>
+  `;
+}
+
+// --- Maternity cost per case: Normal vs. C-section, by provider ---
+
+async function _rrLoadMaternity() {
+  const area = document.getElementById('rr-maternity-area');
+  try {
+    const params = _rrProductParams();
+    const r = await api(`/portfolio-analysis/maternity-cost-by-case?${params.toString()}`);
+    rrData.maternity = r;
+    area.innerHTML = _rrMaternityHtml(r);
+  } catch (err) {
+    rrData.maternity = null;
+    area.innerHTML = _rrEmptyCard('Maternity cost per case', 'Needs Claims uploaded first.');
+  }
+}
+
+function _rrMaternityHtml(r) {
+  const typeOrder = ['C-section', 'Normal delivery', 'Not yet delivered'];
+  const byType = [...(r.by_delivery_type || [])].sort((a, b) => typeOrder.indexOf(a.delivery_type) - typeOrder.indexOf(b.delivery_type));
+  const typeBody = byType.map(t => `
+    <tr>
+      <td>${escapeHtml(t.delivery_type)}</td>
+      <td class="num">${t.case_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(t.total_cost)}</td>
+      <td class="num" style="font-weight:600;">${_lrMoney(t.average_cost_per_case)}</td>
+    </tr>`).join('');
+  const byProvider = (r.by_provider || []).slice(0, 15);
+  const providerBody = byProvider.map(p => `
+    <tr>
+      <td>${escapeHtml(p.provider_name)}</td>
+      <td class="num">${p.case_count.toLocaleString()}</td>
+      <td class="num">${_lrMoney(p.total_cost)}</td>
+      <td class="num">${_lrMoney(p.average_cost_per_case)}</td>
+    </tr>`).join('');
+  return `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Maternity cost per case</div>
+          <div class="lr-card-note">One CASE = one pregnancy's whole episode (antenatal + delivery + postnatal/newborn), not one claim line. Delivery type is read off the delivery line's own billed act (Normal/C-section), never diagnosis codes - those capture indications and complications (a scar from a PRIOR c-section, say), not the mode of THIS delivery. "Not yet delivered" = antenatal care on file with no delivery line yet.</div>
+        </div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
+        <div>
+          <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">By delivery type</div>
+          <div class="lr-table-wrap">
+            <table class="lr-table">
+              <thead><tr><th>Delivery type</th><th class="num">Cases</th><th class="num">Total cost</th><th class="num">Avg. cost/case</th></tr></thead>
+              <tbody>${typeBody || '<tr><td colspan="4" class="lr-empty">No maternity claims yet.</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
+        <div>
+          <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">By delivery provider (top 15)</div>
+          <div class="lr-table-wrap">
+            <table class="lr-table">
+              <thead><tr><th>Provider</th><th class="num">Cases</th><th class="num">Total cost</th><th class="num">Avg. cost/case</th></tr></thead>
+              <tbody>${providerBody || '<tr><td colspan="4" class="lr-empty">No delivery lines yet.</td></tr>'}</tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `;
@@ -9976,7 +10158,8 @@ function _rrBenefitHtml(rows) {
 async function _rrLoadBurningCostPN() {
   const area = document.getElementById('rr-burning-cost-area');
   try {
-    const rows = await api('/portfolio-analysis/burning-cost-by-product-network');
+    const params = _rrProductParams();
+    const rows = await api(`/portfolio-analysis/burning-cost-by-product-network?${params.toString()}`);
     rrData.burningCostPN = rows || [];
     area.innerHTML = _rrBurningCostPNHtml(rrData.burningCostPN);
   } catch (err) {
@@ -9995,19 +10178,21 @@ function _rrBurningCostPNHtml(rows) {
       <td class="num">${_lrMoney(r.earned_member_years, 2)}</td>
       <td class="num">${_lrMoney(r.actual_claims)}</td>
       <td class="num" style="font-weight:600;">${_lrMoney(r.burning_cost)}</td>
+      <td class="num">${_lrMoney(r.premium_pmpy)}</td>
+      <td class="num ${r.premium_pmpy != null && r.burning_cost != null && r.premium_pmpy < r.burning_cost ? 'bad' : 'good'}">${r.premium_pmpy != null && r.burning_cost != null ? _lrMoney(r.premium_pmpy - r.burning_cost) : '-'}</td>
     </tr>`).join('');
   return `
     <div class="lr-card">
       <div class="lr-card-head">
         <div>
           <div class="lr-card-title">Burning cost by Product &times; Network</div>
-          <div class="lr-card-note">Actual claims cost per earned member-year (AED), for every Product/Network pairing actually on the book - the same real-experience reference New Business Rating shows alongside the rate card's own price.</div>
+          <div class="lr-card-note">Actual claims cost per earned member-year (AED), for every Product/Network pairing actually on the book - the same real-experience reference New Business Rating shows alongside the rate card's own price. Premium PMPY is struck on the SAME per-member-year basis, so Margin (Premium PMPY &minus; Burning cost) shows real headroom before expenses, directly - not a loss ratio, a plain AED gap.</div>
         </div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
-          <thead><tr><th>Product</th><th>Network</th><th class="num">Members</th><th class="num">Member-years</th><th class="num">Claims</th><th class="num">Burning cost</th></tr></thead>
-          <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
+          <thead><tr><th>Product</th><th>Network</th><th class="num">Members</th><th class="num">Member-years</th><th class="num">Claims</th><th class="num">Burning cost</th><th class="num">Premium PMPY</th><th class="num">Margin</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="8" class="lr-empty">No data yet.</td></tr>'}</tbody>
         </table>
       </div>
     </div>
@@ -10019,7 +10204,8 @@ function _rrBurningCostPNHtml(rows) {
 async function _rrLoadTopClaimants() {
   const area = document.getElementById('rr-top-claimants-area');
   try {
-    const r = await api('/portfolio-analysis/large-claims?top_n_members=20');
+    const params = _rrProductParams({ top_n_members: '20' });
+    const r = await api(`/portfolio-analysis/large-claims?${params.toString()}`);
     rrData.topClaimants = r.top_members || [];
     area.innerHTML = _rrTopClaimantsHtml(rrData.topClaimants);
   } catch (err) {
@@ -10068,8 +10254,12 @@ function _rrTopClaimantsHtml(rows) {
 async function _rrLoadShedImpact() {
   const area = document.getElementById('rr-shed-area');
   try {
-    const r = await api('/portfolio-analysis/account-loss-ratio');
-    area.innerHTML = _rrShedHtml((r.shed_impact && r.shed_impact.accounts || []).slice(0, 5));
+    const params = _rrProductParams();
+    const r = await api(`/portfolio-analysis/account-loss-ratio?${params.toString()}`);
+    rrData.shed = (r.shed_impact && r.shed_impact.accounts || []).slice(0, 5);
+    rrData.bookTotals = r.totals || null;
+    rrData.asOf = r.as_of || null;
+    area.innerHTML = _rrShedHtml(rrData.shed);
   } catch (err) {
     area.innerHTML = _rrEmptyCard('Worst 5 accounts - impact if not renewed', 'Needs Membership and Claims uploaded first.');
   }
@@ -10101,6 +10291,419 @@ function _rrShedHtml(rows) {
       </div>
     </div>
   `;
+}
+
+// --- Provider cost comparison (e.g. Mediclinic vs. other providers) ---
+
+//: Fixed, house-wide network names - same set price_member/the rate card
+//: itself resolves a raw network type onto (see network_type_mapping.py).
+const RR_NETWORKS = ['MSH Platinum', 'MSH Comprehensive', 'MSH Premium', 'MSH Enhanced', 'MSH Regular'];
+const RR_REGIONS = ['Dubai', 'Abu Dhabi', 'Northern Emirates'];
+
+function _rrProviderCompareToolHtml() {
+  const area = document.getElementById('rr-provider-compare-area');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Provider cost comparison</div>
+          <div class="lr-card-note">Total spend, claim count and average cost per claim at providers whose name matches a search term, vs every other provider - scoped to one Network/region so the comparison is apples-to-apples. NOT a burning cost: exposure belongs to a member, not to which hospital they visited, so there is no member-year denominator to strike a provider's own claims against.</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:12px;">
+        <div class="lr-field">
+          <label>Provider name contains</label>
+          <input type="text" id="rr-provider-marker" placeholder="e.g. Mediclinic" style="min-width:180px;">
+        </div>
+        <div class="lr-field">
+          <label>Network</label>
+          <select id="rr-provider-network" style="min-width:160px;">
+            <option value="">All networks</option>
+            ${RR_NETWORKS.map(n => `<option value="${escapeHtml(n)}">${escapeHtml(n)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="lr-field">
+          <label>Region</label>
+          <select id="rr-provider-region" style="min-width:150px;">
+            <option value="">All regions</option>
+            ${RR_REGIONS.map(r => `<option value="${escapeHtml(r)}">${escapeHtml(r)}</option>`).join('')}
+          </select>
+        </div>
+        <button class="lr-btn" onclick="_rrRunProviderCompare()">Compare</button>
+      </div>
+      <div id="rr-provider-compare-result"><div class="lr-empty">Enter a provider name and click Compare.</div></div>
+    </div>
+  `;
+}
+
+async function _rrRunProviderCompare() {
+  const marker = (document.getElementById('rr-provider-marker') || {}).value || '';
+  const network = (document.getElementById('rr-provider-network') || {}).value || '';
+  const region = (document.getElementById('rr-provider-region') || {}).value || '';
+  const resultArea = document.getElementById('rr-provider-compare-result');
+  if (!marker.trim()) { toast('Enter a provider name first', true); return; }
+  resultArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
+  try {
+    const params = new URLSearchParams({ provider_markers: marker.trim() });
+    if (network) params.set('network', network);
+    if (region) params.set('region', region);
+    const r = await api(`/portfolio-analysis/provider-cost-comparison?${params.toString()}`);
+    rrData.providerCompare = { marker: marker.trim(), network, region, result: r };
+    resultArea.innerHTML = _rrProviderCompareHtml(rrData.providerCompare);
+  } catch (err) {
+    resultArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function _rrProviderCompareHtml(compare) {
+  const r = compare.result;
+  const scopeBits = [compare.network, compare.region].filter(Boolean).join(', ');
+  return `
+    <div class="lr-card-note" style="margin-bottom:8px;">"${escapeHtml(compare.marker)}"-matching providers vs. every other provider${scopeBits ? ` - scoped to ${escapeHtml(scopeBits)}` : ' - whole book'}.</div>
+    <div class="lr-table-wrap">
+      <table class="lr-table">
+        <thead><tr><th>Group</th><th class="num">Claim count</th><th class="num">Total cost</th><th class="num">Average cost/claim</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>${escapeHtml(compare.marker)}-matching providers</td>
+            <td class="num">${r.matched.claim_count.toLocaleString()}</td>
+            <td class="num">${_lrMoney(r.matched.total_cost)}</td>
+            <td class="num" style="font-weight:600;">${_lrMoney(r.matched.average_cost_per_claim)}</td>
+          </tr>
+          <tr>
+            <td>Every other provider</td>
+            <td class="num">${r.other.claim_count.toLocaleString()}</td>
+            <td class="num">${_lrMoney(r.other.total_cost)}</td>
+            <td class="num" style="font-weight:600;">${_lrMoney(r.other.average_cost_per_claim)}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  `;
+}
+
+// --- Print / Save as PDF ---
+
+function _rrPrintMoney(v) {
+  return v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+function _rrPrintPct(v) {
+  return v == null ? '-' : (v * 100).toFixed(1) + '%';
+}
+function _rrPrintBand(v) {
+  if (v == null) return '';
+  if (v > 1) return 'bad';
+  if (v >= 0.7) return 'warn';
+  return 'good';
+}
+
+function printReinsuranceReport() {
+  if (!rrData.product) { toast('Load the report first', true); return; }
+
+  const generated = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'long', year: 'numeric' });
+  const asOf = rrData.asOf || '';
+  const ref = `HC-RI-${(asOf || '').replace(/-/g, '')}`;
+  const t = rrData.bookTotals || {};
+  const productScope = (rrState.products || []).join(', ') || 'none selected';
+
+  const productRows = (rrData.product || []).map(r => `
+    <tr>
+      <td>${escapeHtml(r.product || 'Unmapped')}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
+      <td class="num">${_rrPrintMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
+      <td class="num ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</td>
+      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+    </tr>`).join('');
+
+  const enrollOrder = ['Initial', 'Addition', 'Unmapped'];
+  const enrollRows = [...(rrData.enrollmentType || [])]
+    .sort((a, b) => enrollOrder.indexOf(a.enrollment_type) - enrollOrder.indexOf(b.enrollment_type))
+    .map(r => `
+    <tr>
+      <td>${escapeHtml(r.enrollment_type)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
+      <td class="num">${_rrPrintMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
+      <td class="num ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</td>
+      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+    </tr>`).join('');
+
+  // Top 25 by incurred - the whole nationality table can run to 100+ rows
+  // on a real book, most carrying negligible exposure.
+  const natRows = [...(rrData.nationality || [])]
+    .sort((a, b) => (b.incurred_claims || 0) - (a.incurred_claims || 0))
+    .slice(0, 25)
+    .map(r => `
+    <tr>
+      <td>${escapeHtml(r.nationality)}</td>
+      <td>${escapeHtml(r.nationality_zone || '-')}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
+      <td class="num">${_rrPrintMoney(r.incurred_claims)}</td>
+      <td class="num ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</td>
+      <td class="num">${_rrPrintMoney(r.burning_cost)}</td>
+    </tr>`).join('');
+  const natOmitted = Math.max(0, (rrData.nationality || []).length - 25);
+
+  const groupSizeRows = (rrData.groupSize || []).map(r => `
+    <tr>
+      <td>${escapeHtml(r.band)} lives</td>
+      <td class="num">${r.group_count.toLocaleString()}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
+      <td class="num">${_rrPrintMoney(r.incurred_claims)}</td>
+      <td class="num ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</td>
+    </tr>`).join('');
+
+  const totalMemberYears = _rrTotalEarnedMemberYears();
+  const benefitRows = (rrData.benefit || []).map(r => `
+    <tr>
+      <td>${escapeHtml(r.category)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.total_value)}</td>
+      <td class="num">${_rrPrintMoney(r.average_value)}</td>
+      <td class="num">${totalMemberYears ? _rrPrintMoney(r.total_value / totalMemberYears) : '-'}</td>
+    </tr>`).join('');
+
+  const maternityTypeOrder = ['C-section', 'Normal delivery', 'Not yet delivered'];
+  const maternityTypeRows = rrData.maternity ? [...(rrData.maternity.by_delivery_type || [])]
+    .sort((a, b) => maternityTypeOrder.indexOf(a.delivery_type) - maternityTypeOrder.indexOf(b.delivery_type))
+    .map(r => `
+    <tr>
+      <td>${escapeHtml(r.delivery_type)}</td>
+      <td class="num">${r.case_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.total_cost)}</td>
+      <td class="num b">${_rrPrintMoney(r.average_cost_per_case)}</td>
+    </tr>`).join('') : '';
+  const maternityProviderRows = rrData.maternity ? (rrData.maternity.by_provider || []).slice(0, 15).map(p => `
+    <tr>
+      <td>${escapeHtml(p.provider_name)}</td>
+      <td class="num">${p.case_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(p.total_cost)}</td>
+      <td class="num">${_rrPrintMoney(p.average_cost_per_case)}</td>
+    </tr>`).join('') : '';
+
+  const bcpnRows = [...(rrData.burningCostPN || [])]
+    .sort((a, b) => (a.product || '').localeCompare(b.product || '') || (a.network || '').localeCompare(b.network || ''))
+    .map(r => `
+    <tr>
+      <td>${escapeHtml(r.product)}</td>
+      <td>${escapeHtml(r.network)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num">${_rrPrintMoney(r.earned_member_years)}</td>
+      <td class="num">${_rrPrintMoney(r.burning_cost)}</td>
+      <td class="num">${_rrPrintMoney(r.premium_pmpy)}</td>
+      <td class="num b">${r.premium_pmpy != null && r.burning_cost != null ? _rrPrintMoney(r.premium_pmpy - r.burning_cost) : '-'}</td>
+    </tr>`).join('');
+
+  const claimantRows = (rrData.topClaimants || []).map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.patient_id || '-')}</td>
+      <td>${escapeHtml(r.client_name || r.group_name || '-')}</td>
+      <td class="num">${_rrPrintMoney(r.total_claims)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td>${escapeHtml((r.diagnoses || []).slice(0, 2).join('; ')) || '-'}</td>
+      <td>${escapeHtml(r.member_status === 'Deleted' ? 'Left' : (r.member_status || 'Unknown'))}</td>
+    </tr>`).join('');
+
+  const shedRows = (rrData.shed || []).map(r => `
+    <tr>
+      <td>${escapeHtml(r.master_client)}</td>
+      <td class="num">${r.member_count.toLocaleString()}</td>
+      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+      <td class="num">${_rrPrintMoney(r.premium_at_risk)}</td>
+      <td class="num b">${r.net_lr_change != null ? (r.net_lr_change * 100).toFixed(1) + ' pts' : '-'}</td>
+    </tr>`).join('');
+
+  const providerCompareSection = rrData.providerCompare ? (() => {
+    const c = rrData.providerCompare;
+    const scopeBits = [c.network, c.region].filter(Boolean).join(', ');
+    return `
+      <h2>Provider cost comparison</h2>
+      <div class="note">"${escapeHtml(c.marker)}"-matching providers vs. every other provider${scopeBits ? ` - scoped to ${escapeHtml(scopeBits)}` : ' - whole book'}. Not a burning cost - see the on-screen note for why.</div>
+      <table>
+        <thead><tr><th>Group</th><th class="num">Claim count</th><th class="num">Total cost</th><th class="num">Average cost/claim</th></tr></thead>
+        <tbody>
+          <tr><td>${escapeHtml(c.marker)}-matching</td><td class="num">${c.result.matched.claim_count.toLocaleString()}</td><td class="num">${_rrPrintMoney(c.result.matched.total_cost)}</td><td class="num b">${_rrPrintMoney(c.result.matched.average_cost_per_claim)}</td></tr>
+          <tr><td>Every other provider</td><td class="num">${c.result.other.claim_count.toLocaleString()}</td><td class="num">${_rrPrintMoney(c.result.other.total_cost)}</td><td class="num b">${_rrPrintMoney(c.result.other.average_cost_per_claim)}</td></tr>
+        </tbody>
+      </table>
+    `;
+  })() : '';
+
+  const html = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Reinsurance Report</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  @page { size: A4 landscape; margin: 14mm 12mm 16mm; }
+  * { box-sizing: border-box; }
+  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; color: #0f1c2e;
+         font-variant-numeric: tabular-nums; font-size: 10px; line-height: 1.45; }
+  .sheet { max-width: 1180px; margin: 0 auto; }
+
+  .masthead { display: flex; justify-content: space-between; align-items: flex-start;
+              border-bottom: 2.5px solid #1c2a48; padding-bottom: 12px; margin-bottom: 4px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .logo { width: 34px; height: 32px; flex-shrink: 0; }
+  .brand .nm { font-size: 16px; font-weight: 700; letter-spacing: 0.005em; line-height: 1; }
+  .brand .nm .h { color: #1c2a48; }
+  .brand .nm .c { color: #5cd9ff; margin-left: 3px; }
+  .brand .nm sup { font-size: 6px; color: #5cd9ff; vertical-align: super; }
+  .brand .sb { font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase;
+               color: #1c2a48; font-weight: 600; margin-top: 3px; }
+  .docref { text-align: right; font-size: 8.5px; color: #64748b; line-height: 1.7; }
+  .docref b { color: #0f1c2e; font-family: 'IBM Plex Mono', monospace; }
+
+  h1 { font-family: 'Fraunces', serif; font-size: 21px; font-weight: 600; margin: 14px 0 3px; letter-spacing: -0.015em; }
+  .scope { font-size: 9.5px; color: #475569; margin-bottom: 12px; }
+  .scope span { display: inline-block; margin-right: 16px; }
+  .scope b { color: #0f1c2e; }
+
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid rgba(15,28,46,.16);
+          border-radius: 8px; overflow: hidden; margin-bottom: 16px; page-break-inside: avoid; }
+  .kpi { padding: 10px 12px; border-right: 1px solid rgba(15,28,46,.10); }
+  .kpi:last-child { border-right: none; }
+  .kpi .k { font-size: 7.5px; letter-spacing: .09em; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 5px; }
+  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
+  .kpi .u { font-size: 8px; color: #94a3b8; }
+
+  h2 { font-family: 'Fraunces', serif; font-size: 12.5px; font-weight: 600; margin: 16px 0 3px;
+       page-break-after: avoid; }
+  .note { font-size: 8.5px; color: #64748b; margin-bottom: 7px; }
+
+  table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
+  th { text-align: left; font-size: 7.5px; letter-spacing: .06em; text-transform: uppercase; color: #475569;
+       font-weight: 700; padding: 6px 6px; background: #eef3f7; border-bottom: 1.5px solid rgba(15,28,46,.25); }
+  td { padding: 5px 6px; border-bottom: 1px solid rgba(15,28,46,.08); vertical-align: top; }
+  td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+  td.b { font-weight: 700; }
+  thead { display: table-header-group; }
+  tr { page-break-inside: avoid; }
+  .good { color: #16855c; } .warn { color: #b07d12; } .bad { color: #c0392b; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+
+  .foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(15,28,46,.14);
+          font-size: 7.5px; color: #94a3b8; display: flex; justify-content: space-between; }
+</style></head><body><div class="sheet">
+
+  <div class="masthead">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 108 100" role="img" aria-label="HealthCross">
+        <path fill="#5cd9ff" fill-rule="evenodd"
+              d="M46,2 L87,26 L87,40 L64,40 L64,34 L46,24 L23,37 L23,63 L46,76 L64,66 L64,60 L87,60 L87,74 L46,98 L5,74 L5,26 Z"/>
+        <path fill="#1c2a48" d="M78,28 L95,34 L95,66 L78,72 Z"/>
+      </svg>
+      <div>
+        <div class="nm"><span class="h">HEALTH</span><span class="c">CROSS</span><sup>&reg;</sup></div>
+        <div class="sb">Care without borders</div>
+      </div>
+    </div>
+    <div class="docref">
+      Reference <b>${escapeHtml(ref)}</b><br>
+      Valuation date <b>${escapeHtml(asOf || '-')}</b><br>
+      Issued ${escapeHtml(generated)}
+    </div>
+  </div>
+
+  <h1>Reinsurance Report</h1>
+  <div class="scope">
+    <span>Scope <b>Whole portfolio</b></span>
+    <span>Product <b>${escapeHtml(productScope)}</b></span>
+    <span>Currency <b>AED</b></span>
+  </div>
+
+  <div class="kpis">
+    <div class="kpi"><div class="k">Accounts</div><div class="v">${t.account_count ?? '-'}</div><div class="u">policy periods</div></div>
+    <div class="kpi"><div class="k">Lives</div><div class="v">${t.member_count != null ? t.member_count.toLocaleString() : '-'}</div><div class="u">exposed</div></div>
+    <div class="kpi"><div class="k">Earned premium</div><div class="v">${_rrPrintMoney(t.earned_premium)}</div><div class="u">AED</div></div>
+    <div class="kpi"><div class="k">Incurred claims</div><div class="v">${_rrPrintMoney(t.incurred_claims)}</div><div class="u">paid + OS + IBNR</div></div>
+    <div class="kpi"><div class="k">Gross earned LR</div><div class="v ${_rrPrintBand(t.gross_loss_ratio)}">${_rrPrintPct(t.gross_loss_ratio)}</div><div class="u">of earned premium</div></div>
+    <div class="kpi"><div class="k">Net earned LR</div><div class="v ${_rrPrintBand(t.net_loss_ratio)}">${_rrPrintPct(t.net_loss_ratio)}</div><div class="u">of net premium</div></div>
+  </div>
+
+  <h2>Product-wise loss ratio (30-day IBNR)</h2>
+  <div class="note">Net LR struck against each account's own real expense loading, never a flat assumption.</div>
+  <table>
+    <thead><tr><th>Product</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th></tr></thead>
+    <tbody>${productRows || '<tr><td colspan="6">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Loss ratio: Additions vs. Initial members</h2>
+  <div class="note">Initial = enrolled at policy inception. Addition = joined later via endorsement.</div>
+  <table>
+    <thead><tr><th>Enrollment</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th></tr></thead>
+    <tbody>${enrollRows || '<tr><td colspan="6">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Nationality loss ratio, burning cost &amp; exposed risk population</h2>
+  <div class="note">Top 25 by incurred claims${natOmitted ? ` - ${natOmitted} more nationalities not shown (thin exposure)` : ''}. Members = exposed risk population (ERP).</div>
+  <table>
+    <thead><tr><th>Nationality</th><th>Zone</th><th class="num">Members (ERP)</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th><th class="num">Burning cost</th></tr></thead>
+    <tbody>${natRows || '<tr><td colspan="7">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Loss ratio by group size</h2>
+  <table>
+    <thead><tr><th>Group size</th><th class="num">Groups</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Loss ratio</th></tr></thead>
+    <tbody>${groupSizeRows || '<tr><td colspan="6">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Benefit-wise claims</h2>
+  <table>
+    <thead><tr><th>Category</th><th class="num">Claim count</th><th class="num">Total claims</th><th class="num">Average claim</th><th class="num">Avg. member spend/year</th></tr></thead>
+    <tbody>${benefitRows || '<tr><td colspan="5">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Maternity cost per case</h2>
+  <div class="note">One case = one pregnancy's whole episode. Delivery type read off the delivery line's own billed act, not diagnosis codes.</div>
+  <div class="two-col">
+    <table>
+      <thead><tr><th>Delivery type</th><th class="num">Cases</th><th class="num">Total cost</th><th class="num">Avg./case</th></tr></thead>
+      <tbody>${maternityTypeRows || '<tr><td colspan="4">No data.</td></tr>'}</tbody>
+    </table>
+    <table>
+      <thead><tr><th>Provider (top 15)</th><th class="num">Cases</th><th class="num">Total cost</th><th class="num">Avg./case</th></tr></thead>
+      <tbody>${maternityProviderRows || '<tr><td colspan="4">No data.</td></tr>'}</tbody>
+    </table>
+  </div>
+
+  <h2>Burning cost by Product &times; Network</h2>
+  <div class="note">Premium PMPY and Burning cost on the same per-member-year basis - Margin is the plain AED gap, not a ratio.</div>
+  <table>
+    <thead><tr><th>Product</th><th>Network</th><th class="num">Members</th><th class="num">Member-years</th><th class="num">Burning cost</th><th class="num">Premium PMPY</th><th class="num">Margin</th></tr></thead>
+    <tbody>${bcpnRows || '<tr><td colspan="7">No data.</td></tr>'}</tbody>
+  </table>
+
+  ${providerCompareSection}
+
+  <h2>Top 20 claimants</h2>
+  <table>
+    <thead><tr><th>#</th><th>Patient ID</th><th>Account</th><th class="num">Total claims</th><th class="num">Claim count</th><th>Medical conditions</th><th>Status</th></tr></thead>
+    <tbody>${claimantRows || '<tr><td colspan="7">No data.</td></tr>'}</tbody>
+  </table>
+
+  <h2>Worst 5 accounts - impact if not renewed</h2>
+  <table>
+    <thead><tr><th>Account</th><th class="num">Members</th><th class="num">Its own net LR</th><th class="num">Premium at risk</th><th class="num">Book LR change</th></tr></thead>
+    <tbody>${shedRows || '<tr><td colspan="5">No data.</td></tr>'}</tbody>
+  </table>
+
+  <div class="foot">
+    <span>HealthCross &middot; ${escapeHtml(ref)} &middot; Internal - not for distribution to broker or client</span>
+    <span>All amounts in AED</span>
+  </div>
+</div>
+<script>window.onload = () => window.print();<\/script>
+</body></html>`;
+
+  const win = window.open('', '_blank');
+  win.document.write(html);
+  win.document.close();
 }
 
 async function showPortfolioAnalysis() {
