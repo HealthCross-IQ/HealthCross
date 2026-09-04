@@ -161,6 +161,7 @@ def account_loss_ratio_rows_for_book(
     as_of: Optional[date] = None,
     premium_basis: str = "actual",
     default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
+    group_by: str = "master_client",
 ) -> List[dict]:
     """The Portfolio Loss Ratio rows, on the underwriting-year basis, for
     the whole book or one account.
@@ -195,6 +196,7 @@ def account_loss_ratio_rows_for_book(
         opex_records_by_client=book.opex_records_by_client(db),
         default_loading_pct=default_loading_pct,
         premium_basis=premium_basis,
+        group_by=group_by,
     )
     for row in rows:
         row["as_of"] = effective_as_of.isoformat()

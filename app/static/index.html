@@ -7394,7 +7394,7 @@ async function loadRenewalPremiumBuildUp() {
 
 /* ---------------- Loss Ratio board (portfolio level) ---------------- */
 
-let lrState = { rows: [], totals: null, shed: null, shedCumulative: [], sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting' };
+let lrState = { rows: [], totals: null, shed: null, shedCumulative: [], sort: 'net_loss_ratio', dir: 'desc', asOf: null, basis: 'actual', yearBasis: 'underwriting', status: '', groupBy: 'master_client' };
 
 function _lrMoney(v, dp) {
   if (v == null) return '-';
@@ -7462,9 +7462,17 @@ function _lrTableHtml() {
   if (!rows.length) {
     return '<div class="lr-card"><div class="lr-empty">No accounts to report yet - upload the Membership and Claims exports on the Claims Explorer screen first.</div></div>';
   }
+  // Account Dashboard is keyed by resolved master client, not by raw
+  // subgroup - "without Group" rows carry a subgroup's own name in this
+  // same field, and linking that through would open the wrong account
+  // (or nothing at all). Plain text there instead of a broken link.
+  const grouped = lrState.groupBy !== 'client';
   const body = rows.map(r => `
     <tr>
-      <td class="lr-acct"><a class="rdl-name" onclick="openAccountDashboard(${escapeHtml(JSON.stringify(r.master_client))})">${escapeHtml(r.master_client)}</a>${r.expired ? `<span class="lr-exp">${lrState.yearBasis === 'calendar' ? 'closed' : 'expired'}</span>` : ''}<span class="yr">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
+      <td class="lr-acct">${grouped
+          ? `<a class="rdl-name" onclick="openAccountDashboard(${escapeHtml(JSON.stringify(r.master_client))})">${escapeHtml(r.master_client)}</a>`
+          : `<span class="rdl-name">${escapeHtml(r.master_client)}</span>`
+        }${r.expired ? `<span class="lr-exp">${lrState.yearBasis === 'calendar' ? 'closed' : 'expired'}</span>` : ''}<span class="yr">${r.calendar_year != null ? 'CY ' + r.calendar_year : r.policy_start_date} &middot; ${r.days} days &middot; ${r.member_count} lives</span></td>
       <td class="num">${_lrMoney(r.paid)}</td>
       <td class="num">${_lrMoney(r.outstanding)}</td>
       <td class="num">${_lrMoney(r.ibnr)}</td>
@@ -7481,12 +7489,15 @@ function _lrTableHtml() {
     <div class="lr-card">
       <div class="lr-card-head">
         <div>
-          <div class="lr-card-title">Loss ratio by account</div>
+          <div class="lr-card-title">Loss ratio by ${grouped ? 'account' : 'subgroup'}</div>
           <div class="lr-card-note">${lrState.yearBasis === 'calendar'
             ? 'One row per account per calendar year - a policy spanning a year end is split across both by the days in each. Click any column to sort.'
-            : 'One row per account policy period, each policy year its own cohort. Click any column to sort.'}</div>
+            : 'One row per account policy period, each policy year its own cohort. Click any column to sort.'}
+            ${grouped ? '' : ' Grouping is off - a master client with several subgroups shows one row per subgroup rather than combined.'}</div>
         </div>
-        <div class="lr-card-note">Basis: <b>${lrState.yearBasis === 'calendar' ? 'Calendar year' : 'Underwriting year'}</b> &middot; <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b> &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
+        <div class="lr-card-note">Basis: <b>${lrState.yearBasis === 'calendar' ? 'Calendar year' : 'Underwriting year'}</b> &middot; <b>${lrState.basis === 'booked' ? 'Booked gross' : 'Actual gross'}</b>
+          ${lrState.status ? ` &middot; <b>${lrState.status === 'active' ? 'Active only' : 'Expired only'}</b>` : ''}
+          &middot; Incurred = Paid + Outstanding + IBNR &middot; IBNR = Paid &divide; days &times; 30 &middot; Net = Earned &times; (1 &minus; Loading)</div>
       </div>
       <div class="lr-table-wrap">
         <table class="lr-table">
@@ -7604,6 +7615,23 @@ function lossRatioBoardHtml() {
           </select>
         </div>
         <div class="lr-field">
+          <label>Status</label>
+          <select id="lr-status" onchange="loadLossRatioBoard()" style="min-width:130px;"
+              title="Reads each row's own expired flag - a policy whose term has fully run, regardless of whether it has since renewed onto a new one.">
+            <option value="">Active + expired</option>
+            <option value="active">Active only</option>
+            <option value="expired">Expired only</option>
+          </select>
+        </div>
+        <div class="lr-field">
+          <label>Group</label>
+          <select id="lr-group-by" onchange="loadLossRatioBoard()" style="min-width:150px;"
+              title="Master client combines a client's own subgroups into one row - Without Group breaks the same book out by raw subgroup instead. Without Group is not available on the calendar year basis.">
+            <option value="master_client">With group (master client)</option>
+            <option value="client">Without group (subgroup)</option>
+          </select>
+        </div>
+        <div class="lr-field">
           <label>Loading fallback %</label>
           <input type="number" id="lr-loading" step="0.5" value="33" style="width:110px;">
         </div>
@@ -7662,6 +7690,12 @@ async function loadLossRatioBoard() {
   const basisEl = document.getElementById('lr-basis');
   if (basisEl && basisEl.value) params.set('premium_basis', basisEl.value);
   lrState.basis = (basisEl && basisEl.value) || 'actual';
+  const statusEl = document.getElementById('lr-status');
+  if (statusEl && statusEl.value) params.set('status', statusEl.value);
+  lrState.status = (statusEl && statusEl.value) || '';
+  const groupByEl = document.getElementById('lr-group-by');
+  if (groupByEl && groupByEl.value) params.set('group_by', groupByEl.value);
+  lrState.groupBy = (groupByEl && groupByEl.value) || 'master_client';
   const ybEl = document.getElementById('lr-year-basis');
   if (ybEl && ybEl.value) params.set('year_basis', ybEl.value);
   lrState.yearBasis = (ybEl && ybEl.value) || 'underwriting';

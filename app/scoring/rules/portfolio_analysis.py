@@ -1731,12 +1731,24 @@ def _calendar_windows(policy_start, policy_end, as_of):
         if window_end >= window_start:
             yield year, window_start, window_end
 
+#: What identifies a row. "master_client" (the default, and every
+#: existing caller's behaviour) combines a client's own subgroups into
+#: one policy-period row - the pricing and underwriting basis, and the
+#: only one renewal_rating and the printed reports may ever be pointed
+#: at, since they match a row to a case by master client name. "client"
+#: breaks the same book out by its raw subgroup instead - each
+#: PortfolioMember.contract (falling back to master_contract) gets its
+#: own row, "with Group" and "without Group" in Loss Ratio board terms.
+LOSS_RATIO_GROUP_BY = ("master_client", "client")
+
+
 def account_loss_ratio_rows(
     member_results: List[dict],
     as_of: date_cls,
     opex_records_by_client: Optional[Dict[str, List[dict]]] = None,
     default_loading_pct: float = DEFAULT_EXPENSE_RATIO_PCT,
     premium_basis: str = "actual",
+    group_by: str = "master_client",
 ) -> List[dict]:
     """Per-account loss ratio, one row per account POLICY PERIOD - the
     underwriting "Loss Ratio" view HealthCross tracks its own book on:
@@ -1749,11 +1761,25 @@ def account_loss_ratio_rows(
         Gross LR         = Incurred / Earned
         Net LR           = Incurred / Net
 
-    Rows are keyed by (master client, policy start date), NOT by client
-    alone: a client that has already renewed has members on two different
-    policy periods in the same upload, and each period earns, reserves,
-    and runs its own loss ratio separately - collapsing them would blend
-    an expired year's settled claims into the current year's open one.
+    Rows are keyed by (master client, policy start date) by default, NOT
+    by client alone: a client that has already renewed has members on two
+    different policy periods in the same upload, and each period earns,
+    reserves, and runs its own loss ratio separately - collapsing them
+    would blend an expired year's settled claims into the current year's
+    open one.
+
+    `group_by="client"` keys by each raw SUBGROUP instead - "without
+    Group" in Loss Ratio board terms, breaking a master policy's own
+    combined row back out into the individual contracts that make it up.
+    The output field is still named "master_client" either way, because
+    every existing reader already treats that field as "this row's own
+    identity" - under group_by="client" it holds the subgroup's name,
+    which is exactly what a reader of a "without Group" table wants to
+    see there. Callers that MATCH a row to a case by company name
+    (renewal_rating, the printed reports) must never pass anything but
+    the default - a subgroup's own name is not the master client name a
+    case is opened under, and matching against it would silently price
+    the wrong row.
 
     IBNR here is deliberately an ACCOUNT-level figure (the account's own
     combined paid run rate over its own elapsed days), not the sum of each
@@ -1775,11 +1801,13 @@ def account_loss_ratio_rows(
     """
     if premium_basis not in PREMIUM_BASES:
         raise ValueError(f"premium_basis must be one of {PREMIUM_BASES}")
+    if group_by not in LOSS_RATIO_GROUP_BY:
+        raise ValueError(f"group_by must be one of {LOSS_RATIO_GROUP_BY}")
     premium_field = "booked_gross_premium" if premium_basis == "booked" else "written_premium"
 
     buckets: Dict[tuple, dict] = {}
     for r in member_results:
-        master_client = r.get("master_client")
+        master_client = r.get(group_by) or r.get("master_client")
         policy_start = r.get("policy_start_date")
         if not master_client or not policy_start:
             continue

@@ -24,6 +24,7 @@ from app.reference.network_type_mapping import is_out_of_scope_network_type, map
 from app.scoring.rules.credibility import FULL_CREDIBILITY_MEMBER_YEARS
 from app.scoring.rules.portfolio_analysis import (
     DEFAULT_PRICING_CREDIBILITY,
+    LOSS_RATIO_GROUP_BY,
     YEAR_BASES,
     account_calendar_loss_ratio_rows,
     account_loss_ratio_rows,
@@ -329,6 +330,14 @@ def portfolio_account_loss_ratio(
         "actual",
         description="Which of the Membership export's own premium columns to build Gross Premium from: 'actual' (ActualGrossPremium - already prorated for each member's own joining/leaving dates, the basis HealthCross underwrites on) or 'booked' (GrossPremium - each member's full annual premium regardless of enrollment).",
     ),
+    status: Optional[str] = Query(
+        None,
+        description="'active' or 'expired' to see only one, omitted for both. Reads each row's own `expired` flag - the same one the row already reports, not a second computation of it.",
+    ),
+    group_by: str = Query(
+        "master_client",
+        description="'master_client' (default - combines a client's own subgroups into one row per policy period, the pricing and underwriting basis) or 'client' (breaks the book out by raw subgroup instead - 'without Group').",
+    ),
     filters: Dict[str, str] = Depends(_result_filters),
     db: Session = Depends(get_db),
 ):
@@ -344,6 +353,14 @@ def portfolio_account_loss_ratio(
     Master sheet wherever it is on file, resolved per policy period so a
     client whose loading changed between renewals uses the right one for
     each; default_loading_pct is only the fallback.
+
+    `status` filters the finished rows rather than the members going in -
+    an expired policy's own figures (no more IBNR, a full year earned) are
+    already computed correctly regardless of this filter; it only decides
+    which of those already-correct rows are shown. Applied after
+    `shed_impact`/`shed_cumulative` are computed on the SAME filtered set,
+    so "what would the book look like without these accounts" only
+    considers accounts actually on screen.
     """
     # Loss ratio compares each account's own ACTUAL premium against its own
     # ACTUAL claims - the rate card only ever feeds standard_premium (what
@@ -374,6 +391,18 @@ def portfolio_account_loss_ratio(
     effective_as_of = as_of or book_repo.stored_as_of(db) or date.today()
     if year_basis not in YEAR_BASES:
         raise HTTPException(status_code=400, detail=f"year_basis must be one of {YEAR_BASES}")
+    if group_by not in LOSS_RATIO_GROUP_BY:
+        raise HTTPException(status_code=400, detail=f"group_by must be one of {LOSS_RATIO_GROUP_BY}")
+    if group_by != "master_client" and calendar_basis:
+        # account_calendar_loss_ratio_rows buckets its own way (by
+        # calendar year, splitting a policy across the years it spans)
+        # and does not yet take a group_by of its own - refused rather
+        # than silently ignored, which would show "Master client" rows
+        # under a "without Group" heading.
+        raise HTTPException(
+            status_code=400,
+            detail="group_by='client' is not yet supported on the calendar year basis.",
+        )
     try:
         if year_basis == "calendar":
             # Calendar basis re-matches claims by treatment date per year,
@@ -410,13 +439,23 @@ def portfolio_account_loss_ratio(
                 db, client=client, as_of=as_of,
                 premium_basis=premium_basis,
                 default_loading_pct=default_loading_pct,
+                group_by=group_by,
             )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+    if status:
+        if status not in ("active", "expired"):
+            raise HTTPException(status_code=400, detail="status must be 'active' or 'expired'")
+        want_expired = status == "expired"
+        rows = [r for r in rows if bool(r.get("expired")) == want_expired]
+
     return {
         "as_of": effective_as_of.isoformat(),
         "premium_basis": premium_basis,
         "year_basis": year_basis,
+        "status": status,
+        "group_by": group_by,
         "rows": rows,
         "totals": account_loss_ratio_totals(rows),
         # What the book's loss ratio becomes if each account is not

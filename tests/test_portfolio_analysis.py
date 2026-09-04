@@ -1608,6 +1608,59 @@ def test_account_loss_ratio_keeps_each_policy_period_as_its_own_row():
     assert current["ibnr"] == pytest.approx(33_721.82, abs=0.01)
 
 
+class TestLossRatioGroupBy:
+    """'with Group' (the default, master_client) combines a client's own
+    subgroups into one row; 'without Group' (group_by="client") breaks
+    the same book back out by raw subgroup - "Loss ratio with or without
+    Group" in the underwriter's own words.
+    """
+
+    def _sub(self, master, subgroup, policy_start, paid=0.0, outstanding=0.0, gross=0.0):
+        return {
+            "master_client": master, "client": subgroup, "policy_start_date": policy_start,
+            "actual_claims_paid": paid, "actual_claims_outstanding": outstanding,
+            "written_premium": gross, "claim_count": 0,
+        }
+
+    def test_default_combines_subgroups_into_one_master_client_row(self):
+        members = [
+            self._sub("ACME GROUP", "ACME DXB", date(2026, 1, 1), paid=10_000.0, gross=50_000.0),
+            self._sub("ACME GROUP", "ACME AUH", date(2026, 1, 1), paid=5_000.0, gross=30_000.0),
+        ]
+        rows = account_loss_ratio_rows(members, as_of=date(2026, 6, 1))
+        assert len(rows) == 1
+        assert rows[0]["master_client"] == "ACME GROUP"
+        assert rows[0]["paid"] == pytest.approx(15_000.0, abs=0.01)
+
+    def test_group_by_client_breaks_the_same_book_out_by_subgroup(self):
+        members = [
+            self._sub("ACME GROUP", "ACME DXB", date(2026, 1, 1), paid=10_000.0, gross=50_000.0),
+            self._sub("ACME GROUP", "ACME AUH", date(2026, 1, 1), paid=5_000.0, gross=30_000.0),
+        ]
+        rows = account_loss_ratio_rows(members, as_of=date(2026, 6, 1), group_by="client")
+        assert len(rows) == 2
+        by_name = {r["master_client"]: r for r in rows}
+        assert set(by_name) == {"ACME DXB", "ACME AUH"}
+        assert by_name["ACME DXB"]["paid"] == pytest.approx(10_000.0, abs=0.01)
+        assert by_name["ACME AUH"]["paid"] == pytest.approx(5_000.0, abs=0.01)
+        # Same total either way - grouping only changes how it is sliced.
+        assert sum(r["paid"] for r in rows) == pytest.approx(15_000.0, abs=0.01)
+
+    def test_an_unknown_group_by_is_rejected(self):
+        with pytest.raises(ValueError):
+            account_loss_ratio_rows([self._sub("A", "A", date(2026, 1, 1))],
+                                    as_of=date(2026, 6, 1), group_by="nonsense")
+
+    def test_a_subgroup_missing_its_own_client_field_falls_back_to_master(self):
+        # A member result that never got a "client" value (shouldn't
+        # happen from real ingestion, but nothing should crash on it) -
+        # falls back to master_client rather than dropping the row.
+        member = self._sub("ACME GROUP", None, date(2026, 1, 1), paid=1_000.0)
+        rows = account_loss_ratio_rows([member], as_of=date(2026, 6, 1), group_by="client")
+        assert len(rows) == 1
+        assert rows[0]["master_client"] == "ACME GROUP"
+
+
 def test_account_loss_ratio_has_no_ibnr_when_nothing_has_been_paid_yet():
     # A brand-new policy with outstanding-only claims has no paid run rate
     # to project a 30-day tail from.
