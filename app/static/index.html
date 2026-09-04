@@ -9677,6 +9677,11 @@ function portfolioAnalysisPanelHtml() {
    over those, so accuracy rides on the same already-tested code paths. */
 let rrState = { drillProduct: null, drillDim: 'relation' };
 
+// Every section's own last-fetched rows, kept so Print/Save as PDF builds
+// from what's already on screen instead of re-running all 7 heavy
+// analytical calls a second time - see printReinsuranceReport.
+let rrData = {};
+
 function _rrKpi(label, value) {
   return `<div class="kpi"><span class="label">${escapeHtml(label)}</span><span class="value">${value}</span></div>`;
 }
@@ -9736,8 +9741,10 @@ async function _rrLoadProductLR() {
   const area = document.getElementById('rr-product-area');
   try {
     const r = await api('/portfolio-analysis/summary?group_by=product');
-    area.innerHTML = _rrProductTableHtml(r.rows || []);
+    rrData.product = r.rows || [];
+    area.innerHTML = _rrProductTableHtml(rrData.product);
   } catch (err) {
+    rrData.product = null;
     area.innerHTML = _rrEmptyCard('Product-wise loss ratio (30-day IBNR)', 'Needs Membership, Claims and a Rate Card uploaded first (see Claims Explorer).');
   }
 }
@@ -9835,8 +9842,10 @@ async function _rrLoadNationality() {
   const area = document.getElementById('rr-nationality-area');
   try {
     const r = await api('/portfolio-analysis/nationality-risk');
-    area.innerHTML = _rrNationalityHtml(r.rows || []);
+    rrData.nationality = r.rows || [];
+    area.innerHTML = _rrNationalityHtml(rrData.nationality);
   } catch (err) {
+    rrData.nationality = null;
     area.innerHTML = _rrEmptyCard('Nationality loss ratio &amp; burning cost', 'Needs Membership and Claims uploaded first.');
   }
 }
@@ -9881,8 +9890,10 @@ async function _rrLoadGroupSize() {
   const area = document.getElementById('rr-group-size-area');
   try {
     const r = await api('/portfolio-analysis/group-size-bands');
-    area.innerHTML = _rrGroupSizeHtml(r.rows || []);
+    rrData.groupSize = r.rows || [];
+    area.innerHTML = _rrGroupSizeHtml(rrData.groupSize);
   } catch (err) {
+    rrData.groupSize = null;
     area.innerHTML = _rrEmptyCard('Loss ratio by group size', 'Needs Membership uploaded first.');
   }
 }
@@ -9925,8 +9936,10 @@ async function _rrLoadBenefit() {
   const area = document.getElementById('rr-benefit-area');
   try {
     const r = await api('/portfolio-analysis/utilization');
-    area.innerHTML = _rrBenefitHtml(r.by_benefit_category || []);
+    rrData.benefit = r.by_benefit_category || [];
+    area.innerHTML = _rrBenefitHtml(rrData.benefit);
   } catch (err) {
+    rrData.benefit = null;
     area.innerHTML = _rrEmptyCard('Benefit-wise claims', 'Needs Claims uploaded first.');
   }
 }
@@ -9964,8 +9977,10 @@ async function _rrLoadBurningCostPN() {
   const area = document.getElementById('rr-burning-cost-area');
   try {
     const rows = await api('/portfolio-analysis/burning-cost-by-product-network');
-    area.innerHTML = _rrBurningCostPNHtml(rows || []);
+    rrData.burningCostPN = rows || [];
+    area.innerHTML = _rrBurningCostPNHtml(rrData.burningCostPN);
   } catch (err) {
+    rrData.burningCostPN = null;
     area.innerHTML = _rrEmptyCard('Burning cost by Product &times; Network', 'Needs Membership, Claims and a Rate Card uploaded first.');
   }
 }
@@ -10005,8 +10020,10 @@ async function _rrLoadTopClaimants() {
   const area = document.getElementById('rr-top-claimants-area');
   try {
     const r = await api('/portfolio-analysis/large-claims?top_n_members=20');
-    area.innerHTML = _rrTopClaimantsHtml(r.top_members || []);
+    rrData.topClaimants = r.top_members || [];
+    area.innerHTML = _rrTopClaimantsHtml(rrData.topClaimants);
   } catch (err) {
+    rrData.topClaimants = null;
     area.innerHTML = _rrEmptyCard('Top 20 claimants', 'Needs Claims uploaded first.');
   }
 }
