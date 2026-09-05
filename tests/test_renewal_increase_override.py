@@ -164,7 +164,7 @@ def test_the_new_business_tab_leads_with_the_benefits_import():
 
     start = markup.index("Start here &mdash; price the uploaded benefits")
     manual = markup.index("Or set each category by hand")
-    admin = markup.index("${uploadCard}\n    <div id=\"nb-readiness-area\">")
+    admin = markup.index("${uploadCard}\n  `;\n}")
     assert start < manual < admin, "the import must come before the manual setup and the admin upload"
 
 

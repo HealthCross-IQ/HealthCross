@@ -812,3 +812,235 @@ def reviewed_price_for_census(
         "average_nationality_factor": round(factor_weighted / priced, 4) if priced else None,
         "members": members_out,
     }
+
+
+# ---------------------------------------------------------------- findings
+
+def _lr_word(lr: Optional[float]) -> str:
+    if lr is None:
+        return "no experience"
+    if lr > 1.0:
+        return "losing money"
+    if lr >= 0.85:
+        return "close to break-even"
+    return "profitable"
+
+
+def underwriter_findings(
+    case: dict,
+    categories: List[dict],
+    reviewed: dict,
+    risk: dict,
+    card_total: Optional[float],
+    reviews: Dict[str, dict],
+    params: dict,
+    results: List[dict],
+    lives: int,
+    data_as_of: Optional[date],
+) -> dict:
+    """The one-page verdict on a new enquiry, from figures already computed.
+
+    Three prices (card, reviewed, book cost), a recommendation with the
+    rule that produced it, the reasons in plain words, the census laid
+    against the book's own cells, the nationality mix, and the flags an
+    underwriter checks before issuing. Nothing is priced here - it reads
+    the reviewed price, the risk-based price and the reviews, so the page
+    and the screens it summarises can never disagree.
+    """
+    product = reviewed["product"]
+    loading = loading_for_product(params, product)
+    members = reviewed["members"]
+    priced = [m for m in members if m.get("price") is not None]
+
+    # --- the census against the book's own cells
+    groups: Dict[Tuple[str, str, str], dict] = {}
+    for m in members:
+        key = (m.get("scope") or "excluding", m.get("age_band") or "?", (m.get("gender") or "?").upper()[:1])
+        g = groups.setdefault(key, {"scope": key[0], "age_band": key[1], "gender": key[2], "members": 0, "reviewed_premium": 0.0, "priced": 0})
+        g["members"] += 1
+        if m.get("price") is not None:
+            g["priced"] += 1
+            g["reviewed_premium"] += m["price"]
+    population = []
+    for (scope, band, g), grp in groups.items():
+        review = reviews.get(scope)
+        cell = next((c for c in review["cells"] if c["age_band"] == band and c["gender"] == g), None) if review else None
+        population.append({
+            **grp,
+            "scope_label": (scope[5:] if scope.startswith("only:") else "standard networks"),
+            "reviewed_rate": round(grp["reviewed_premium"] / grp["priced"], 2) if grp["priced"] else None,
+            "reviewed_premium": round(grp["reviewed_premium"], 2),
+            "book_lives": cell["lives"] if cell else None,
+            "book_member_years": cell["member_years"] if cell else None,
+            "book_gross_loss_ratio": cell["gross_loss_ratio"] if cell else None,
+            "book_credibility": cell["credibility"] if cell else None,
+            "book_thin": cell["thin"] if cell else None,
+            "decision_action": (cell.get("decision_action") if cell and cell.get("decision") else "No decision yet") if cell else "No reviewed cell",
+            "decision_change_pct": cell.get("decision_change_pct") if cell and cell.get("decision") else None,
+            "from_age": cell["from_age"] if cell else 999,
+        })
+    population.sort(key=lambda p: (p["from_age"], p["gender"]))
+
+    # Member-weighted book loss ratio of the cells this census sits in.
+    weighted_n = sum(p["members"] for p in population if p["book_gross_loss_ratio"] is not None)
+    weighted_lr = (
+        sum(p["members"] * p["book_gross_loss_ratio"] for p in population if p["book_gross_loss_ratio"] is not None) / weighted_n
+        if weighted_n else None
+    )
+
+    # --- nationality mix
+    nat: Dict[str, dict] = {}
+    for m in priced:
+        name = (m.get("nationality") or "Unknown").strip().title()
+        e = nat.setdefault(name, {"nationality": name, "members": 0, "factor_sum": 0.0})
+        e["members"] += 1
+        e["factor_sum"] += m.get("nationality_factor") or 1.0
+    nationalities = sorted(
+        [{"nationality": e["nationality"], "members": e["members"], "share": round(e["members"] / len(priced), 4) if priced else None,
+          "factor": round(e["factor_sum"] / e["members"], 4)} for e in nat.values()],
+        key=lambda r: -r["members"],
+    )
+
+    # --- the census's network(s) on the book
+    nets = network_breakdown(results, product, loading)
+    census_networks = sorted({(c.get("network") or "") for c in categories if c.get("network")})
+    network_rows = [n for n in nets if n["network"] in census_networks]
+
+    # --- prices
+    risk_total = risk.get("suggested_premium") if risk and "error" not in risk else None
+    reviewed_total = reviewed.get("reviewed_premium") or None
+    prices = {
+        "card": {"total": card_total, "per_member": round(card_total / lives, 2) if card_total else None},
+        "reviewed": {"total": reviewed_total, "per_member": reviewed.get("reviewed_per_member"),
+                     "priced_members": reviewed["priced_member_count"], "undecided_members": reviewed["undecided_member_count"],
+                     "unmatched_members": reviewed["unmatched_member_count"]},
+        "book_cost": {"total": risk_total, "per_member": (risk or {}).get("suggested_per_member"),
+                      "credibility": (risk or {}).get("weighted_credibility"), "trend_pct": (risk or {}).get("trend_pct"),
+                      "error": (risk or {}).get("error")},
+        "reviewed_vs_card_pct": round((reviewed_total / card_total - 1) * 100, 1) if (card_total and reviewed_total) else None,
+        "book_cost_vs_reviewed_pct": round((risk_total / reviewed_total - 1) * 100, 1) if (risk_total and reviewed_total) else None,
+    }
+
+    # --- flags
+    flags = []
+    def flag(level, text):
+        flags.append({"level": level, "text": text})
+    if lives >= 50:
+        flag("ok", f"Group size {lives} - no single claim decides the year.")
+    elif lives >= 20:
+        flag("watch", f"Group size {lives} - one large claim moves the year; hold margin.")
+    else:
+        flag("watch", f"Small group ({lives} lives) - price is a judgement more than a measurement.")
+    if reviewed["unmatched_member_count"]:
+        flag("watch", f"{reviewed['unmatched_member_count']} of {lives} members have no reviewed cell (age/network the book has not priced) - not in the reviewed rate.")
+    else:
+        flag("ok", f"All {lives} members priced on a reviewed cell.")
+    if reviewed["undecided_member_count"]:
+        flag("watch", f"{reviewed['undecided_member_count']} member(s) sit in cells with no rate decision yet - priced at today's rate.")
+    cred = prices["book_cost"]["credibility"]
+    if cred is not None and cred < 0.5:
+        flag("watch", f"Book cost price rests on cells below 50% credibility ({cred:.0%}) - treat it as a ceiling, not a target.")
+    elif cred is not None:
+        flag("ok", f"Book cost price is {cred:.0%} credible on this population's own cells.")
+    missing = []
+    if not case.get("industry") or str(case.get("industry")).strip().lower() in ("", "unknown", "-"):
+        missing.append("industry")
+    if not case.get("has_benefits"):
+        missing.append("table of benefits")
+    if not card_total:
+        missing.append("rate card quote")
+    if missing:
+        flag("missing", "Not yet on file: " + ", ".join(missing) + ".")
+    stale_days = int(params.get("stale_after_days") or 45)
+    if data_as_of and (date.today() - data_as_of).days > stale_days:
+        flag("watch", f"Book data is {(date.today() - data_as_of).days} days old - refresh before issuing.")
+    thin_cells = [p for p in population if p["book_thin"]]
+    if thin_cells:
+        flag("watch", "Thin book experience for: " + ", ".join(f"{p['age_band']} {p['gender']}" for p in thin_cells) + ".")
+
+    # --- recommendation
+    unmatched_share = reviewed["unmatched_member_count"] / lives if lives else 0
+    under_review = [p for p in population if p["decision_action"] == "review"]
+    if unmatched_share > 0.2:
+        rec, tone, rule = "Refer", "bad", f"{unmatched_share:.0%} of the census falls outside any reviewed cell."
+    elif under_review:
+        rec, tone, rule = "Refer", "warn", "Part of this census sits in cells still under review: " + ", ".join(f"{p['age_band']} {p['gender']}" for p in under_review) + "."
+    elif weighted_lr is not None and weighted_lr > 1.10:
+        rec, tone, rule = "Refer", "bad", f"The cells this census sits in run at {weighted_lr:.0%} gross on our book - above 110%."
+    elif weighted_lr is not None and weighted_lr > 0.95:
+        rec, tone, rule = "Quote at reviewed rate - no discount", "warn", f"Cells this census sits in run at {weighted_lr:.0%} gross; the reviewed rate carries the agreed corrections."
+    else:
+        rec, tone, rule = "Quote at reviewed rate", "good", f"Cells this census sits in run at {weighted_lr:.0%} gross on our book." if weighted_lr is not None else "No book experience for this population."
+
+    # --- why, in plain words
+    why = []
+    for p in population[:3]:
+        if p["book_gross_loss_ratio"] is None:
+            why.append({"tone": "grey", "text": f"{p['members']} {'male' if p['gender']=='M' else 'female'}(s) aged {p['age_band']} - our book has no {product} experience for this cell."})
+            continue
+        lr = p["book_gross_loss_ratio"]
+        cred_txt = "fully credible" if (p["book_credibility"] or 0) >= 1 else f"{p['book_credibility']:.0%} credible"
+        act = p["decision_action"]
+        act_txt = ("hold" if act == "hold" else f"{act} {p['decision_change_pct']:+.0f}%" if p["decision_change_pct"] else act)
+        why.append({
+            "tone": "bad" if lr > 1.0 else "warn" if lr >= 0.85 else "good",
+            "text": (f"{p['members']} {'male' if p['gender']=='M' else 'female'}{'s' if p['members']!=1 else ''} aged {p['age_band']} on {p['scope_label']} - "
+                     f"on our book this cell runs at {lr:.0%} gross ({p['book_lives']} lives, {cred_txt}), {_lr_word(lr)}. Agreed action: {act_txt}."),
+        })
+    if nationalities:
+        top = nationalities[0]
+        why.append({
+            "tone": "good" if top["factor"] < 0.95 else "bad" if top["factor"] > 1.05 else "grey",
+            "text": (f"{top['share']:.0%} {top['nationality']} - inside their cells this nationality costs {top['factor']:.2f}x the cell average; "
+                     f"the reviewed rate already reflects that."
+                     + (" No further discount is justified." if top["factor"] < 0.95 else "")),
+        })
+    if prices["book_cost_vs_reviewed_pct"] is not None:
+        gap = prices["book_cost_vs_reviewed_pct"]
+        if abs(gap) >= 15:
+            why.append({
+                "tone": "warn",
+                "text": (f"Book cost price is {abs(gap):.0f}% {'above' if gap > 0 else 'below'} the reviewed rate"
+                         + (f" - it prices from thin cube cells ({cred:.0%} credibility); treat it as a ceiling, not a target." if (gap > 0 and cred is not None and cred < 0.5)
+                            else " - the two views of this population disagree; the reviewed rate is the one the team signed off.")),
+            })
+    for n in network_rows:
+        if n.get("gross_loss_ratio") is not None:
+            why.append({
+                "tone": "bad" if n["gross_loss_ratio"] > 1.0 else "good",
+                "text": (f"{n['network']} runs at {n['gross_loss_ratio']:.0%} gross on {product}"
+                         + (f" and costs {n['cost_factor']:.1f}x the cheapest network while charging {n['premium_factor']:.1f}x" if n.get("cost_factor") and n.get("premium_factor") and n["cost_factor"] > 1.3 else "")
+                         + (" - do not go below the reviewed rate on this network." if n["gross_loss_ratio"] > 0.95 else ".")),
+            })
+    females = sum(1 for m in members if (m.get("gender") or "").upper().startswith("F"))
+    fem_18_40 = sum(1 for m in members if (m.get("gender") or "").upper().startswith("F") and m.get("age") is not None and 18 <= m["age"] <= 40)
+    over_59 = sum(1 for m in members if m.get("age") is not None and m["age"] > 59)
+    bits = []
+    bits.append("No maternity exposure (no females)." if females == 0 else f"{fem_18_40} women aged 18-40 - maternity exposure.")
+    bits.append("No members over 59." if over_59 == 0 else f"{over_59} member(s) over 59.")
+    if missing:
+        bits.append("Add " + " and ".join(missing) + " before issuing.")
+    why.append({"tone": "grey", "text": " ".join(bits)})
+
+    return {
+        "case": case,
+        "plan": {
+            "product": product,
+            "networks": census_networks,
+            "tpa": sorted({(c.get("tpa") or "") for c in categories if c.get("tpa")}),
+            "loading_pct": loading,
+        },
+        "lives": lives,
+        "data_as_of": data_as_of.isoformat() if data_as_of else None,
+        "prepared_on": date.today().isoformat(),
+        "decisions_count": reviewed.get("decisions_count"),
+        "target_loss_ratio": params["target_loss_ratio"],
+        "large_claim_cap": params.get("large_claim_cap"),
+        "recommendation": {"verdict": rec, "tone": tone, "rule": rule, "population_book_loss_ratio": round(weighted_lr, 4) if weighted_lr is not None else None},
+        "prices": prices,
+        "why": why,
+        "population": population,
+        "nationalities": nationalities,
+        "networks": network_rows,
+        "flags": flags,
+    }

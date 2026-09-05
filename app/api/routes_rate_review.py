@@ -343,13 +343,9 @@ def get_nationality_factors(
     return out
 
 
-@router.get("/reviewed-price/{case_id}")
-def get_reviewed_price(case_id: int, as_of: Optional[date] = Query(None), db: Session = Depends(get_db)):
-    """A case's census priced on the reviewed card: each member's cell
-    rate after the agreed decision, times the member's nationality factor
-    within that cell. Sits beside the card price and the risk-based price
-    on New Quote - it is what the book, and the team's decisions on it,
-    say this population should pay."""
+def _reviewed_price_payload(db: Session, case_id: int, as_of: Optional[date]) -> dict:
+    """The reviewed price for a case, plus everything it was built from -
+    shared by the reviewed-price endpoint and the findings page."""
     from app.api.routes_new_business_rating import _case_census_dicts, _resolve_auto_quote_categories
 
     case = db.get(models.Case, case_id)
@@ -409,9 +405,59 @@ def get_reviewed_price(case_id: int, as_of: Optional[date] = Query(None), db: Se
                           "product": product, "network": (design.get(e["category"]) or {}).get("network")} for e in by_cat.values()]
     quote = db.query(models.NewBusinessQuote).filter_by(case_id=case_id).order_by(models.NewBusinessQuote.created_at.desc()).first()
     card = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
-    out["rate_card_premium"] = card
+    out["rate_card_premium"] = card or None
     out["gap_pct"] = round((out["reviewed_premium"] / card - 1) * 100, 1) if card and out["reviewed_premium"] else None
     out["product"] = product
     out["data_as_of"] = effective_as_of.isoformat() if effective_as_of else None
     out["decisions_count"] = len(decisions)
+    out["_context"] = {
+        "case": case, "categories": categories, "params": params, "results": results,
+        "reviews": reviews, "effective_as_of": effective_as_of, "quote": quote,
+    }
     return out
+
+
+@router.get("/reviewed-price/{case_id}")
+def get_reviewed_price(case_id: int, as_of: Optional[date] = Query(None), db: Session = Depends(get_db)):
+    """A case's census priced on the reviewed card: each member's cell
+    rate after the agreed decision, times the member's nationality factor
+    within that cell. Sits beside the card price and the risk-based price
+    on New Quote - it is what the book, and the team's decisions on it,
+    say this population should pay."""
+    out = _reviewed_price_payload(db, case_id, as_of)
+    out.pop("_context", None)
+    return out
+
+
+@router.get("/findings/{case_id}")
+def get_underwriter_findings(case_id: int, as_of: Optional[date] = Query(None), db: Session = Depends(get_db)):
+    """One page for the underwriter: the three prices, a recommendation,
+    the reasons in plain words, the census against the book's own cells,
+    the nationality mix and the risk flags. Every figure comes from the
+    same functions the Rate Review and the risk-based price use - nothing
+    here is computed a second way."""
+    from app.api.routes_new_business_rating import get_risk_based_price
+
+    reviewed = _reviewed_price_payload(db, case_id, as_of)
+    ctx = reviewed.pop("_context")
+    case, categories, params, results, reviews = ctx["case"], ctx["categories"], ctx["params"], ctx["results"], ctx["reviews"]
+    product = reviewed["product"]
+    lives = reviewed["member_count"]
+
+    try:
+        risk = get_risk_based_price(case_id, trend_pct=0.10, apply_nationality=True, as_of=as_of, db=db)
+    except HTTPException as exc:
+        risk = {"error": exc.detail}
+
+    card_total = reviewed.get("rate_card_premium")
+    return rr.underwriter_findings(
+        case={
+            "id": case.id, "company_name": case.company_name, "broker_name": case.broker_name,
+            "industry": case.industry, "region": case.region, "business_type": case.business_type,
+            "policy_start_date": case.policy_start_date.isoformat() if case.policy_start_date else None,
+            "has_benefits": bool(case.benefit_plans), "target_premium": case.target_premium,
+        },
+        categories=categories, reviewed=reviewed, risk=risk, card_total=card_total,
+        reviews=reviews, params=params, results=results, lives=lives,
+        data_as_of=ctx["effective_as_of"],
+    )

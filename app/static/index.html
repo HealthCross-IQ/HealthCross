@@ -989,6 +989,38 @@
   .rv-params label { margin-top: 0; }
   .rv-params .hint { margin: 2px 0 0; font-size: 11px; }
   .rv-foot { font-size: 11.5px; color: var(--ink-2); line-height: 1.6; margin-top: 12px; }
+  /* Underwriter Findings - the screen and the print share one markup. */
+  .fd-page { padding: 24px 28px; }
+  .fd-head { border-bottom: 2px solid var(--accent); padding-bottom: 12px; margin-bottom: 16px; }
+  .fd-title { font-size: 19px; font-weight: 800; margin-bottom: 4px; font-family: var(--font-body); }
+  .fd-sub { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; }
+  .fd-sub b { color: var(--ink); }
+  .fd-verdict { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; margin-bottom: 16px; }
+  .fd-verdict > div { padding: 13px 15px; border-right: 1px solid var(--border); }
+  .fd-verdict > div:last-child { border-right: none; }
+  .fd-verdict .rec { background: var(--surface-2); }
+  .fd-verdict .k { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--ink-muted); margin-bottom: 6px; }
+  .fd-verdict .v { font-size: 20px; font-weight: 800; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+  .fd-verdict .s { font-size: 11.5px; color: var(--ink-2); margin-top: 3px; }
+  .fd-pill { display: inline-flex; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; font-weight: 700; white-space: nowrap; }
+  .fd-pill.good { background: var(--good-bg); color: var(--good); } .fd-pill.warn { background: var(--warning-bg); color: var(--warning); } .fd-pill.bad { background: var(--critical-bg); color: var(--critical); } .fd-pill.grey { background: var(--surface-2); color: var(--ink-2); }
+  .fd-h { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-2); margin: 18px 0 8px; }
+  .fd-why { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+  .fd-why li { display: flex; gap: 10px; font-size: 13.5px; line-height: 1.5; }
+  .fd-dot { width: 8px; height: 8px; border-radius: 2px; flex: none; margin-top: 7px; }
+  .fd-dot.bad { background: var(--critical); } .fd-dot.warn { background: var(--warning); } .fd-dot.good { background: var(--good); } .fd-dot.grey { background: var(--ink-muted); }
+  .fd-two { display: grid; grid-template-columns: 1.15fr 1fr; gap: 22px; }
+  .fd-table td.num, .fd-table th.num { text-align: right; }
+  .fd-table tr.total td { font-weight: 800; border-top: 2px solid var(--border-strong); }
+  .fd-lr { display: inline-flex; min-width: 50px; justify-content: center; padding: 2px 7px; border-radius: 4px; font-weight: 700; font-size: 12px; }
+  .fd-lr.good { background: var(--good-bg); color: var(--good); } .fd-lr.warn { background: var(--warning-bg); color: var(--warning); } .fd-lr.bad { background: var(--critical-bg); color: var(--critical); } .fd-lr.grey { background: var(--surface-2); color: var(--ink-muted); }
+  .fd-thin { font-size: 10px; font-weight: 700; color: var(--warning); }
+  .fd-flags { display: grid; gap: 6px; font-size: 12.5px; }
+  .fd-flags div { display: flex; gap: 8px; align-items: flex-start; }
+  .fd-sign { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 16px; margin-top: 22px; padding-top: 14px; border-top: 1px dashed var(--border); font-size: 12px; color: var(--ink-2); }
+  .fd-sign div { border-bottom: 1px solid var(--border); padding-bottom: 22px; }
+  .fd-foot { font-size: 11px; color: var(--ink-muted); margin-top: 12px; line-height: 1.5; }
+  @media (max-width: 1100px) { .fd-verdict { grid-template-columns: 1fr 1fr; } .fd-two { grid-template-columns: 1fr; } }
   .rv-two { display: grid; grid-template-columns: 1fr; gap: 0; }
   @media (min-width: 1700px) { .rv-two { grid-template-columns: 1fr 1fr; gap: 16px; } }
 </style>
@@ -3641,6 +3673,7 @@ function exportComparisonCsv() {
 /* ---------------- workspace / tabs ---------------- */
 
 const TABS = [
+  { id: 'findings', label: 'Findings' },
   { id: 'census', label: 'Census' },
   { id: 'benefits', label: 'Benefits' },
   { id: 'claims', label: 'Claims' },
@@ -3862,6 +3895,10 @@ function renderCaseWorkspace() {
       }).join('')}
     </div>
 
+    <div class="tab-panel" data-tab="findings">
+      <div id="findings-area"></div>
+    </div>
+
     <div class="tab-panel" data-tab="census">
       <div style="text-align:right; margin-bottom:8px;"><button onclick="printTabAsPdf('census', 'Census Summary')">Print / Save as PDF</button></div>
       <div id="census-summary-area"></div>
@@ -4022,12 +4059,13 @@ function renderCaseWorkspace() {
       </div>
     </div>
   `;
-  switchTab('census');
+  switchTab('findings');
   selectedClaimsReportId = null; // a new case's claims views default to its latest report
   loadExecutiveSummary();
   applyBusinessTypeVisibility();
   loadCaseCompleteness();
   loadLatestScorecard();
+  loadFindings();
   loadCensusSummary();
   loadBenefitsSummary();
   loadPremiumByCategory();
@@ -4668,7 +4706,7 @@ async function uploadFile(kind) {
     // file" batch is almost always a different category, and leaving the
     // last one filled in risks silently overwriting it if forgotten.
     if (kind === 'benefits' && categoryInput) categoryInput.value = '';
-    if (kind === 'census') { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
+    if (kind === 'census') { await loadCensusSummary(); await loadFindings(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
     if (kind === 'benefits') { await loadBenefitsSummary(); await loadBenefitsComparison(); }
     if (kind === 'quote') { await loadPremiumByCategory(); await loadBenefitsComparison(); }
     if (kind === 'claims' && isPdf) {
@@ -4877,7 +4915,7 @@ async function quickUploadConfirm() {
   // uploadFile() itself refreshes after a single manual upload, just for
   // every kind touched in this one batch.
   const uploadedKinds = new Set(toUpload.filter(f => f.status === 'done').map(f => f.selectedKind));
-  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
+  if (uploadedKinds.has('census')) { await loadCensusSummary(); await loadFindings(); await loadNewBusinessRating(); await loadMemberRates(); await loadRenewalBenchSummary(); await loadRenewalBenchPopulationMovement(); await loadRenewalBenchClaimsSplit(); await loadRenewalBenchRepricing(); await loadRenewalScenarios(); await loadRenewalOptions(); await loadClaimsDevelopment(); }
   if (uploadedKinds.has('benefits')) { await loadBenefitsSummary(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('quote')) { await loadPremiumByCategory(); await loadBenefitsComparison(); }
   if (uploadedKinds.has('claims')) {
@@ -9130,266 +9168,9 @@ async function nbRenderArea() {
     </div>
     <div id="nb-result-area">${nbLastQuote ? nbResultHtml(nbLastQuote) : ''}</div>
     ${uploadCard}
-    <div id="nb-readiness-area"></div>
-    <div id="nb-price-comparison-area"></div>
-    <div id="nb-opportunity-area"></div>
-    <div id="nb-existing-vs-proposed-area"></div>
-    <div id="nb-risk-price-area"></div>
-    <div id="nb-nationality-mix-area"></div>
   `;
-  loadNbQuoteReadiness();
-  loadNbPriceComparison();
-  loadNbOpportunityAssessment();
-  loadNbExistingVsProposed();
-  loadNbRiskBasedPrice();
-  loadNbNationalityMix();
 }
 
-/* Four prices and the gaps between them - see
-   app/scoring/rules/price_comparison.py. The last gap is the one nothing
-   else in the portal has ever shown: a discount agreed in a meeting
-   leaves the computed quote untouched and the issued document different,
-   and the two are never reconciled until the account renews badly. */
-async function loadNbPriceComparison() {
-  const area = document.getElementById('nb-price-comparison-area');
-  if (!area || !currentCase) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/price-comparison`);
-    const p = r.prices, pm = r.per_member;
-    if (p.card_price == null && p.issued_price == null) { area.innerHTML = ''; return; }
-
-    const aed = v => v == null ? '—' : Math.round(v).toLocaleString();
-    const pct = v => v == null ? '—' : (v * 100).toFixed(1) + '%';
-    const signed = v => v == null ? '—' : (v > 0 ? '+' : '') + (v * 100).toFixed(1) + '%';
-    const lrPill = v => v == null ? '<span class="hint">—</span>'
-      : `<span class="tier-pill ${v > 1 ? 'dir-review' : v > 0.9 ? '' : 'dir-improved'}">${pct(v)}</span>`;
-
-    // The discount block only appears when there is an issued quote to
-    // compare against - an absent one is not a 100% discount.
-    const d = r.discount;
-    const discountBlock = !d ? '' : `
-      <div class="card">
-        <h3>${d.direction === 'discount' ? 'Discount given' : d.direction === 'loaded' ? 'Issued above the card' : 'Price held'}
-          <span class="tier-pill ${d.direction === 'discount' ? 'dir-review' : d.direction === 'loaded' ? 'dir-improved' : 'dir-same'}">${signed(d.pct)}</span>
-        </h3>
-        <div class="hint">A discount does not come off margin - it comes off the money that funds claims. At a
-          ${pct(r.loading_pct)} loading, premium &times; ${(1 - r.loading_pct).toFixed(3)} pays claims, and the expected
-          claims do not move. So a ${pct(Math.abs(d.pct))} move in price changes the loss ratio by more than
-          ${pct(Math.abs(d.pct))}.</div>
-        <div class="row" style="margin-top:14px; gap:28px; flex-wrap:wrap;">
-          <div><div class="hint">Amount</div><div style="font-size:18px;font-weight:600;">AED ${aed(Math.abs(d.amount_aed))}</div></div>
-          <div><div class="hint">Implied LR at the card price</div><div style="font-size:18px;font-weight:600;">${pct(d.implied_loss_ratio_before)}</div></div>
-          <div><div class="hint">Implied LR as issued</div><div style="font-size:18px;font-weight:600;">${pct(d.implied_loss_ratio_after)}</div></div>
-          <div><div class="hint">Movement</div><div style="font-size:18px;font-weight:600;">${signed(d.loss_ratio_movement)}</div></div>
-        </div>
-      </div>`;
-
-    const unpriced = r.issued_quote.categories_without_a_premium;
-    area.innerHTML = `
-      <div class="card">
-        <h3>What the price should have been, and what went out</h3>
-        <div class="hint">Loss ratio is measured against the part of each premium that actually funds claims
-          (premium &times; ${(1 - r.loading_pct).toFixed(3)} at this case's ${pct(r.loading_pct)} loading), never against
-          gross premium - measuring against gross flatters every account by exactly the loading.</div>
-        <div style="overflow-x:auto;">
-        <table style="margin-top:12px;">
-          <tr><th style="width:26%;">Price</th><th class="num">Total (AED)</th><th class="num">Per member</th><th class="num">Implied LR</th><th>What it answers</th></tr>
-          <tr><th>Expected claims</th><td class="num">${aed(p.expected_claims)}</td><td class="num">${aed(pm.expected_claims)}</td><td class="num"><span class="hint">—</span></td><td class="hint">what these members should cost, from our own book</td></tr>
-          <tr><th>Risk-based price</th><td class="num">${aed(p.risk_price)}</td><td class="num">${aed(pm.risk_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_risk_price)}</td><td class="hint">expected claims, carried for trend and industry, grossed up</td></tr>
-          <tr><th>Rate card quote</th><td class="num">${aed(p.card_price)}</td><td class="num">${aed(pm.card_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_card_price)}</td><td class="hint">what the card charges for this plan design</td></tr>
-          <tr><th><strong>Issued quote</strong></th><td class="num"><strong>${aed(p.issued_price)}</strong></td><td class="num">${aed(pm.issued_price)}</td><td class="num">${lrPill(r.implied_loss_ratio.at_issued_price)}</td><td class="hint">what the broker actually received</td></tr>
-        </table>
-        </div>
-        <table style="margin-top:14px;">
-          <tr><th style="width:26%;">Card vs risk price</th><td class="num" style="width:14%;">${signed(r.gaps.card_vs_risk_pct)}</td><td class="hint">is the card adequate for this population?</td></tr>
-          <tr><th>Issued vs card</th><td class="num">${signed(r.gaps.issued_vs_card_pct)}</td><td class="hint">what was given away in the room</td></tr>
-          <tr><th>Issued vs risk price</th><td class="num">${signed(r.gaps.issued_vs_risk_pct)}</td><td class="hint">does the deal actually done still clear the risk?</td></tr>
-        </table>
-        ${unpriced.length ? `<div class="hint" style="margin-top:10px;">No premium read for category
-          ${unpriced.map(escapeHtml).join(', ')} on the issued document - the issued total is short by whatever
-          those carry, so treat it as a floor rather than the figure.</div>` : ''}
-      </div>
-      ${discountBlock}
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
-}
-
-/* The conclusion the whole New Business tab exists to reach. See
-   app/scoring/rules/opportunity_risk.py - the discipline is that a
-   factor the burning-cost cube already prices is shown and contributes
-   nothing, so the same risk is never charged twice. */
-const VERDICT_STYLE = {
-  go_aggressive:     {pill: 'dir-improved', label: 'Go aggressive'},
-  priced_right:      {pill: 'dir-same',     label: 'Priced about right'},
-  needs_loading:     {pill: 'dir-review',   label: 'Needs loading'},
-  decline_or_reprice:{pill: 'dir-review',   label: 'Decline or reprice'},
-  not_enough_to_say: {pill: '',             label: 'Not enough to say'},
-};
-
-const TREATMENT_STYLE = {
-  already_in_price: {pill: 'dir-same',    label: 'already in the price'},
-  load:             {pill: 'dir-review',  label: 'loads'},
-  widen_margin:     {pill: 'dir-review',  label: 'widen the margin'},
-  ask:              {pill: '',            label: 'ask'},
-};
-
-async function loadNbOpportunityAssessment() {
-  const area = document.getElementById('nb-opportunity-area');
-  if (!area || !currentCase) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/opportunity-assessment`);
-    const v = VERDICT_STYLE[r.verdict.verdict] || VERDICT_STYLE.not_enough_to_say;
-    const aed = n => n == null ? '-' : Math.round(n).toLocaleString();
-    const pc = n => n == null ? '-' : (n * 100).toFixed(1) + '%';
-
-    // Factors that move the number, and factors that explain it. Kept
-    // visually apart because reading them as one list is exactly how an
-    // underwriter ends up loading for something already charged for.
-    const moving = r.factors.filter(f => f.treatment === 'load' || f.treatment === 'widen_margin');
-    const explaining = r.factors.filter(f => f.treatment === 'already_in_price');
-
-    const factorRow = f => {
-      const t = TREATMENT_STYLE[f.treatment] || TREATMENT_STYLE.ask;
-      return `<tr>
-        <td><strong>${escapeHtml(f.label)}</strong></td>
-        <td>${escapeHtml(f.finding)}</td>
-        <td><span class="tier-pill ${t.pill}">${t.label}</span></td>
-      </tr>`;
-    };
-
-    const contributions = r.required_margin_contributions.map(c => `
-      <tr><th>${escapeHtml(c.key.replace(/_/g, ' '))}</th><td>+${pc(c.pct)}</td><td>${escapeHtml(c.why)}</td></tr>
-    `).join('');
-
-    const adjustments = r.aed_adjustments.map(a => `
-      <tr><th>${escapeHtml(a.key.replace(/_/g, ' '))}</th><td>${a.aed < 0 ? '-' : '+'}AED ${aed(Math.abs(a.aed))}</td><td>${escapeHtml(a.why)}</td></tr>
-    `).join('');
-
-    area.innerHTML = `
-      <div class="card">
-        <h3>Opportunity assessment <span class="tier-pill ${v.pill}">${v.label}</span></h3>
-        <div style="font-size:16px; font-weight:600; margin-top:6px;">${escapeHtml(r.verdict.headline)}</div>
-        <div class="hint">${escapeHtml(r.verdict.detail)}</div>
-        <div class="row" style="margin-top:14px; gap:24px; flex-wrap:wrap;">
-          <div><div class="hint">Risk price</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.risk_price_aed)}</div></div>
-          <div><div class="hint">Adjusted for what the cube can't see</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.adjusted_risk_price_aed)}</div></div>
-          <div><div class="hint">Quoted</div><div style="font-size:18px;font-weight:600;">AED ${aed(r.quoted_price_aed)}</div></div>
-          <div><div class="hint">Margin carried</div><div style="font-size:18px;font-weight:600;">${pc(r.actual_margin_pct)}</div></div>
-          <div><div class="hint">Margin required</div><div style="font-size:18px;font-weight:600;">${pc(r.required_margin_pct)}</div></div>
-        </div>
-      </div>
-
-      ${moving.length ? `<div class="card">
-        <h3>What moves the price</h3>
-        <div class="hint">Only risk the burning-cost cube cannot already see. Everything below is a property of the offer, of how well the book knows this population, or of members who are not on the census - never a demographic the cube has already costed.</div>
-        <div style="overflow-x:auto;">
-        <table style="margin-top:12px;">
-          <tr><th style="width:22%;">Factor</th><th>Finding</th><th style="width:16%;">Treatment</th></tr>
-          ${moving.map(factorRow).join('')}
-        </table>
-        </div>
-        ${contributions ? `<table style="margin-top:14px;">
-          <tr><th style="width:22%;">Required margin</th><th style="width:12%;">Adds</th><th>Because</th></tr>
-          <tr><th>base</th><td>+${pc(r.assumptions.base_required_margin_pct)}</td><td>a straightforward account</td></tr>
-          ${contributions}
-          <tr><th><strong>total</strong></th><td><strong>${pc(r.required_margin_pct)}</strong></td><td></td></tr>
-        </table>` : ''}
-        ${adjustments ? `<table style="margin-top:14px;">
-          <tr><th style="width:22%;">Risk price adjusted</th><th style="width:16%;">By</th><th>Because</th></tr>
-          ${adjustments}
-        </table>` : ''}
-      </div>` : ''}
-
-      ${explaining.length ? `<div class="card">
-        <h3>Already in the risk price</h3>
-        <div class="hint">Shown to explain the number, and deliberately contributing nothing to it. The cube costs every member through product, network, age band, gender, relation and nationality zone - an older or more dependant-heavy group already prices higher on its own, and loading again for it charges twice.</div>
-        <div style="overflow-x:auto;">
-        <table style="margin-top:12px;">
-          <tr><th style="width:22%;">Factor</th><th>Finding</th><th style="width:16%;">Treatment</th></tr>
-          ${explaining.map(factorRow).join('')}
-        </table>
-        </div>
-      </div>` : ''}
-
-      <div class="card">
-        <h3>Still to ask</h3>
-        <div class="hint">Nothing we hold answers these, and none of them is safely assumed benign.</div>
-        <table style="margin-top:12px;">
-          ${r.open_questions.map(q => `<tr><th style="width:22%;">${escapeHtml(q.label)}</th><td>${escapeHtml(q.finding)}</td></tr>`).join('')}
-        </table>
-      </div>
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
-}
-
-/* The client's existing cover beside what HealthCross is proposing.
-   Both sides in the same 12 fields, with the proposal's limit and copay
-   variants recombined into the one line a table of benefits actually
-   writes - a comparison only reads if both sides are phrased alike. */
-async function loadNbExistingVsProposed() {
-  const area = document.getElementById('nb-existing-vs-proposed-area');
-  if (!area || !currentCase) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/existing-vs-proposed`);
-    if (!r.categories.length) { area.innerHTML = ''; return; }
-
-    const dirPill = d => {
-      if (d === 'improved') return '<span class="tier-pill dir-improved">richer</span>';
-      if (d === 'reduced') return '<span class="tier-pill dir-review">leaner</span>';
-      if (d === 'same') return '<span class="tier-pill dir-same">same</span>';
-      return '<span class="tier-pill">review</span>';
-    };
-
-    const blocks = r.categories.map(c => {
-      const rows = c.rows.map(row => {
-        const both = row.existing && row.proposed;
-        const added = !row.existing && row.proposed;
-        const dropped = row.existing && !row.proposed;
-        return `
-        <tr>
-          <td><strong>${escapeHtml(row.label)}</strong></td>
-          <td>${row.existing ? escapeHtml(row.existing) : '<span class="hint">not in the document</span>'}</td>
-          <td>${row.proposed ? escapeHtml(row.proposed) : `<span class="hint">${row.priced_as_variant ? 'not selected' : 'not priced as a variant'}</span>`}</td>
-          <td>${both ? dirPill(row.direction)
-                : added ? '<span class="tier-pill dir-review">added</span>'
-                : dropped ? '<span class="tier-pill dir-review">no proposal</span>'
-                : '<span class="hint">-</span>'}</td>
-        </tr>`;
-      }).join('');
-
-      return `
-        <div class="card">
-          <h3>Category ${escapeHtml(c.category)}
-            <span style="color:var(--ink-muted); font-weight:400; font-size:14px;">
-              ${c.product ? escapeHtml(c.product) : ''}${c.network ? ' / ' + escapeHtml(c.network) : ''}${c.tpa ? ' (' + escapeHtml(c.tpa) + ')' : ''}
-            </span>
-          </h3>
-          ${c.existing_plan_name ? `<div class="hint">Existing cover read from: ${escapeHtml(c.existing_plan_name)}</div>` : '<div class="hint">No existing table of benefits on this category - only the proposal is shown.</div>'}
-          <div style="overflow-x:auto;">
-          <table style="margin-top:12px;">
-            <tr><th style="width:22%;">Benefit</th><th style="width:32%;">Client's existing</th><th style="width:32%;">HealthCross proposed</th><th style="width:14%;">Comparison</th></tr>
-            ${rows}
-          </table>
-          </div>
-        </div>`;
-    }).join('');
-
-    area.innerHTML = `
-      <div class="card">
-        <h3>Existing vs proposed benefits</h3>
-        <div class="hint">The client's current cover beside what HealthCross is offering, field for field. Dental, Optical and Pharmacy price as two variants each (limit and copay) and are recombined here into the single line a table of benefits writes.</div>
-        <div class="hint"><strong>"Added"</strong> means the incumbent's document says nothing about that benefit while HealthCross is offering it - the case where a proposal is most likely to be adding cover nobody has priced for. <strong>"Review"</strong> means the two values are not comparable as numbers and need reading.</div>
-      </div>
-      ${blocks}
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
-}
 async function nbUploadPlanDetails() {
   const input = document.getElementById('file-hc-plan-details');
   const statusEl = document.getElementById('status-hc-plan-details');
@@ -9428,212 +9209,156 @@ async function nbUploadPlanDetails() {
   }
 }
 
-/* Why this case will not price, said out loud.
-   Auto-quoting is silent by design - it must never turn a successful
-   upload into a failed one - which leaves someone who uploaded a table of
-   benefits and saw nothing change with no way to tell whether the portal
-   is broken, still working, or waiting on them. This says which. */
-async function loadNbQuoteReadiness() {
-  const area = document.getElementById('nb-readiness-area');
+
+/* Underwriter Findings - one page, and the printed report is the same
+   page. Three prices, a recommendation with the rule that produced it,
+   the reasons in plain words, the census against the book's own cells,
+   the nationality mix and the flags. Nothing is computed here: the
+   server reads the reviewed price, the risk-based price and the rate
+   reviews, so this page and those screens cannot disagree. */
+let _findingsData = null;
+
+function _fdMoney(v) { return v == null ? '&mdash;' : 'AED ' + Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+function _fdNum(v) { return v == null ? '&mdash;' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 }); }
+function _fdPct(v) { return v == null ? '&mdash;' : (v * 100).toFixed(0) + '%'; }
+function _fdLr(v) { return v == null ? '<span class="fd-lr grey">&mdash;</span>' : `<span class="fd-lr ${v > 1 ? 'bad' : v >= 0.85 ? 'warn' : 'good'}">${(v * 100).toFixed(0)}%</span>`; }
+function _fdAct(p) {
+  const a = p.decision_action;
+  if (a === 'No decision yet' || a === 'No reviewed cell') return `<span class="fd-pill grey">${escapeHtml(a)}</span>`;
+  if (a === 'hold') return '<span class="fd-pill grey">Hold</span>';
+  const pct = p.decision_change_pct || 0;
+  const label = (a === 'review' ? 'Review ' : '') + (pct > 0 ? '+' : '') + pct.toFixed(0) + '%';
+  return `<span class="fd-pill ${a === 'increase' ? 'bad' : a === 'discount' ? 'good' : 'warn'}">${label}</span>`;
+}
+function _fdDate(iso) {
+  if (!iso) return '-';
+  const d = new Date(iso + (iso.length === 10 ? 'T00:00:00' : ''));
+  return isNaN(d) ? iso : d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function _findingsBodyHtml(d) {
+  const c = d.case, pr = d.prices, rec = d.recommendation;
+  const tonePill = { good: 'good', warn: 'warn', bad: 'bad' }[rec.tone] || 'grey';
+  const pop = d.population.map(p => `
+    <tr><td>${escapeHtml(p.age_band)}</td><td>${p.gender === 'M' ? 'Male' : p.gender === 'F' ? 'Female' : '-'}</td><td>${escapeHtml(p.scope_label)}</td>
+      <td class="num">${p.members}</td><td class="num">${_fdNum(p.reviewed_rate)}</td>
+      <td class="num">${_fdLr(p.book_gross_loss_ratio)}${p.book_thin ? ' <span class="fd-thin">thin</span>' : ''}</td><td>${_fdAct(p)}</td></tr>`).join('');
+  const nats = d.nationalities.slice(0, 8).map(n => `
+    <tr><td>${escapeHtml(n.nationality)}</td><td class="num">${n.members}</td><td class="num">${_fdPct(n.share)}</td>
+      <td class="num"><span class="fd-lr ${n.factor > 1.05 ? 'bad' : n.factor < 0.95 ? 'good' : 'grey'}">${n.factor.toFixed(2)}&times;</span></td></tr>`).join('');
+  const flags = d.flags.map(f => `<div><span class="fd-pill ${f.level === 'ok' ? 'good' : f.level === 'missing' ? 'bad' : 'warn'}">${f.level === 'ok' ? 'OK' : f.level === 'missing' ? 'Missing' : 'Watch'}</span><span>${escapeHtml(f.text)}</span></div>`).join('');
+  const why = d.why.map(w => `<li><span class="fd-dot ${w.tone}"></span><span>${escapeHtml(w.text)}</span></li>`).join('');
+  const bookCost = pr.book_cost;
+  return `
+    <div class="fd-head">
+      <div>
+        <div class="fd-title">Underwriter Findings &mdash; ${escapeHtml(c.company_name)}</div>
+        <div class="fd-sub"><b>${escapeHtml(d.plan.product)} &middot; ${escapeHtml(d.plan.networks.join(', ') || '-')}${d.plan.tpa.length ? ' &middot; ' + escapeHtml(d.plan.tpa.join(', ')) : ''}</b>
+          &nbsp;&middot;&nbsp; ${d.lives} lives &nbsp;&middot;&nbsp; ${escapeHtml(c.region || '-')} &nbsp;&middot;&nbsp; broker ${escapeHtml(c.broker_name || '-')}${c.policy_start_date ? ' &nbsp;&middot;&nbsp; policy start ' + _fdDate(c.policy_start_date) : ''}<br>
+          Book as of ${_fdDate(d.data_as_of)} &nbsp;&middot;&nbsp; ${d.decisions_count} ${escapeHtml(d.plan.product)} rate decisions applied &nbsp;&middot;&nbsp; prepared ${_fdDate(d.prepared_on)}</div>
+      </div>
+    </div>
+    <div class="fd-verdict">
+      <div class="rec"><div class="k">Recommendation</div><div class="v"><span class="fd-pill ${tonePill}">${escapeHtml(rec.verdict)}</span></div><div class="s">${escapeHtml(rec.rule)}</div></div>
+      <div><div class="k">Card price</div><div class="v">${_fdMoney(pr.card.total)}</div><div class="s">${pr.card.total ? _fdNum(pr.card.per_member) + ' / member' : 'compute a quote on Set-up &amp; quote'}</div></div>
+      <div><div class="k">Reviewed rate</div><div class="v">${_fdMoney(pr.reviewed.total)}</div><div class="s">${_fdNum(pr.reviewed.per_member)} / member &middot; decisions + nationality${pr.reviewed_vs_card_pct != null ? ' &middot; ' + (pr.reviewed_vs_card_pct > 0 ? '+' : '') + pr.reviewed_vs_card_pct + '% vs card' : ''}</div></div>
+      <div><div class="k">Book cost price</div><div class="v">${bookCost.error ? '&mdash;' : _fdMoney(bookCost.total)}</div><div class="s">${bookCost.error ? escapeHtml(bookCost.error) : _fdNum(bookCost.per_member) + ' / member &middot; risk-based, ' + _fdPct(bookCost.credibility) + ' credible'}</div></div>
+    </div>
+    <h4 class="fd-h">Why</h4>
+    <ul class="fd-why">${why}</ul>
+    <div class="fd-two">
+      <div>
+        <h4 class="fd-h">This population vs our book</h4>
+        <table class="fd-table"><tr><th>Age</th><th>Sex</th><th>Networks</th><th class="num">Members</th><th class="num">Reviewed rate</th><th class="num">Book LR</th><th>Agreed</th></tr>
+          ${pop}
+          <tr class="total"><td colspan="3">Total</td><td class="num">${d.lives}</td><td class="num">${_fdNum(pr.reviewed.total)}</td><td></td><td></td></tr>
+        </table>
+        <div class="fd-foot">Book LR = ${escapeHtml(d.plan.product)} loss ratio for that age &times; sex cell on the same networks, claims incl. IBNR. Reviewed rate = cell rate after the agreed decision &times; nationality factor.</div>
+      </div>
+      <div>
+        <h4 class="fd-h">Nationality mix</h4>
+        <table class="fd-table"><tr><th>Nationality</th><th class="num">Members</th><th class="num">Share</th><th class="num">Factor</th></tr>${nats || '<tr><td colspan="4">-</td></tr>'}</table>
+        <h4 class="fd-h">Risk flags</h4>
+        <div class="fd-flags">${flags}</div>
+      </div>
+    </div>
+    <div class="fd-sign"><div>Underwriter</div><div>Decision &amp; premium issued</div><div>Date</div></div>
+    <div class="fd-foot">HealthCross Underwriting Intelligence &middot; Reviewed rate uses the Rate Review decisions stored as of ${_fdDate(d.prepared_on)} (target ${_fdPct(d.target_loss_ratio)} net, ${escapeHtml(d.plan.product)} loading ${(d.plan.loading_pct * 100).toFixed(1)}%${d.large_claim_cap ? ', large-claim cap AED ' + _fdNum(d.large_claim_cap) : ''}). Book cost price = expected claims from the burning-cost cube${bookCost.trend_pct != null ? ' + ' + (bookCost.trend_pct * 100).toFixed(0) + '% trend' : ''}, grossed up for loading.</div>`;
+}
+
+async function loadFindings() {
+  const area = document.getElementById('findings-area');
   if (!area || !currentCase) return;
+  area.innerHTML = '<div class="card"><h3>Findings</h3><div class="hint">Reading this census against the book&hellip;</div></div>';
   try {
-    const r = await api(`/cases/${currentCase.id}/quote-readiness`);
-    if (r.can_price && !r.blockers.length) {
-      area.innerHTML = `
-        <div class="card">
-          <h3>Ready to price <span class="tier-pill dir-improved">${r.ready_category_count} of ${r.category_count} categories</span></h3>
-          <div class="hint">Every category has a Product, Network and TPA. Quotes re-compute automatically whenever the census, benefits or rate card change.</div>
-        </div>`;
-      return;
-    }
-
-    const blockers = r.blockers.map(b => `
-      <tr>
-        <td><span class="tier-pill ${b.severity === 'mistake' ? 'dir-review' : 'dir-same'}">${b.severity === 'mistake' ? 'Needs correcting' : 'Not set yet'}</span></td>
-        <td><strong>${escapeHtml(b.issue)}</strong><div class="hint" style="margin:3px 0 0;">${escapeHtml(b.detail)}</div></td>
-        <td>${escapeHtml(b.fix_at)}</td>
-      </tr>`).join('');
-
-    const cats = r.categories.map(c => `
-      <tr>
-        <td>${escapeHtml(c.category)}</td>
-        <td class="num">${c.member_count}</td>
-        <td>${c.product ? escapeHtml(c.product) : '<span class="hint">not set</span>'}</td>
-        <td>${c.network ? escapeHtml(c.network) : '<span class="hint">not set</span>'}</td>
-        <td>${c.tpa ? escapeHtml(c.tpa) : '<span class="hint">not set</span>'}</td>
-        <td>${c.ready ? '<span class="tier-pill dir-improved">ready</span>' : `<span class="tier-pill dir-review">missing ${c.missing.join(', ')}</span>`}</td>
-        <td class="hint">${Object.values(c.sources || {}).length ? [...new Set(Object.values(c.sources))].join(', ') : '-'}</td>
-      </tr>`).join('');
-
+    const d = await api(`/new-business/rate-review/findings/${currentCase.id}`);
+    _findingsData = d;
+    area.innerHTML = `
+      <div style="display:flex; justify-content:flex-end; gap:8px; margin-bottom:8px;">
+        <button onclick="switchTab('new-business')">Set-up &amp; quote</button>
+        <button class="primary" onclick="printFindings()">Print / Save PDF</button>
+      </div>
+      <div class="card fd-page">${_findingsBodyHtml(d)}</div>`;
+  } catch (err) {
+    _findingsData = null;
     area.innerHTML = `
       <div class="card">
-        <h3>This case is not pricing yet</h3>
-        <div class="hint">Auto-quoting stays silent when it cannot resolve every category - it must never turn a successful upload into a failed one. Here is what it found instead of nothing.</div>
-        <div class="hint"><strong>Pricing is all-or-nothing:</strong> one unresolved category and no category prices, so ${r.ready_category_count} of ${r.category_count} ready is not partial progress.</div>
-        <table style="margin-top:14px;">
-          <tr><th>Status</th><th>What is standing in the way</th><th>Where to fix it</th></tr>
-          ${blockers}
-        </table>
-        ${cats ? `
-          <h4 style="margin-top:18px;">Category by category</h4>
-          <table>
-            <tr><th>Category</th><th class="num">Members</th><th>Product</th><th>Network</th><th>TPA</th><th>Status</th><th>Set from</th></tr>
-            ${cats}
-          </table>
-          <div class="hint" style="margin-top:8px;">"Set from" says where each value came from: <strong>benefits</strong> (the Benefits tab), <strong>prior quote</strong> (inherited from your last quote, which may be stale), or <strong>offer</strong> (set deliberately on this case).</div>` : ''}
-        ${r.uncategorised_member_count ? `<div class="hint" style="margin-top:10px;">${r.uncategorised_member_count} of ${r.census_member_count} census members have no Category value and will not be priced under any category.</div>` : ''}
-      </div>
-    `;
-  } catch (err) {
-    area.innerHTML = '';
+        <h3>Findings</h3>
+        <div class="hint">${escapeHtml(err.message)}</div>
+        <div class="hint">The findings need a census and each category's Product / Network - set them on <strong>Set-up &amp; quote</strong>.</div>
+        <button onclick="switchTab('new-business')">Set-up &amp; quote</button>
+      </div>`;
   }
 }
 
-/* The price the book says this enquiry costs, from the census and the
-   table of benefits alone - no category configuration, no clicking
-   Compute. The rate card price sits beside it: the card is what
-   HealthCross charges today, this is what this particular population
-   costs, and the gap is the underwriting decision. */
-let riskPriceInputs = { trend: 10, nationality: true };
-
-async function loadNbRiskBasedPrice() {
-  const area = document.getElementById('nb-risk-price-area');
-  if (!area || !currentCase) return;
-  try {
-    const p = new URLSearchParams({
-      trend_pct: (riskPriceInputs.trend / 100).toString(),
-      apply_nationality: riskPriceInputs.nationality ? 'true' : 'false',
-    });
-    const r = await api(`/cases/${currentCase.id}/risk-based-price?${p}`);
-    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-
-    const rows = r.categories.map(c => `
-      <tr>
-        <td>${escapeHtml(c.category)}</td>
-        <td>${escapeHtml(c.product || '-')} / ${escapeHtml(c.network || '-')}</td>
-        <td class="num">${c.member_count}</td>
-        <td class="num">${money(c.expected_claims)}</td>
-        <td class="num">${(c.loading_pct * 100).toFixed(1)}%</td>
-        <td class="num" style="font-weight:600;">${money(c.suggested_premium)}</td>
-        <td class="num">${c.fallback_member_count ? `${c.fallback_member_count} fallback` : 'all matched'}</td>
-      </tr>`).join('');
-
-    const gap = r.gap_pct;
-    let reviewed = null;
-    try { reviewed = await api(`/new-business/rate-review/reviewed-price/${currentCase.id}`); } catch (e) { reviewed = { error: e.message }; }
-    const reviewedHtml = reviewed && !reviewed.error ? `
-        <div class="kpi-grid" style="margin-top:14px;">
-          <div class="kpi" style="border-left:3px solid var(--accent);"><span class="label">Reviewed card rate</span><div class="value">${money(reviewed.reviewed_premium)}</div>
-            <span class="label" style="margin:4px 0 0;">${reviewed.priced_member_count} of ${reviewed.member_count} members priced on reviewed cells</span></div>
-          <div class="kpi"><span class="label">Per member</span><div class="value">${money(reviewed.reviewed_per_member)}</div></div>
-          <div class="kpi"><span class="label">Nationality mix</span><div class="value">${reviewed.average_nationality_factor == null ? '-' : reviewed.average_nationality_factor.toFixed(2) + '&times;'}</div>
-            <span class="label" style="margin:4px 0 0;">inside each cell, vs the cell average</span></div>
-          <div class="kpi"><span class="label">vs rate card</span><div class="value">${reviewed.gap_pct == null ? '-' : (reviewed.gap_pct > 0 ? '+' : '') + reviewed.gap_pct + '%'}</div>
-            <span class="label" style="margin:4px 0 0;">${reviewed.undecided_member_count ? `${reviewed.undecided_member_count} member(s) in cells with no decision yet` : 'every member in a decided cell'}</span></div>
-        </div>
-        <div class="hint"><strong>Reviewed card rate</strong> = each member's Rate Review cell rate after the agreed decision, times that member's nationality factor within the cell (${reviewed.decisions_count} ${escapeHtml(reviewed.product)} decisions, book as of ${escapeHtml(reviewed.data_as_of || '-')}). ${reviewed.unmatched_member_count ? `${reviewed.unmatched_member_count} member(s) had no reviewed cell and are not in this figure.` : ''}</div>
-        <details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; font-weight:600;">Member by member</summary>
-          <table style="margin-top:8px;"><tr><th>Age</th><th>Sex</th><th>Nationality</th><th>Cell</th><th class="num">Cell rate</th><th class="num">Decision</th><th class="num">Factor</th><th class="num">Price</th></tr>
-          ${reviewed.members.map(m => `<tr><td>${m.age ?? '-'}</td><td>${escapeHtml(m.gender || '-')}</td><td>${escapeHtml(m.nationality || '-')}</td><td>${escapeHtml(m.age_band || '-')} ${escapeHtml(m.scope === 'excluding' ? '' : m.scope.replace('only:', ''))}</td>
-            <td class="num">${money(m.cell_rate)}</td><td class="num">${m.decision_change_pct == null ? (m.note ? 'none' : '-') : (m.decision_change_pct > 0 ? '+' : '') + m.decision_change_pct.toFixed(0) + '%'}</td>
-            <td class="num">${m.nationality_factor == null ? '-' : m.nationality_factor.toFixed(2) + '&times;'}</td><td class="num" style="font-weight:600;">${money(m.price)}</td></tr>`).join('')}
-          </table></details>` : (reviewed && reviewed.error ? `<div class="hint" style="margin-top:10px;">Reviewed card rate not available: ${escapeHtml(reviewed.error)}</div>` : '');
-    area.innerHTML = `
-      <div class="card">
-        <h3>Risk-based price suggestion</h3>
-        <div class="hint">Built from your census and table of benefits alone. Every member is costed against HealthCross's own book for their own demographic cell, refined for this scheme's nationality mix, loaded for industry and trend, then grossed up for expenses.</div>
-        <div class="kpi-grid" style="margin-top:14px;">
-          <div class="kpi"><span class="label">Suggested premium</span><div class="value">${money(r.suggested_premium)}</div>
-            <span class="label" style="margin:4px 0 0;">${r.member_count} members</span></div>
-          <div class="kpi"><span class="label">Per member</span><div class="value">${money(r.suggested_per_member)}</div></div>
-          <div class="kpi"><span class="label">Rate card price</span><div class="value">${money(r.rate_card_premium)}</div>
-            <span class="label" style="margin:4px 0 0;">${r.rate_card_premium ? 'from the quote below' : 'compute a quote to compare'}</span></div>
-          <div class="kpi"><span class="label">Gap</span><div class="value">${gap == null ? '-' : (gap > 0 ? '+' : '') + gap + '%'}</div>
-            <span class="label" style="margin:4px 0 0;">${gap == null ? '' : gap > 0 ? 'the card is charging less than the risk' : 'the card is charging more than the risk'}</span></div>
-        </div>
-        <div class="row" style="align-items:flex-end; margin-top:14px; gap:12px; flex-wrap:wrap;">
-          <div><label>Trend %</label><input type="number" step="0.5" value="${riskPriceInputs.trend}" style="width:90px;"
-            onchange="riskPriceInputs.trend = parseFloat(this.value) || 0; loadNbRiskBasedPrice();"></div>
-          <label style="display:flex; align-items:center; gap:6px; font-weight:normal; margin:0;">
-            <input type="checkbox" style="width:auto;" ${riskPriceInputs.nationality ? 'checked' : ''}
-              onchange="riskPriceInputs.nationality = this.checked; loadNbRiskBasedPrice();">
-            Apply nationality refinement (${r.nationality_factor.toFixed(2)}&times;)
-          </label>
-        </div>
-        <div class="hint">The nationality refinement is measured <strong>within zone</strong>, not against the book: the demographic cell already prices by zone, so applying the book-relative factor would charge the zone effect twice.</div>
-        ${reviewedHtml}
-        <table style="margin-top:14px;">
-          <tr><th>Category</th><th>Plan</th><th class="num">Members</th><th class="num">Expected claims</th>
-            <th class="num">Loading</th><th class="num">Suggested</th><th class="num">Cell match</th></tr>
-          ${rows}
-        </table>
-        <div class="hint" style="margin-top:10px;">
-          ${(r.weighted_credibility * 100).toFixed(0)}% of this price rests on the book's own experience for these members' own cells${r.fallback_member_count ? `; ${r.fallback_member_count} of ${r.member_count} members were priced from a broader cell` : ' with no fallbacks needed'}.
-          Industry loading: ${escapeHtml(r.industry || 'not set')}.
-        </div>
-      </div>
-    `;
-  } catch (err) {
-    // A case without benefits picks, or a book with no experience yet,
-    // simply has no suggestion to make - not an error worth showing.
-    area.innerHTML = '';
-  }
-}
-
-/* What this enquiry's nationality mix is worth on the price.
-   A scheme that is mostly a nationality running at 0.75x on the book is
-   genuinely cheaper to insure than the card assumes and can be chased;
-   one that is mostly a 1.4x nationality is not, and quoting it at card
-   rates is how a book ends up underwater. The adjusted price sits beside
-   the card price rather than replacing it - this is a competitive
-   judgement, not a correction. */
-async function loadNbNationalityMix() {
-  const area = document.getElementById('nb-nationality-mix-area');
-  if (!area || !currentCase) return;
-  try {
-    const r = await api(`/cases/${currentCase.id}/nationality-mix-pricing`);
-    if (r.factor == null) { area.innerHTML = ''; return; }
-    const money = v => v == null ? '-' : `AED ${Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-    const dirClass = r.direction === 'favourable' ? 'dir-improved' : r.direction === 'adverse' ? 'dir-review' : 'dir-same';
-
-    const rows = r.contributions.map(c => `
-      <tr>
-        <td>${escapeHtml(c.nationality)}</td>
-        <td>${escapeHtml(c.nationality_zone || '-')}</td>
-        <td class="num">${c.member_count}</td>
-        <td class="num">${(c.share_of_census * 100).toFixed(0)}%</td>
-        <td class="num"><span class="tier-pill ${c.relativity < 0.98 ? 'dir-improved' : c.relativity > 1.02 ? 'dir-review' : 'dir-same'}">${c.relativity.toFixed(2)}&times;</span></td>
-        <td class="num">${c.credibility == null ? '-' : (c.credibility * 100).toFixed(0) + '%'}</td>
-        <td class="num">${c.book_exposure_member_years == null ? '-' : Number(c.book_exposure_member_years).toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
-      </tr>`).join('');
-
-    const q = r.quote;
-    area.innerHTML = `
-      <div class="card">
-        <h3>Nationality mix <span class="tier-pill ${dirClass}">${escapeHtml(r.direction)}</span></h3>
-        <div class="hint">What this census's own nationality mix has cost on HealthCross's own book, relative to a book-average member. Each nationality's factor is credibility-blended toward its zone, so a thin one cannot swing on a single claim.</div>
-        <div class="kpi-grid" style="margin-top:14px;">
-          <div class="kpi"><span class="label">Mix factor</span><div class="value">${r.factor.toFixed(2)}&times;</div>
-            <span class="label" style="margin:4px 0 0;">${r.capped ? `capped from ${r.raw_factor.toFixed(2)}&times;` : 'within normal bounds'}</span></div>
-          <div class="kpi"><span class="label">Measurable</span><div class="value">${(r.measurable_share * 100).toFixed(0)}%</div>
-            <span class="label" style="margin:4px 0 0;">${r.measured_member_count} of ${r.member_count} members</span></div>
-          ${q ? `
-            <div class="kpi"><span class="label">Card price</span><div class="value">${money(q.card_premium)}</div></div>
-            <div class="kpi"><span class="label">Mix-adjusted</span><div class="value">${money(q.mix_adjusted_premium)}</div>
-              <span class="label" style="margin:4px 0 0;">${q.difference_pct > 0 ? '+' : ''}${q.difference_pct}% (${money(q.difference)})</span></div>` : ''}
-        </div>
-        ${q ? `<div class="hint" style="margin-top:10px;"><strong>${q.applied ? 'Applied' : 'Not applied'}:</strong> ${escapeHtml(q.reason)}. The card price stands on its own - this is what the mix justifies chasing, not a correction to the quote.</div>` : ''}
-        <table style="margin-top:14px;">
-          <tr><th>Nationality</th><th>Zone</th><th class="num">Members</th><th class="num">Share</th>
-            <th class="num">Factor</th><th class="num">Credibility</th><th class="num">Book exposure</th></tr>
-          ${rows}
-        </table>
-        ${r.unmeasured && r.unmeasured.length ? `<div class="hint" style="margin-top:10px;">${r.unmeasured.reduce((a, u) => a + u.member_count, 0)} member(s) have a nationality with too little book experience to price on (${r.unmeasured.slice(0, 5).map(u => escapeHtml(u.nationality)).join(', ')}${r.unmeasured.length > 5 ? '&hellip;' : ''}). They are left out of the factor rather than averaged in at neutral, which would drag it toward 1.00 and hide the real signal.</div>` : ''}
-      </div>
-    `;
-  } catch (err) {
-    area.innerHTML = '';
-  }
+function printFindings() {
+  if (!_findingsData) { toast('Nothing to print yet', true); return; }
+  const win = window.open('', '_blank');
+  if (!win) { toast('Your browser blocked the pop-up - allow pop-ups for this site and try again', true); return; }
+  const d = _findingsData;
+  const css = `
+    @page { size: A4 portrait; margin: 14mm 12mm; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: #1c2a48; background: #fff; font-family: 'IBM Plex Sans', -apple-system, 'Segoe UI', sans-serif; font-size: 12px; font-variant-numeric: tabular-nums; }
+    .fd-page { max-width: 186mm; margin: 0 auto; }
+    .fd-head { border-bottom: 2px solid #5cd9ff; padding-bottom: 10px; margin-bottom: 14px; }
+    .fd-title { font-size: 18px; font-weight: 800; margin-bottom: 4px; }
+    .fd-sub { font-size: 11.5px; color: #5b6b85; line-height: 1.5; }
+    .fd-sub b { color: #1c2a48; }
+    .fd-verdict { display: grid; grid-template-columns: 1.3fr 1fr 1fr 1fr; border: 1px solid #e3e8ef; border-radius: 8px; overflow: hidden; margin-bottom: 14px; }
+    .fd-verdict > div { padding: 10px 12px; border-right: 1px solid #e3e8ef; }
+    .fd-verdict > div:last-child { border-right: none; }
+    .fd-verdict .rec { background: #eaf7ff; }
+    .fd-verdict .k { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #8b99af; margin-bottom: 5px; }
+    .fd-verdict .v { font-size: 17px; font-weight: 800; }
+    .fd-verdict .s { font-size: 10.5px; color: #5b6b85; margin-top: 3px; }
+    .fd-pill { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 10.5px; font-weight: 700; white-space: nowrap; }
+    .fd-pill.good { background: #e4f5ec; color: #16855c; } .fd-pill.warn { background: #fbf0dd; color: #b07d12; } .fd-pill.bad { background: #fbe7e6; color: #c0392b; } .fd-pill.grey { background: #eef1f5; color: #5b6b85; }
+    .fd-h { font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; color: #5b6b85; margin: 16px 0 6px; }
+    .fd-why { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+    .fd-why li { display: flex; gap: 9px; font-size: 12px; line-height: 1.45; }
+    .fd-dot { width: 7px; height: 7px; border-radius: 2px; flex: none; margin-top: 6px; }
+    .fd-dot.bad { background: #c0392b; } .fd-dot.warn { background: #b07d12; } .fd-dot.good { background: #16855c; } .fd-dot.grey { background: #8b99af; }
+    .fd-two { display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
+    .fd-table { width: 100%; border-collapse: collapse; }
+    .fd-table th { text-align: left; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: #5b6b85; padding: 6px 6px; background: #eaf7ff; border-bottom: 1.5px solid #5cd9ff; }
+    .fd-table th.num, .fd-table td.num { text-align: right; }
+    .fd-table td { padding: 6px 6px; border-bottom: 1px solid #e3e8ef; font-size: 11.5px; }
+    .fd-table tr.total td { font-weight: 800; border-top: 2px solid #e3e8ef; }
+    .fd-lr { display: inline-flex; min-width: 44px; justify-content: center; padding: 1px 6px; border-radius: 4px; font-weight: 700; font-size: 11px; }
+    .fd-lr.good { background: #e4f5ec; color: #16855c; } .fd-lr.warn { background: #fbf0dd; color: #b07d12; } .fd-lr.bad { background: #fbe7e6; color: #c0392b; } .fd-lr.grey { background: #eef1f5; color: #5b6b85; }
+    .fd-thin { font-size: 9px; font-weight: 700; color: #b07d12; }
+    .fd-flags { display: grid; gap: 5px; font-size: 11.5px; }
+    .fd-flags div { display: flex; gap: 7px; align-items: flex-start; }
+    .fd-sign { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; margin-top: 20px; padding-top: 12px; border-top: 1px dashed #e3e8ef; font-size: 11px; color: #5b6b85; }
+    .fd-sign div { border-bottom: 1px solid #e3e8ef; padding-bottom: 22px; }
+    .fd-foot { font-size: 10px; color: #8b99af; margin-top: 10px; line-height: 1.5; }
+  `;
+  win.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Underwriter Findings - ${escapeHtml(d.case.company_name)}</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>${css}</style></head><body><div class="fd-page">${_findingsBodyHtml(d)}</div>
+    <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script></body></html>`);
+  win.document.close();
 }
 
 function nbCategoryCardHtml(cat, idx) {
@@ -9818,6 +9543,7 @@ async function nbComputeQuote() {
       body: JSON.stringify({ categories }),
     });
     nbLastQuote = quote;
+    loadFindings();
     nbSelectedTierProduct = null; // reset to this fresh quote's own picks, not a stale what-if selection
     try {
       nbQuoteByTier = await api(`/cases/${currentCase.id}/new-business-quote/by-tier`);
