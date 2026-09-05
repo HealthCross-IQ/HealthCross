@@ -172,7 +172,62 @@ table.t tr.lead td.num{font-weight:700}
   background:#fff;padding:3px 10px;border-radius:3px;cursor:pointer}
 @media print{.dlhint{display:none!important}}
 
-@page{size:A4;margin:12mm 11mm 14mm}
+/* --- the summary page, redesigned -------------------------------------
+   The answer first: verdict, ask, gross and net on one strip. Then why,
+   in sentences; how the ask is built, as one row; the price options; and
+   the claims shape and account block so the page stands alone. */
+.sv-head{padding-top:20px;margin-bottom:14px}
+.sv-head h1{font-size:21px;font-weight:800;letter-spacing:-.01em;margin:0 0 4px;color:var(--navy)}
+.sv-head .sub{font-size:12.5px;color:var(--muted);line-height:1.55;max-width:none}
+.sv-head .sub b{color:var(--navy)}
+.sv-strip{display:grid;grid-template-columns:1.35fr 1fr 1fr 1fr;border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin:0 0 18px}
+.sv-strip>div{padding:13px 16px;border-right:1px solid var(--rule)}
+.sv-strip>div:last-child{border-right:none}
+.sv-strip .rec{background:var(--sky-25)}
+.sv-k{font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--navy-50);margin-bottom:6px}
+.sv-v{font-size:22px;font-weight:800;letter-spacing:-.01em;color:var(--navy);line-height:1.1}
+.sv-v.override{color:var(--warn)}
+.sv-s{font-size:11.5px;color:var(--muted);margin-top:4px;line-height:1.45}
+.sv-pill{display:inline-flex;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;white-space:nowrap;line-height:1.5}
+.sv-pill.ok{background:var(--ok-wash);color:var(--ok)} .sv-pill.warn{background:var(--warn-wash);color:var(--warn)}
+.sv-pill.bad{background:var(--alert-wash);color:var(--alert)} .sv-pill.grey{background:var(--sky-25);color:var(--muted)}
+.sv-lr{display:inline-flex;min-width:52px;justify-content:center;padding:2px 7px;border-radius:4px;font-weight:800;font-size:15px;line-height:1.3}
+.sv-lr.ok{background:var(--ok-wash);color:var(--ok)} .sv-lr.warn{background:var(--warn-wash);color:var(--warn)} .sv-lr.bad{background:var(--alert-wash);color:var(--alert)}
+.sv-lr.small{font-size:12px;font-weight:700;min-width:48px}
+h2.sv{font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:20px 0 8px;font-family:var(--sans)}
+.sv-why{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.sv-why li{display:flex;gap:10px;font-size:13px;line-height:1.5}
+.sv-why li>i{width:8px;height:8px;border-radius:2px;flex:none;margin-top:7px;background:var(--navy-50);display:block}
+.sv-why li.bad>i{background:var(--alert)} .sv-why li.warn>i{background:var(--warn)} .sv-why li.ok>i{background:var(--ok)}
+.sv-why b{color:var(--navy)}
+.sv-why .act{color:var(--muted)}
+.sv-ladder{display:grid;grid-template-columns:repeat(5,1fr);border:1px solid var(--rule);border-radius:10px;overflow:hidden;margin-top:4px}
+.sv-ladder>div{padding:11px 12px;border-right:1px solid var(--rule);position:relative}
+.sv-ladder>div:last-child{border-right:none;background:var(--sky-25)}
+.sv-ladder .n{font-size:18px;font-weight:800;color:var(--navy);line-height:1.1}
+.sv-ladder .sv-k{margin-bottom:4px}
+.sv-ladder .sv-s{margin-top:2px}
+.sv-ladder>div+div{border-left:0}
+table.sv{width:100%;border-collapse:collapse;font-size:12.5px}
+table.sv th{text-align:left;font-family:var(--sans);font-size:10.5px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);padding:8px 8px;background:var(--sky-25);border-bottom:1.5px solid var(--sky)}
+table.sv th.num,table.sv td.num{text-align:right}
+table.sv td{padding:8px 8px;border-bottom:1px solid var(--rule);vertical-align:middle}
+table.sv tr.lead td{font-weight:800;background:rgba(92,217,255,.07)}
+table.sv td .note{display:block;font-size:11px;color:var(--muted);font-weight:400}
+.sv-two{display:grid;grid-template-columns:1.1fr 1fr;gap:22px;margin-top:4px}
+.sv-facts{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 16px;font-size:12px}
+.sv-facts div{display:flex;justify-content:space-between;gap:8px;border-bottom:1px solid var(--rule);padding:5px 0}
+.sv-facts span{color:var(--muted)} .sv-facts b{color:var(--navy);white-space:nowrap}
+.sv-bars div{display:grid;grid-template-columns:86px 1fr 44px;gap:8px;align-items:center;font-size:12px;margin-bottom:5px}
+.sv-bars i{display:block;height:10px;background:var(--sky-25);border-radius:2px;position:relative;overflow:hidden}
+.sv-bars i b{position:absolute;inset:0 auto 0 0;background:var(--sky);display:block}
+.sv-bars .val{text-align:right;font-weight:700;color:var(--navy)}
+.sv-sign{display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;margin-top:22px;padding-top:14px;border-top:1px dashed var(--rule);font-size:12px;color:var(--muted)}
+.sv-sign div{border-bottom:1px solid var(--rule);padding-bottom:22px}
+.sv-foot{font-size:11px;color:var(--navy-50);margin-top:10px;line-height:1.55}
+.vs{border-radius:10px}
+
+@page{size:A4;margin:10mm 11mm 10mm}
 @media print{
   .toolbar{display:none}
   body{background:#fff;padding:0;margin:0}
@@ -201,7 +256,26 @@ table.t tr.lead td.num{font-weight:700}
   h2{font-size:14px;margin-bottom:2px}
   .ask p{margin-top:8px;line-height:1.55}
   .kpi .v{font-size:19px}
-  section,.sec,.ask,.vs,table.t,.kpis{break-inside:avoid}
+  .masthead{padding:10px 44px}
+  .sv-head{padding-top:10px;margin-bottom:6px}
+  .sv-head h1{font-size:17px} .sv-head .sub{font-size:10.5px;line-height:1.45}
+  .sv-strip{margin-bottom:8px} .sv-strip>div{padding:8px 10px}
+  .sv-v{font-size:17px} .sv-lr{font-size:12.5px} .sv-s{font-size:10px;line-height:1.35}
+  h2.sv{margin:9px 0 4px;font-size:10.5px}
+  .sv-why{gap:4px} .sv-why li{font-size:11px;line-height:1.4}
+  .sv-ladder>div{padding:7px 9px} .sv-ladder .n{font-size:14px}
+  table.sv{font-size:10.5px} table.sv td{padding:4px 7px} table.sv th{padding:5px 7px;font-size:9.5px}
+  table.sv td .note{font-size:9.5px}
+  .sv-two{gap:14px;margin-top:0} .sv-facts{font-size:10.5px;gap:3px 12px} .sv-facts div{padding:3px 0}
+  .sv-bars div{font-size:10.5px;margin-bottom:2px} .sv-bars i{height:8px}
+  .sv-foot{font-size:9.5px;margin-top:5px;line-height:1.45}
+  .sv-sign{margin-top:6px;padding-top:5px;font-size:10px} .sv-sign div{padding-bottom:8px}
+  /* The masthead already names the document and the account; the running
+     footer is one more line the single page cannot spare. */
+  .doc-footer{display:none}
+  .doc{padding-bottom:0}
+  .sv-why li{font-size:10.5px}
+  section,.sec,.ask,.vs,table.t,table.sv,.kpis,.sv-strip,.sv-ladder{break-inside:avoid}
   .sec-head,h1,h2{break-after:avoid}
 }
 """
@@ -222,7 +296,8 @@ def _rows(pairs: List[tuple]) -> str:
 def _masthead(payload: dict) -> str:
     case = payload["case"]
     return (f'<div class="masthead"><div class="logo">{_logo_img(34)}</div>'
-            f'<div class="meta">Renewal Review<br>{esc(case.get("company_name"))}</div></div>')
+            f'<div class="meta"><b>{esc(payload.get("_doc_title") or "Renewal Summary")}</b><br>'
+            f'{esc(case.get("company_name"))}</div></div>')
 
 
 def _identity(payload: dict, today: date) -> str:
@@ -261,6 +336,22 @@ def _net_ratio_note(book: dict, rating: dict) -> str:
     if quoted is not None and loading is not None and abs(quoted - loading) > 0.0005:
         note += f'. The ask below is priced on the {pct(quoted)} entered on the case'
     return note
+
+
+def _loading_short(book: dict) -> str:
+    loading = book.get("loading_pct")
+    if book.get("loading_is_default"):
+        return f"after the house-average {pct(loading)} expense allowance (account's own not supplied)"
+    return f"after this account's own {pct(loading)} expense allowance"
+
+
+def _day(value) -> str:
+    """An ISO date from the payload as '1 Oct 2025'; anything else as is."""
+    try:
+        d = date.fromisoformat(str(value))
+    except (TypeError, ValueError):
+        return esc(value) if value else "&mdash;"
+    return f"{d.day} {d.strftime('%b %Y')}"
 
 
 def _sentence(text: str) -> str:
@@ -1039,40 +1130,281 @@ def _toolbar(title: str, download_url: str) -> str:
     )
 
 
+_TONE_CLASS = {"": "bad", "warn": "warn", "ok": "ok"}
+
+
+def _lr_class(value) -> str:
+    if value is None:
+        return "grey"
+    return "bad" if value > 1.0 else "warn" if value >= 0.7 else "ok"
+
+
+_PLURALS = {"child": "children"}
+
+
+def _plural(n, word: str) -> str:
+    return f"{n:,} {word if n == 1 else _PLURALS.get(word, word + 's')}"
+
+
+def _summary_head(payload: dict, today: date) -> str:
+    case, book, census = payload["case"], payload["book"], payload.get("census") or {}
+    rel = {r["label"].lower(): r["count"] for r in (census.get("relations") or [])}
+    lives = book.get("member_count")
+    mix = ", ".join(_plural(rel[k], k) for k in ("employee", "spouse", "child") if rel.get(k))
+    bits = [f'<b>{esc(case.get("product"))}</b>' if case.get("product") else "",
+            f'{lives} lives' + (f' ({mix})' if mix else "") if lives else "",
+            f'broker {esc(case.get("broker_name"))}' if case.get("broker_name") else "",
+            f'term {_day(book.get("policy_start_date"))} &ndash; {_day(case.get("term_end_date"))}'
+            if (book.get("policy_start_date") and case.get("term_end_date")) else ""]
+    base = payload["rating"].get("renewal_base_premium")
+    line2 = (f'Renewal Review &middot; internal &nbsp;&middot;&nbsp; '
+             f'experience to {_day(book.get("as_of"))}, {book.get("days")} days on risk'
+             + (f' &nbsp;&middot;&nbsp; expiring premium {aed(base)}' if base else "")
+             + f' &nbsp;&middot;&nbsp; prepared {long_date(today)}')
+    return (f'<div class="pad sv-head"><h1>{esc(case.get("company_name"))}</h1>'
+            f'<div class="sub">{" &nbsp;&middot;&nbsp; ".join(b for b in bits if b)}<br>{line2}</div></div>')
+
+
+def _verdict_strip(payload: dict) -> str:
+    """Is it risky? - the verdict, the ask, gross and net, on one strip."""
+    book, rating = payload["book"], payload["rating"]
+    word, tone, say = _verdict(payload)
+    gross, net = book.get("gross_loss_ratio"), book.get("net_loss_ratio")
+    inc = rating.get("renewal_increase_pct")
+    override = rating.get("increase_source") == "override"
+    if inc is None:
+        ask_v, ask_s = "&mdash;", "not priced - see below"
+    else:
+        ask_v = f'{"+" if inc >= 0 else "&minus;"}{abs(inc)}%'
+        ask_s = f'{aed(rating.get("required_premium"))} &middot; ' + (
+            "an underwriting decision" if override else "the experience, unadjusted")
+    verdict_why = (
+        "Paying less than it costs." if (gross or 0) >= 1.0
+        else "Inside the gross target, outside the net one: expenses take it over the line."
+        if (net or 0) >= 1.0 else "Inside both targets."
+    ) if gross is not None else ""
+    # An overridden ask is a decision, not a measurement - the one line a
+    # reader is certain to take away says which figure it is naming.
+    if override or inc is None:
+        verdict_why = say
+    return (
+        '<div class="sv-strip">'
+        f'<div class="rec"><div class="sv-k">Verdict</div>'
+        f'<div class="sv-v"><span class="sv-pill {_TONE_CLASS.get(tone, "bad")}">{word}</span></div>'
+        f'<div class="sv-s">{verdict_why}</div></div>'
+        f'<div><div class="sv-k">{"Quoted renewal increase" if override else "Renewal increase"}</div>'
+        f'<div class="sv-v{" override" if override else ""}">{ask_v}</div><div class="sv-s">{ask_s}</div></div>'
+        f'<div><div class="sv-k">Gross loss ratio</div>'
+        f'<div class="sv-v"><span class="sv-lr {_lr_class(gross)}">{pct(gross)}</span></div>'
+        f'<div class="sv-s">{aed(book.get("incurred_claims"))} claims on {aed(book.get("earned_premium"))} earned</div></div>'
+        f'<div><div class="sv-k">Net loss ratio</div>'
+        f'<div class="sv-v"><span class="sv-lr {_lr_class(net)}">{pct(net)}</span></div>'
+        f'<div class="sv-s">{_loading_short(book)}</div></div>'
+        '</div>'
+    )
+
+
+def _why_list(payload: dict) -> str:
+    """Why? - in sentences. The ratio story, the population and the shape
+    of the claims, the movement, and then every reading that crosses a
+    house threshold with what to do about it."""
+    book, rating = payload["book"], payload["rating"]
+    census, pop = payload.get("census") or {}, payload.get("population") or {}
+    gross, net = book.get("gross_loss_ratio"), book.get("net_loss_ratio")
+    items = []
+    if gross is not None and net is not None:
+        items.append((
+            _lr_class(net) if _lr_class(net) != "grey" else "",
+            f'<b>The account is at {pct(gross)} gross and {pct(net)} net</b> &mdash; nothing changed '
+            f'between the two except that expenses came out of the premium first. '
+            f'{_sentence(_net_ratio_note(book, rating))}'))
+    rel = {r["label"].lower(): r["count"] for r in (census.get("relations") or [])}
+    emp = rel.get("employee") or 0
+    deps = (rel.get("spouse") or 0) + (rel.get("child") or 0)
+    enc = {e["encounter_type"].lower(): e for e in (payload.get("encounter_split") or [])}
+    incurred = book.get("incurred_claims") or 0
+    top = payload.get("top_claimants") or []
+    top5 = sum((c.get("incurred") or 0) for c in top[:5])
+    pop_bits = []
+    if emp:
+        pop_bits.append(f'<b>Dependants outnumber employees {deps / emp:.1f} to 1</b> &mdash; '
+                        f'{_plural(rel.get("child") or 0, "child")} and '
+                        f'{_plural(rel.get("spouse") or 0, "spouse")} on {_plural(emp, "employee")}'
+                        if deps > emp else
+                        f'<b>{_plural(emp, "employee")}, {deps} dependants</b>')
+        if census.get("average_age") is not None:
+            pop_bits[-1] += f'; average age {census["average_age"]:.0f}'
+    shape = ""
+    if enc.get("op") and enc["op"].get("pct_of_total") is not None:
+        shape = f'Claims are broad ({enc["op"]["pct_of_total"]:.0f}% outpatient)' if enc["op"]["pct_of_total"] >= 60 else \
+                f'Claims are {100 - enc["op"]["pct_of_total"]:.0f}% inpatient and maternity'
+    if incurred and top5:
+        share = top5 / incurred
+        shape += (f'{", " if shape else ""}{"concentrated" if share >= 0.4 else "not concentrated"}: '
+                  f'the top five members carry {pct(share, 0)} of the total')
+    if pop_bits or shape:
+        items.append(("warn" if (emp and deps > emp * 1.5) else "ok",
+                      ". ".join(b for b in pop_bits + ([shape[0].upper() + shape[1:]] if shape else []) if b) + "."))
+    if pop.get("deleted_member_count"):
+        leaving = (pop.get("leaving") or {}).get("incurred")
+        items.append(("", f'<b>{_plural(pop["deleted_member_count"], "member")} left mid-term</b>'
+                          + (f' taking {aed(leaving)} of claims with them' if leaving else "")
+                          + f'; {pop.get("active_member_count")} continue.'))
+    alerts = payload.get("alerts") or []
+    for a in alerts:
+        items.append(("bad" if a["severity"] == "critical" else "warn" if a["severity"] == "high" else "",
+                      f'<b>{esc(a["title"])}.</b> {esc(a["message"])} '
+                      f'<span class="act"><b>Do:</b> {esc(a["action"])}</span>'))
+    if not alerts:
+        items.append(("ok", "No reading on this account crosses a house threshold: the loss ratio is inside "
+                            "target, no single member dominates the claims, the outstanding share is ordinary "
+                            "and the term is long enough to be credible."))
+    return '<ul class="sv-why">' + "".join(f'<li class="{cls}"><i></i><span>{text}</span></li>' for cls, text in items) + "</ul>"
+
+
+def _ladder_row(payload: dict) -> str:
+    """How the ask is built - the ladder as one row a reader can walk."""
+    ladder, rating = payload.get("ladder") or {}, payload["rating"]
+    if not ladder or ladder.get("required_share_of_expiring") is None:
+        return _the_ask(payload)  # the not-priced callout, with why
+    fees = payload.get("case") or {}
+    inc = ladder.get("renewal_increase_pct")
+    floor = ladder.get("floor_applied")
+    return (
+        '<div class="sv-ladder">'
+        f'<div><div class="sv-k">Loss ratio</div><div class="n">{pct(ladder.get("loss_ratio"))}</div><div class="sv-s">this term, gross</div></div>'
+        f'<div><div class="sv-k">+ Inflation</div><div class="n">+{(ladder.get("inflation_pts") or 0) * 100:.1f} pts</div><div class="sv-s">medical trend carried forward</div></div>'
+        f'<div><div class="sv-k">Trended</div><div class="n">{pct(ladder.get("trended_loss_ratio"))}</div><div class="sv-s">what next year costs</div></div>'
+        f'<div><div class="sv-k">&divide; (1 &minus; loading)</div><div class="n">{pct(ladder.get("loading_pct"))}</div><div class="sv-s">the fee split entered on the case</div></div>'
+        f'<div><div class="sv-k">Required</div><div class="n">{pct(ladder.get("required_share_of_expiring"))}</div>'
+        f'<div class="sv-s">of expiring &rarr; <b>{"+" if (inc or 0) >= 0 else "&minus;"}{abs(inc or 0)}%</b>'
+        + (f' &middot; house floor of {pct(ladder.get("minimum_increase_pct"), 0)} applied' if floor else "")
+        + '</div></div></div>'
+    )
+
+
+def _price_table(payload: dict) -> str:
+    """What should we do? - each price with the loss ratio it lands on and
+    a decision. Options nobody has entered collapse to one line."""
+    pricing = payload.get("pricing") or {}
+    options = pricing.get("options") or []
+    priced = [o for o in options if o.get("premium") is not None]
+    if not priced:
+        return ""
+    empty = [o for o in options if o.get("premium") is None]
+    rows = ""
+    for o in priced:
+        decision = o.get("decision")
+        if decision:
+            pill = f'<span class="sv-pill {"ok" if decision == "accept" else "warn" if decision == "review" else "bad"}">{_PILL_WORD.get(decision, "")}</span>'
+        elif o.get("key") == "expiring":
+            pill = '<span class="sv-pill grey">Reference</span>'
+        elif o.get("key") == "minimum_acceptable":
+            pill = '<span class="sv-pill grey">The line</span>'
+        else:
+            pill = "&mdash;"
+        change = o.get("change_pct")
+        move = (("+" if change >= 0 else "&minus;") + f"{abs(change)}%") if change else "&mdash;"
+        plr = o.get("projected_loss_ratio")
+        rows += (f'<tr{" class=lead" if o.get("key") == "technical" else ""}>'
+                 f'<td>{esc(o["label"])}<span class="note">{esc(o.get("note") or "")}</span></td>'
+                 f'<td class="num">{aed(o["premium"])}</td><td class="num">{move}</td>'
+                 f'<td class="num"><span class="sv-lr small {_lr_class(plr)}">{pct(plr)}</span></td>'
+                 f'<td>{pill}</td></tr>')
+    if empty:
+        rows += (f'<tr><td>{" / ".join(esc(o["label"].replace(" strategy", "")) for o in empty)}'
+                 f'<span class="note">not yet entered</span></td><td class="num">&mdash;</td>'
+                 f'<td class="num">&mdash;</td><td class="num">&mdash;</td><td>&mdash;</td></tr>')
+    target, combined = pricing.get("target_loss_ratio"), pricing.get("combined_ratio")
+    line = (f' The line is a {pct(combined, 0)} combined ratio &mdash; claims plus expenses &mdash; '
+            f'leaving {pct(target)} for claims on this fee split.'
+            if (combined is not None and target is not None) else "")
+    return (
+        '<table class="sv"><thead><tr><th>Option</th><th class="num">Premium</th>'
+        '<th class="num">vs expiring</th><th class="num">Projected LR</th><th>Decision</th></tr></thead>'
+        f'<tbody>{rows}</tbody></table>'
+        f'<div class="sv-foot">Projected LR = trended claims of {aed(pricing.get("trended_claims"))} '
+        f'&divide; the premium in that row. Accept at or above the minimum acceptable of '
+        f'{aed(pricing.get("minimum_acceptable_premium"))}; review within '
+        f'{pct(pricing.get("review_band_pct"), 0)} below it.{line}</div>'
+    )
+
+
+def _claims_shape(payload: dict) -> str:
+    enc = payload.get("encounter_split") or []
+    perf = (payload.get("pricing") or {}).get("claims_performance") or {}
+    diags = [d["label"] for d in (payload.get("top_diagnoses") or [])[:3] if d.get("label")]
+    top = payload.get("top_claimants") or []
+    incurred = payload["book"].get("incurred_claims") or 0
+    if not enc and not perf:
+        return ""
+    bars = "".join(
+        f'<div><span>{esc((e.get("encounter_type") or "").replace("Op", "Outpatient").replace("Ip", "Inpatient"))}</span>'
+        f'<i><b style="width:{min(100, e.get("pct_of_total") or 0):.0f}%"></b></i>'
+        f'<span class="val">{(e.get("pct_of_total") or 0):.0f}%</span></div>'
+        for e in enc
+    )
+    bits = []
+    if perf.get("claim_count"):
+        bits.append(f'{perf["claim_count"]:,} claim lines at {aed(perf.get("average_claim_cost"))} average; '
+                    f'{pct(perf.get("claimant_ratio"), 0)} of members claimed')
+    if diags:
+        bits.append("Top diagnoses: " + ", ".join(esc(d.split(",")[0].lower()) for d in diags))
+    if top and incurred:
+        t = top[0]
+        top5 = sum((c.get("incurred") or 0) for c in top[:5])
+        bits.append(f'Top five claimants {aed(top5)} ({pct(top5 / incurred, 0)}), highest a '
+                    f'{t.get("age")}-year-old {esc(t.get("relation") or "member")} at {aed(t.get("incurred"))}')
+    return (f'<div><h2 class="sv">What the claims are made of</h2><div class="sv-bars">{bars}</div>'
+            f'<div class="sv-foot">{". ".join(bits)}.</div></div>')
+
+
+def _account_block(payload: dict) -> str:
+    case, book, census, pop = payload["case"], payload["book"], payload.get("census") or {}, payload.get("population") or {}
+    rel = {r["label"].lower(): r["count"] for r in (census.get("relations") or [])}
+    gen = {g["label"].upper(): g["count"] for g in (census.get("genders") or [])}
+    facts = [
+        ("Product", esc(case.get("product")) if case.get("product") else "&mdash;"),
+        ("Lives", f'{book.get("member_count") or "&mdash;"}'),
+        ("Average age", f'{census["average_age"]:.0f}' if census.get("average_age") is not None else "&mdash;"),
+        ("Employees", f'{rel.get("employee", 0)}'), ("Spouses", f'{rel.get("spouse", 0)}'), ("Children", f'{rel.get("child", 0)}'),
+        ("Male / Female", f'{gen.get("M", 0)} / {gen.get("F", 0)}'),
+        ("Left mid-term", f'{pop.get("deleted_member_count", 0)}'),
+        ("Policy start", _day(book.get("policy_start_date"))),
+    ]
+    return ('<div><h2 class="sv">The account</h2><div class="sv-facts">'
+            + "".join(f'<div><span>{k}</span><b>{v}</b></div>' for k, v in facts) + '</div></div>')
+
+
 def _summary_body(payload: dict, today: date) -> str:
-    """Three questions, in the order they get asked.
+    """Three questions, in the order they get asked - is it risky, why,
+    what should we do - on one page, the answer first.
 
-        1. Is this account profitable or risky?
-        2. Why is it risky?
-        3. What should the underwriter do?
-
-    Nothing else. The ladder, the premium build-up and the claims detail
-    all EXPLAIN those three answers and none of them is one, so they are
-    sections further down rather than competing for the first page. A
-    first page carrying its own workings is a first page that takes five
-    minutes to read, and the whole value of this one is that it takes
-    ten seconds.
+    The verdict, the ask and both loss ratios sit on one strip at the
+    top; the why is sentences rather than a card per alert; the ladder is
+    one row; the price options carry a decision each; and the claims
+    shape and the account block let the page stand alone in a meeting.
+    Everything that EXPLAINS these - the build-up, the census, the claims
+    detail - is a section of the report, not of this page.
     """
+    book = payload["book"]
     return (
         _masthead(payload)
-        + _identity(payload, today)
+        + _summary_head(payload, today)
         + '<div class="pad">'
-        + _verdict_banner(payload)
-        + _account_information(payload, today)
-        + '<h2 class="sec" style="margin-top:26px">Is it risky?</h2>'
-        '<p class="desc">The two ratios a renewal turns on. They differ by the expense '
-        'allowance and nothing else.</p>'
-        + _ratio_compare(payload)
-        + '<h2 class="sec" style="margin-top:26px">Why?</h2>'
-        '<p class="desc">Every reading on this account that crosses a house threshold, worst '
-        'first, with what to do about it before pricing.</p>'
-        + _why_risky(payload)
-        + '<h2 class="sec" style="margin-top:26px">What should we do?</h2>'
-        '<p class="desc">Each price on the table, and the loss ratio it lands on. The workings '
-        'behind the technical premium are in the pricing section.</p>'
+        + '<h2 class="sv">Is it risky?</h2>'
+        + _verdict_strip(payload)
         + _quoted_vs_computed(payload)
-        + _the_ask(payload)
-        + _options_table(payload)
+        + '<h2 class="sv">Why?</h2>'
+        + _why_list(payload)
+        + '<h2 class="sv">How the ask is built</h2>'
+        + _ladder_row(payload)
+        + '<h2 class="sv">What should we do?</h2>'
+        + _price_table(payload)
+        + '<div class="sv-two">' + _claims_shape(payload) + _account_block(payload) + '</div>'
+        + '<div class="sv-sign"><div>Underwriter</div><div>Decision &amp; premium issued</div><div>Date</div></div>'
+        + f'<div class="sv-foot">HealthCross Underwriting Intelligence &middot; every figure from the Portfolio '
+          f'Loss Ratio book as of {_day(book.get("as_of"))}; claims incl. IBNR.</div>'
         + "</div>"
     )
 
@@ -1087,6 +1419,7 @@ def render_renewal_summary(payload: dict, today: Optional[date] = None) -> str:
     """
     today = today or date.today()
     company = payload["case"].get("company_name") or "Renewal"
+    payload = {**payload, "_doc_title": "Renewal Summary"}
     body = (
         _summary_body(payload, today)
         + _footer("HealthCross &middot; Renewal Summary", esc(company))
@@ -1110,6 +1443,7 @@ def render_renewal_report(payload: dict, today: Optional[date] = None) -> str:
     """
     today = today or date.today()
     company = payload["case"].get("company_name") or "Renewal"
+    payload = {**payload, "_doc_title": "Renewal Report"}
     body = (
         _summary_body(payload, today)
         + '<div class="pad">'

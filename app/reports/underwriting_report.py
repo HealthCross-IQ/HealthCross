@@ -261,28 +261,34 @@ def tag(text: str, letter: str) -> str:
 
 STYLESHEET = """
 :root{
-  --ground:#f2f8fc; --paper:#ffffff; --rule:#dfe8f0;
-  --navy:#1c2947; --navy-85:#3e4963; --navy-50:#8e94a3; --navy-25:#c6c9d1;
-  --sky:#4ab0e3; --sky-85:#65bce7; --sky-50:#a4d7f1; --sky-25:#d2ebf8;
-  --ink:#1c2a48; --muted:#6b7789;
-  --alert:#c8443f; --alert-wash:#fbecea;
-  --warn:#c98a2b; --warn-wash:#fbf3e6;
-  --ok:#2c8f74; --ok-wash:#e9f4f1;
-  --display:'Montserrat','Proxima Nova','Mulish',system-ui,sans-serif;
-  --sans:'Proxima Nova','Mulish',system-ui,-apple-system,sans-serif;
-  --mono:'IBM Plex Mono',ui-monospace,Menlo,monospace;
+  /* HealthCross brand: Dark Blue #1C2A48, Light Blue #5CD9FF. Proxima Nova
+     is the brand's secondary face; IBM Plex Sans stands in for it here
+     (Toyota Display is logo-only). One family for every role - display,
+     body and figures - so a document reads as one voice; tabular figures
+     come from font-variant-numeric, not a second typeface. */
+  --ground:#f4f7fa; --paper:#ffffff; --rule:#e3e8ef;
+  --navy:#1C2A48; --navy-85:#3e4963; --navy-50:#8b99af; --navy-25:#c6ccd6;
+  --sky:#5CD9FF; --sky-85:#7ee1ff; --sky-50:#aeecff; --sky-25:#eaf7ff;
+  --ink:#1c2a48; --muted:#5b6b85;
+  --alert:#c0392b; --alert-wash:#fbe7e6;
+  --warn:#b07d12; --warn-wash:#fbf0dd;
+  --ok:#16855c; --ok-wash:#e4f5ec;
+  --display:'IBM Plex Sans','Proxima Nova',system-ui,-apple-system,sans-serif;
+  --sans:'IBM Plex Sans','Proxima Nova',system-ui,-apple-system,sans-serif;
+  --mono:'IBM Plex Sans','Proxima Nova',system-ui,-apple-system,sans-serif;
 }
 *{box-sizing:border-box}
-body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.55;margin:0;padding:26px 14px 70px}
+body{background:var(--ground);color:var(--ink);font-family:var(--sans);font-size:13px;line-height:1.55;margin:0;padding:26px 14px 70px;font-variant-numeric:tabular-nums}
 .paper{max-width:920px;margin:0 auto 26px}
 .page-tag{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.11em;text-transform:uppercase;color:var(--navy-50);margin-bottom:7px}
 .doc{background:var(--paper);border:1px solid var(--rule);box-shadow:0 1px 2px rgba(28,42,72,.05),0 22px 50px -34px rgba(28,42,72,.45);padding:0 0 34px;overflow:hidden}
 .pad{padding:0 44px}
 
-.masthead{background:var(--navy);color:#fff;padding:20px 44px;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap}
+.masthead{background:var(--navy);color:#fff;padding:18px 44px;display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;border-bottom:3px solid var(--sky)}
 .logo{display:flex;align-items:center;gap:13px;background:#fff;padding:9px 14px;border-radius:2px}
 .hc-logo{width:auto;display:block}
-.masthead .meta{text-align:right;font-family:var(--mono);font-size:9.5px;color:var(--sky-50);line-height:1.8}
+.masthead .meta{text-align:right;font-family:var(--mono);font-size:11px;color:#c9d6e4;line-height:1.7}
+.masthead .meta b{color:#fff;font-size:12.5px}
 
 .eyebrow{font-family:var(--mono);font-size:9.5px;font-weight:500;letter-spacing:.11em;text-transform:uppercase;color:var(--sky);margin-bottom:7px}
 h1{font-family:var(--display);font-size:29px;font-weight:800;letter-spacing:-.025em;margin:0 0 14px;color:var(--navy);line-height:1.08}
@@ -1396,7 +1402,7 @@ _HEAD_PLAIN = """<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{title}</title>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Mulish:wght@400;500;600;700;800&family=Montserrat:wght@600;700;800&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap">
 <style>{css}</style></head><body>
 """
 
