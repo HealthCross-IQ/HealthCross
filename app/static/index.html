@@ -10481,8 +10481,8 @@ function printReinsuranceReport() {
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
       <td class="num">${_rrPrintMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
-      <td class="num ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</td>
-      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</span></td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</span></td>
     </tr>`).join('');
 
   const enrollOrder = ['Initial', 'Addition', 'Unmapped'];
@@ -10494,8 +10494,8 @@ function printReinsuranceReport() {
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
       <td class="num">${_rrPrintMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
-      <td class="num ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</td>
-      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.loss_ratio_incl_ibnr)}">${_rrPrintPct(r.loss_ratio_incl_ibnr)}</span></td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</span></td>
     </tr>`).join('');
 
   const natZones = _rrNationalityByZone(rrData.nationality || []);
@@ -10505,7 +10505,7 @@ function printReinsuranceReport() {
       <td class="num">${z.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(z.actual_premium)}</td>
       <td class="num">${_rrPrintMoney(z.incurred_claims)}</td>
-      <td class="num b ${_rrPrintBand(z.loss_ratio)}">${_rrPrintPct(z.loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(z.loss_ratio)}">${_rrPrintPct(z.loss_ratio)}</span></td>
     </tr>`).join('');
 
   // Top 10 by lives - the whole nationality table can run to 100+ rows on
@@ -10518,7 +10518,7 @@ function printReinsuranceReport() {
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
       <td class="num">${_rrPrintMoney(r.incurred_claims)}</td>
-      <td class="num ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</span></td>
       <td class="num">${_rrPrintMoney(r.burning_cost)}</td>
     </tr>`).join('');
   const natOmitted = Math.max(0, natByLives.length - 10);
@@ -10530,7 +10530,7 @@ function printReinsuranceReport() {
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_rrPrintMoney(r.actual_premium)}</td>
       <td class="num">${_rrPrintMoney(r.incurred_claims)}</td>
-      <td class="num ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.loss_ratio)}">${_rrPrintPct(r.loss_ratio)}</span></td>
     </tr>`).join('');
 
   const totalMemberYears = _rrTotalEarnedMemberYears();
@@ -10589,7 +10589,7 @@ function printReinsuranceReport() {
     <tr>
       <td>${escapeHtml(r.master_client)}</td>
       <td class="num">${r.member_count.toLocaleString()}</td>
-      <td class="num ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</td>
+      <td class="num"><span class="badge ${_rrPrintBand(r.net_loss_ratio)}">${_rrPrintPct(r.net_loss_ratio)}</span></td>
       <td class="num">${_rrPrintMoney(r.premium_at_risk)}</td>
       <td class="num b">${r.net_lr_change != null ? (r.net_lr_change * 100).toFixed(1) + ' pts' : '-'}</td>
     </tr>`).join('');
@@ -10614,57 +10614,61 @@ function printReinsuranceReport() {
 <html><head><meta charset="utf-8"><title>Reinsurance Report</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   @page { size: A4 landscape; margin: 14mm 12mm 16mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; color: #0f1c2e;
-         font-variant-numeric: tabular-nums; font-size: 10px; line-height: 1.45; }
+  body { font-family: 'IBM Plex Sans', system-ui, sans-serif; margin: 0; color: #1c2a48;
+         font-variant-numeric: tabular-nums; font-size: 11px; line-height: 1.5; }
   .sheet { max-width: 1180px; margin: 0 auto; }
 
   .masthead { display: flex; justify-content: space-between; align-items: flex-start;
-              border-bottom: 2.5px solid #1c2a48; padding-bottom: 12px; margin-bottom: 4px; }
-  .brand { display: flex; align-items: center; gap: 10px; }
+              border-bottom: 2.5px solid #1c2a48; padding-bottom: 14px; margin-bottom: 4px; }
+  .brand { display: flex; align-items: center; gap: 11px; }
   .logo { width: 34px; height: 32px; flex-shrink: 0; }
-  .brand .nm { font-size: 16px; font-weight: 700; letter-spacing: 0.005em; line-height: 1; }
+  .brand .nm { font-size: 17px; font-weight: 800; letter-spacing: 0.01em; line-height: 1; }
   .brand .nm .h { color: #1c2a48; }
-  .brand .nm .c { color: #5cd9ff; margin-left: 3px; }
+  .brand .nm .c { color: #5cd9ff; margin-left: 2px; }
   .brand .nm sup { font-size: 6px; color: #5cd9ff; vertical-align: super; }
-  .brand .sb { font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase;
-               color: #1c2a48; font-weight: 600; margin-top: 3px; }
-  .docref { text-align: right; font-size: 8.5px; color: #64748b; line-height: 1.7; }
-  .docref b { color: #0f1c2e; font-family: 'IBM Plex Mono', monospace; }
+  .brand .sb { font-size: 8px; letter-spacing: 0.16em; text-transform: uppercase;
+               color: #1c2a48; font-weight: 700; margin-top: 4px; }
+  .docref { text-align: right; font-size: 9.5px; color: #5B6B85; line-height: 1.8; }
+  .docref b { color: #1c2a48; font-weight: 700; }
 
-  h1 { font-family: 'Fraunces', serif; font-size: 21px; font-weight: 600; margin: 14px 0 3px; letter-spacing: -0.015em; }
-  .scope { font-size: 9.5px; color: #475569; margin-bottom: 12px; }
+  h1 { font-size: 23px; font-weight: 800; margin: 16px 0 4px; letter-spacing: -0.01em; color: #1c2a48; }
+  .scope { font-size: 10.5px; color: #5B6B85; margin-bottom: 16px; }
   .scope span { display: inline-block; margin-right: 16px; }
-  .scope b { color: #0f1c2e; }
+  .scope b { color: #1c2a48; font-weight: 700; }
 
-  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid rgba(15,28,46,.16);
-          border-radius: 8px; overflow: hidden; margin-bottom: 16px; page-break-inside: avoid; }
-  .kpi { padding: 10px 12px; border-right: 1px solid rgba(15,28,46,.10); }
+  .kpis { display: grid; grid-template-columns: repeat(6, 1fr); border: 1px solid #D8DEE8;
+          border-radius: 6px; overflow: hidden; margin-bottom: 20px; page-break-inside: avoid; }
+  .kpi { padding: 11px 13px; border-right: 1px solid #D8DEE8; }
   .kpi:last-child { border-right: none; }
-  .kpi .k { font-size: 7.5px; letter-spacing: .09em; text-transform: uppercase; color: #64748b; font-weight: 700; margin-bottom: 5px; }
-  .kpi .v { font-family: 'IBM Plex Mono', monospace; font-size: 15px; font-weight: 600; letter-spacing: -.02em; }
-  .kpi .u { font-size: 8px; color: #94a3b8; }
+  .kpi .k { font-size: 8px; letter-spacing: .08em; text-transform: uppercase; color: #8B99AF; font-weight: 700; margin-bottom: 6px; }
+  .kpi .v { font-size: 16px; font-weight: 800; letter-spacing: -.01em; }
+  .kpi .v.good { color: #16855c; } .kpi .v.warn { color: #b07d12; } .kpi .v.bad { color: #c0392b; }
+  .kpi .u { font-size: 8.5px; color: #8B99AF; }
 
-  h2 { font-family: 'Fraunces', serif; font-size: 12.5px; font-weight: 600; margin: 16px 0 3px;
+  h2 { font-size: 13px; font-weight: 800; margin: 22px 0 3px; color: #1c2a48; letter-spacing: -0.01em;
        page-break-after: avoid; }
-  .note { font-size: 8.5px; color: #64748b; margin-bottom: 7px; }
+  .note { font-size: 9.5px; color: #5B6B85; margin-bottom: 8px; }
 
-  table { width: 100%; border-collapse: collapse; margin-bottom: 6px; }
-  th { text-align: left; font-size: 7.5px; letter-spacing: .06em; text-transform: uppercase; color: #475569;
-       font-weight: 700; padding: 6px 6px; background: #eef3f7; border-bottom: 1.5px solid rgba(15,28,46,.25); }
-  td { padding: 5px 6px; border-bottom: 1px solid rgba(15,28,46,.08); vertical-align: top; }
-  td.num, th.num { text-align: right; font-family: 'IBM Plex Mono', monospace; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; margin-bottom: 4px; }
+  th { text-align: left; font-size: 8px; letter-spacing: .06em; text-transform: uppercase; color: #5B6B85;
+       font-weight: 700; padding: 7px 8px; background: #EAF7FF; border-bottom: 1.5px solid #5cd9ff; }
+  td { padding: 6.5px 8px; border-bottom: 1px solid #D8DEE8; vertical-align: top; color: #1c2a48; }
+  td.num, th.num { text-align: right; white-space: nowrap; }
   td.b { font-weight: 700; }
   thead { display: table-header-group; }
   tr { page-break-inside: avoid; }
-  .good { color: #16855c; } .warn { color: #b07d12; } .bad { color: #c0392b; }
-  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .badge { display: inline-flex; min-width: 50px; justify-content: center; font-weight: 700; padding: 2px 7px; border-radius: 3px; font-size: 11px; }
+  .badge.good { background: #E4F5EC; color: #16855c; }
+  .badge.warn { background: #FBF0DD; color: #b07d12; }
+  .badge.bad { background: #FBE7E6; color: #c0392b; }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
 
-  .foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid rgba(15,28,46,.14);
-          font-size: 7.5px; color: #94a3b8; display: flex; justify-content: space-between; }
+  .foot { margin-top: 16px; padding-top: 9px; border-top: 1px solid #D8DEE8;
+          font-size: 8.5px; color: #8B99AF; display: flex; justify-content: space-between; }
 </style></head><body><div class="sheet">
 
   <div class="masthead">
