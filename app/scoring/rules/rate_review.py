@@ -606,6 +606,8 @@ SEED_DECISIONS: List[dict] = [
      "action": "hold", "change_pct": 0.0, "note": "Held this round (90-98% gross) - watch."},
     {"product": "Bronze", "network_scope": "all", "network": None, "from_age": 41, "to_age": 59, "gender": None,
      "action": "hold", "change_pct": 0.0, "note": "Held for now - 80% gross across all networks (males 74%, females 88%). Watch MSH Comprehensive 41-59, both sexes at 103-106%."},
+    {"product": "Bronze", "network_scope": "all", "network": None, "from_age": 60, "to_age": 99, "gender": None,
+     "action": "hold", "change_pct": 0.0, "note": "Thin data - 22 lives, 13 member-years, mostly one account. Revisit when 60-69 passes 25 member-years; treat 70+ quotes as refer-to-underwriter."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 2, "to_age": 17, "gender": None,
      "action": "hold", "change_pct": 0.0, "note": "Platinum children 2-17 at 76-95% gross on thin data (56 lives) - hold."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 40, "gender": "F",
