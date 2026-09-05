@@ -27,8 +27,8 @@
     --ink-2: #46586e;
     --ink-muted: #8496a8;
     --grid: #dde6ef;
-    --accent: #0E7A82;
-    --accent-ink: #ffffff;
+    --accent: #5CD9FF;
+    --accent-ink: #06121c;
     --deep: #1c2a48;
     --deep-ink: #eaf6ff;
     --good: #16855c;
@@ -39,23 +39,23 @@
     --serious-bg: rgba(212,120,63,0.14);
     --critical: #c0392b;
     --critical-bg: rgba(192,57,43,0.12);
-    --series-1: #0E7A82;
+    --series-1: #5CD9FF;
     --series-2: #eb6834;
     --series-3: #16855c;
     --series-4: #eda100;
-    --series-1-wash: rgba(14,122,130,0.16);
+    --series-1-wash: rgba(92,217,255,0.20);
     --shadow: 0 1px 2px rgba(15,28,46,0.05), 0 10px 30px -18px rgba(15,28,46,0.30);
     --font-body: 'IBM Plex Sans', system-ui, -apple-system, "Segoe UI", sans-serif;
     --font-display: 'Fraunces', Georgia, serif;
     --font-mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
-    /* Fixed dark-navy sidebar chrome, held constant across both themes per
-       the approved Portfolio Dashboard mockup (the rail is app "chrome",
-       not a themed content surface, so it does not flip with color-scheme). */
-    --rail-bg: #0B2038;
-    --rail-bg-2: #0F2A4A;
+    /* Fixed navy sidebar chrome using the official Dark Blue #1C2A48,
+       held constant across both themes (the rail is app "chrome", not a
+       themed content surface, so it does not flip with color-scheme). */
+    --rail-bg: #1C2A48;
+    --rail-bg-2: #1C2A48;
     --rail-text: #C9D6E4;
     --rail-text-dim: #7C8FA6;
-    --rail-active-bg: #15385E;
+    --rail-active-bg: #2A3D63;
     --rail-border: rgba(255,255,255,0.08);
   }
   @media (prefers-color-scheme: dark) {
@@ -146,7 +146,7 @@
        Dashboard mockup, and stays constant across both themes. */
     --hcr-ink: #ffffff; --hcr-ink-2: var(--rail-text); --hcr-muted: var(--rail-text-dim);
     --hcr-border: var(--rail-border);
-    --hcr-accent: #3FC3C9; --hcr-accent-soft: var(--rail-active-bg);
+    --hcr-accent: var(--accent); --hcr-accent-soft: var(--rail-active-bg);
     --hcr-secondary: #E3B23C; --hcr-secondary-soft: rgba(227,178,60,0.16);
     --hcr-surface-3: rgba(255,255,255,0.07);
     font-family: var(--font-body);
@@ -159,7 +159,7 @@
   .hc-rail-brand { display: flex; align-items: center; gap: 9px; padding-bottom: 12px; border-bottom: 1px solid var(--hcr-border); margin-bottom: 4px; }
   .hc-rail-brand .mark {
     width: 27px; height: 27px; border-radius: 7px; flex-shrink: 0;
-    background: linear-gradient(135deg, var(--hcr-accent), #1D5A63);
+    background: linear-gradient(135deg, var(--hcr-accent), #1C2A48);
     display: flex; align-items: center; justify-content: center;
     color: #ffffff; font-family: 'Fraunces', serif; font-weight: 700; font-size: 13px;
   }
@@ -598,7 +598,7 @@
     --lr-bg: var(--bg); --lr-surface: var(--surface); --lr-surface-2: var(--surface-2);
     --lr-ink: var(--ink); --lr-ink-2: var(--ink-2); --lr-muted: var(--ink-muted);
     --lr-border: var(--border); --lr-border-strong: var(--border-strong);
-    --lr-accent: #0E7A82; --lr-deep: var(--deep);
+    --lr-accent: var(--accent); --lr-deep: var(--deep);
     --lr-good: var(--good); --lr-good-soft: var(--good-bg);
     --lr-warn: var(--warning); --lr-warn-soft: var(--warning-bg);
     --lr-bad: var(--critical); --lr-bad-soft: var(--critical-bg);
@@ -654,7 +654,7 @@
   .lr-toolbar { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; background: var(--lr-surface-2); border: 1px solid var(--lr-border); border-radius: 12px; padding: 12px 14px; }
   .lr-field { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--lr-muted); }
   .lr-field input, .lr-field select { font: inherit; font-size: 12.5px; font-weight: 500; text-transform: none; letter-spacing: normal; padding: 7px 9px; border-radius: 8px; border: 1px solid var(--lr-border); background: var(--lr-surface); color: var(--lr-ink); }
-  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid transparent; background: var(--lr-accent); color: #fff; padding: 9px 16px; }
+  .lr-btn { font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; border-radius: 8px; border: 1px solid transparent; background: var(--lr-accent); color: var(--accent-ink); padding: 9px 16px; }
   .lr-btn:hover { filter: brightness(1.1); }
   .lr-btn.ghost { background: transparent; border-color: var(--lr-border-strong); color: var(--lr-ink-2); }
   .lr-btn.ghost:hover { background: var(--lr-surface-2); filter: none; }
