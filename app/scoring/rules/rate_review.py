@@ -751,6 +751,7 @@ def reviewed_price_for_census(
     params: dict,
     rate_cards: Optional[List[dict]] = None,
     categories_by_name: Optional[Dict[str, dict]] = None,
+    variant_rates: Optional[List[dict]] = None,
 ) -> dict:
     """What a census costs on the REVIEWED card: each member's cell rate
     after the agreed decision, times that member's nationality factor
@@ -765,18 +766,26 @@ def reviewed_price_for_census(
     cell has no decision is priced at the cell's current rate and
     flagged, so the total can never quietly rest on an unreviewed cell.
 
-    The starting rate is the member's OWN card price - product, region,
-    network, age and sex off the loaded rate card (`rate_cards` with the
-    member's category design in `categories_by_name`) - so the reviewed
-    rate is "the card plus what we agreed". Only when the card has no
-    row for the member does it start from the review cell's earned
-    premium, and the member says which (`rate_basis`). Starting every
-    member from the book's earned average would price a Comprehensive
-    quote off a Regular-dominated blend.
+    The starting rate is the member's OWN quoted card price: product,
+    region, network, age and sex off the loaded rate card, the category's
+    benefit-variant selections, and the category's expense/commission
+    gross-up - i.e. exactly what the New Business quote charges for that
+    member (`rate_cards`, `variant_rates`, and the category design in
+    `categories_by_name`). So the reviewed rate is "the quote plus what
+    we agreed", and the gap to the card price is only the agreed
+    decisions and the nationality mix. Only when the card has no row for
+    the member does it start from the review cell's earned premium, and
+    the member says which (`rate_basis`).
+
+    A cell with no decision is priced at the card, full stop - no
+    nationality factor either. The factors belong to a reviewed cell; a
+    product the team has not reviewed yet must come out exactly at card
+    so nothing reads as agreed that was not.
     """
-    from app.scoring.rules.new_business_rating import price_member
+    from app.scoring.rules.new_business_rating import category_loading_pct, gross_up, price_member
 
     cards = rate_cards or []
+    variants = variant_rates or []
     designs = categories_by_name or {}
     separate = params.get("separate_networks") or []
     bands = [tuple(b) for b in params["age_bands"]]
@@ -803,19 +812,21 @@ def reviewed_price_for_census(
                                 "nationality_factor": None, "price": None, "note": "no reviewed cell for this member"})
             continue
         pct = cell.get("decision_change_pct")
-        if cell.get("decision") is None:
+        decided = cell.get("decision") is not None
+        if not decided:
             undecided += 1
             pct = 0.0
         base_rate, basis = cell["current_rate"], cell.get("current_rate_basis") or "earned premium"
         if cards and design and design.get("product") and design.get("network"):
             priced = price_member(m, {"product": design["product"], "network": design["network"], "tpa": design.get("tpa"),
-                                      "variant_selections": {}}, cards, [])
-            if priced.get("base_price"):
-                base_rate = priced["base_price"] + (priced.get("maternity_surcharge") or 0.0)
+                                      "variant_selections": design.get("variant_selections") or {}}, cards, variants)
+            if priced.get("net_total"):
+                loading = category_loading_pct(design["product"], design.get("commission_pct"), design.get("loading_pct"))
+                base_rate = gross_up(priced["net_total"], loading)
                 basis = "card"
         reviewed_rate = base_rate * (1 + (pct or 0.0) / 100)
         factor = 1.0
-        f = factors_by_cell.get((scope_key, band, g))
+        f = factors_by_cell.get((scope_key, band, g)) if decided else None
         if f:
             nat = (m.get("nationality") or "").strip().upper()
             zone = (m.get("nationality_zone") or "").strip()
@@ -835,7 +846,7 @@ def reviewed_price_for_census(
             "decision_change_pct": pct if cell.get("decision") is not None else None,
             "reviewed_rate": round(reviewed_rate, 2), "nationality_factor": round(factor, 4),
             "price": round(price, 2),
-            "note": None if cell.get("decision") is not None else "cell has no decision yet - priced at current rate",
+            "note": None if decided else "cell has no decision yet - priced at card, no nationality factor",
         })
     priced = len(census) - unmatched
     return {

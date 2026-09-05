@@ -9277,7 +9277,7 @@ function _findingsBodyHtml(d) {
           ${pop}
           <tr class="total"><td colspan="3">Total</td><td class="num">${d.lives}</td><td class="num">${_fdNum(pr.reviewed.total)}</td><td></td><td></td></tr>
         </table>
-        <div class="fd-foot">Book LR = ${escapeHtml(d.plan.product)} loss ratio for that age &times; sex cell on the same networks, claims incl. IBNR. Reviewed rate = each member's ${pr.reviewed.basis === 'card' ? 'rate card price' : pr.reviewed.basis === 'mixed' ? 'rate card price (book earned premium where the card has no row)' : 'book earned premium (no rate card row)'} &times; the agreed decision &times; nationality factor.</div>
+        <div class="fd-foot">Book LR = ${escapeHtml(d.plan.product)} loss ratio for that age &times; sex cell on the same networks, claims incl. IBNR. Reviewed rate = each member's ${pr.reviewed.basis === 'card' ? 'quoted card price (incl. benefit selections and loading)' : pr.reviewed.basis === 'mixed' ? 'quoted card price (book earned premium where the card has no row)' : 'book earned premium (no rate card row)'} &times; the agreed decision &times; nationality factor. Cells with no decision are at card - no factor applied.</div>
       </div>
       <div>
         <h4 class="fd-h">Nationality mix</h4>

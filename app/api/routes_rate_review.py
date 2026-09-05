@@ -396,7 +396,8 @@ def _reviewed_price_payload(db: Session, case_id: int, as_of: Optional[date]) ->
                     cell_members = [m for m in members if rr._band_label(m.get("age"), bands) == band and (m.get("gender") or "").strip().upper()[:1] == g]
                     factors[(key, band, g)] = rr.nationality_factors(cell_members, params)
 
-    out = rr.reviewed_price_for_census(priced_census, reviews, factors, params, rate_cards=rate_cards, categories_by_name=design)
+    out = rr.reviewed_price_for_census(priced_census, reviews, factors, params, rate_cards=rate_cards,
+                                       categories_by_name=design, variant_rates=book_repo.variant_rates(db))
     by_cat = {}
     for m in out["members"]:
         e = by_cat.setdefault(m.get("category") or "-", {"category": m.get("category") or "-", "members": 0, "priced": 0, "reviewed_premium": 0.0})

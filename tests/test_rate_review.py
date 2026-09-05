@@ -207,4 +207,12 @@ def test_reviewed_price_applies_the_decision_then_the_nationality_factor():
     assert egypt["nationality_factor"] > 1 > india["nationality_factor"]
     # Nobody aged 50 on this book: no cell, so not priced and said so.
     assert man["price"] is None and out["unmatched_member_count"] == 1
+    # A decided cell carries the nationality factor; an undecided one is
+    # priced at the cell rate with no factor at all.
+    undecided = review_cells(book, "Bronze", params)  # no decisions applied
+    apply_decisions(undecided, [])
+    out2 = reviewed_price_for_census(census[:2], {"Bronze|excluding": undecided}, factors, params,
+                                     categories_by_name={"A": {"product": "Bronze", "network": "MSH Comprehensive"}})
+    assert all(m["nationality_factor"] == 1.0 and m["decision_change_pct"] is None for m in out2["members"])
+    assert out2["undecided_member_count"] == 2
     assert out["priced_member_count"] == 2
