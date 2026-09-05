@@ -19,6 +19,14 @@ from app.scoring.rules.demographic import (
 
 TOP_NATIONALITIES_PER_ZONE = 5
 
+# The "young population" the rate review's youth discount looks at: both
+# sexes, 2 to 25. Infants (0-1) are left out on purpose - they are the
+# most expensive childhood year, not a favourable one. The share of a
+# group in this range is what decides whether the youth discount applies
+# (see rate_review.DEFAULT_PARAMETERS["youth_share_threshold_pct"]).
+YOUTH_AGE_MIN = 2
+YOUTH_AGE_MAX = 25
+
 
 def _age_band_label(low: int, high: int) -> str:
     return f"{low}-{high}"
@@ -108,6 +116,10 @@ def census_demographic_summary(census: List[dict]) -> dict:
         1 for m in census if (m.get("relation") or "").lower() == "child" and (m.get("age") or 0) > INFANT_AGE_MAX
     )
 
+    youth = [m for m in census if m.get("age") is not None and YOUTH_AGE_MIN <= m["age"] <= YOUTH_AGE_MAX]
+    youth_gender_counts = {"M": sum(1 for m in youth if m.get("gender") == "M"),
+                           "F": sum(1 for m in youth if m.get("gender") == "F")}
+
     employees = [m for m in census if (m.get("relation") or "").lower() == "employee"]
     male_employees = sum(1 for m in employees if m.get("gender") == "M")
 
@@ -136,6 +148,11 @@ def census_demographic_summary(census: List[dict]) -> dict:
         "male_spouse_count": male_spouse_count,
         "infant_count": infant_count,
         "favorable_children_count": favorable_children_count,
+        "youth_age_min": YOUTH_AGE_MIN,
+        "youth_age_max": YOUTH_AGE_MAX,
+        "youth_count": len(youth),
+        "youth_pct": _pct(len(youth), total),
+        "youth_gender_counts": youth_gender_counts,
         "employee_count": len(employees),
         "male_employees": male_employees,
         "male_ratio_employees": _pct(male_employees, len(employees)) if employees else None,

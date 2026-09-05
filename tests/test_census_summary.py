@@ -84,6 +84,25 @@ def test_infant_vs_favorable_children():
     assert summary["favorable_children_count"] == 1
 
 
+def test_youth_share_counts_ages_2_to_25_of_both_sexes_and_leaves_infants_out():
+    # The population the youth discount is decided on: 2-25, either sex,
+    # any relation. The infant is not young in the favourable sense and
+    # the 26-year-old is just outside.
+    census = [
+        _member(1, "M", relation="child"),
+        _member(2, "F", relation="child"),
+        _member(17, "M", relation="child"),
+        _member(25, "F", relation="employee"),
+        _member(26, "M", relation="employee"),
+        _member(None, "M", relation="employee"),
+    ]
+    summary = census_demographic_summary(census)
+    assert (summary["youth_age_min"], summary["youth_age_max"]) == (2, 25)
+    assert summary["youth_count"] == 3
+    assert summary["youth_pct"] == 0.5
+    assert summary["youth_gender_counts"] == {"M": 1, "F": 2}
+
+
 def test_unrecognized_or_missing_zone_folds_into_middle_east():
     # There is no 4th zone - a record with no zone, or a zone string left
     # over from before the 4th zone was folded away, must not KeyError and

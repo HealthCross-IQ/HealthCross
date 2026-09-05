@@ -4997,7 +4997,9 @@ async function loadCensusSummary() {
           <div class="kpi"><span class="label">Infants (&le;1yr)</span><span class="value">${s.infant_count}</span></div>
           <div class="kpi"><span class="label">Favorable children (&gt;1yr)</span><span class="value">${s.favorable_children_count}</span></div>
           <div class="kpi"><span class="label">Female spouses</span><span class="value">${s.female_spouse_count}</span></div>
+          <div class="kpi"><span class="label">Aged ${s.youth_age_min}-${s.youth_age_max}, both sexes</span><span class="value">${s.youth_count} (${(s.youth_pct*100).toFixed(1)}%)</span></div>
         </div>
+        <div class="hint">Aged ${s.youth_age_min}-${s.youth_age_max}: ${s.youth_gender_counts.M} male, ${s.youth_gender_counts.F} female. This is the share the youth discount is decided on - the Findings tab says whether this group clears the threshold.</div>
 
         <h4>Age distribution</h4>
         <div class="chart-wrap">${svgBarChart(ageBandItems, { labelWidth: 90 })}</div>
@@ -5017,6 +5019,13 @@ async function loadCensusSummary() {
                 <td>${(s.age_band_pct[band] * 100).toFixed(1)}%</td>
               </tr>
             `).join('')}
+            <tr style="border-top:2px solid var(--border);">
+              <th>Aged ${s.youth_age_min}-${s.youth_age_max} (youth discount population)</th>
+              <td>${s.youth_gender_counts.M}</td>
+              <td>${s.youth_gender_counts.F}</td>
+              <td>${s.youth_count}</td>
+              <td>${(s.youth_pct * 100).toFixed(1)}%</td>
+            </tr>
           </table>
           <table>
             <tr><th>Gender</th><th>Count</th><th>%</th></tr>
