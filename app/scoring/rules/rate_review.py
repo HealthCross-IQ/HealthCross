@@ -231,7 +231,7 @@ def review_cells(
     pooled_load = ((totals["incurred"] - totals["priced_claims"]) / totals["member_years"]) if totals["member_years"] else 0.0
     scope_cost = (totals["priced_claims"] / totals["member_years"] + pooled_load) if totals["member_years"] else None
 
-    card_price = _card_price_lookup(rate_cards or [], product, network if network_scope == "only" else None, region)
+    card_price = _card_price_lookup(rate_cards or [], product, network if network_scope == "only" else None, region, bands)
 
     by_cell: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
     for r in members:
@@ -341,25 +341,32 @@ def review_cells(
     }
 
 
-def _card_price_lookup(rate_cards: List[dict], product: str, network: Optional[str], region: Optional[str]) -> Dict[tuple, float]:
-    """Card price per (from_age, to_age, gender) for the scope, where a
-    card row lines up exactly with a review band. A card whose bands
-    differ from the review's (the usual case while a split is being
-    tested) simply yields nothing, and the cell falls back to earned
-    premium - a partial match would compare unlike bands."""
+def _card_price_lookup(rate_cards: List[dict], product: str, network: Optional[str], region: Optional[str],
+                       bands: Optional[List[tuple]] = None) -> Dict[tuple, float]:
+    """Card price per (from_age, to_age, gender) review band for the scope.
+
+    A card row prices a review band when its own band COVERS it - the
+    card's 18-40 row prices the review's 18-25, 26-35 and 36-40 - so a
+    finer review split still reads its current rate off the card. A
+    review band that straddles two card rows takes neither (the rate
+    would be an average of unlike things) and falls back to earned
+    premium, which the cell says.
+    """
     prices: Dict[tuple, List[float]] = defaultdict(list)
-    for row in rate_cards:
-        if (row.get("product") or "").strip().lower() != product.strip().lower():
-            continue
-        if network and (row.get("network") or "").strip().lower() != network.strip().lower():
-            continue
-        if region and (row.get("region") or "").strip().lower() != region.strip().lower():
-            continue
-        if row.get("from_age") is None or row.get("to_age") is None:
-            continue
-        for g, field in (("M", "male_price"), ("F", "female_price")):
-            if row.get(field):
-                prices[(row["from_age"], row["to_age"], g)].append(float(row[field]))
+    rows = [
+        row for row in rate_cards
+        if (row.get("product") or "").strip().lower() == product.strip().lower()
+        and (not network or (row.get("network") or "").strip().lower() == network.strip().lower())
+        and (not region or (row.get("region") or "").strip().lower() == region.strip().lower())
+        and row.get("from_age") is not None and row.get("to_age") is not None
+    ]
+    targets = [tuple(b) for b in bands] if bands else sorted({(r["from_age"], r["to_age"]) for r in rows})
+    for low, high in targets:
+        for row in rows:
+            if row["from_age"] <= low and high <= row["to_age"]:
+                for g, field in (("M", "male_price"), ("F", "female_price")):
+                    if row.get(field):
+                        prices[(low, high, g)].append(float(row[field]))
     # Several regions/networks on the same band: the simple mean, flagged
     # by basis only - the review is about the band, the card about where.
     return {k: sum(v) / len(v) for k, v in prices.items() if v}
@@ -742,6 +749,8 @@ def reviewed_price_for_census(
     reviews_by_scope: Dict[str, dict],
     factors_by_cell: Dict[Tuple[str, str, str], dict],
     params: dict,
+    rate_cards: Optional[List[dict]] = None,
+    categories_by_name: Optional[Dict[str, dict]] = None,
 ) -> dict:
     """What a census costs on the REVIEWED card: each member's cell rate
     after the agreed decision, times that member's nationality factor
@@ -752,13 +761,27 @@ def reviewed_price_for_census(
     key, age band, sex) to nationality_factors() output. A member whose
     cell has no decision is priced at the cell's current rate and
     flagged, so the total can never quietly rest on an unreviewed cell.
+
+    The starting rate is the member's OWN card price - product, region,
+    network, age and sex off the loaded rate card (`rate_cards` with the
+    member's category design in `categories_by_name`) - so the reviewed
+    rate is "the card plus what we agreed". Only when the card has no
+    row for the member does it start from the review cell's earned
+    premium, and the member says which (`rate_basis`). Starting every
+    member from the book's earned average would price a Comprehensive
+    quote off a Regular-dominated blend.
     """
+    from app.scoring.rules.new_business_rating import price_member
+
+    cards = rate_cards or []
+    designs = categories_by_name or {}
     separate = params.get("separate_networks") or []
     bands = [tuple(b) for b in params["age_bands"]]
     members_out = []
     total = 0.0
     undecided = 0
     unmatched = 0
+    card_members = 0
     factor_weighted = 0.0
     for m in census:
         net = (m.get("network") or "").strip()
@@ -778,7 +801,15 @@ def reviewed_price_for_census(
         if cell.get("decision") is None:
             undecided += 1
             pct = 0.0
-        reviewed_rate = cell["current_rate"] * (1 + (pct or 0.0) / 100)
+        base_rate, basis = cell["current_rate"], cell.get("current_rate_basis") or "earned premium"
+        design = designs.get(m.get("category")) if designs else None
+        if cards and design and design.get("product") and design.get("network"):
+            priced = price_member(m, {"product": design["product"], "network": design["network"], "tpa": design.get("tpa"),
+                                      "variant_selections": {}}, cards, [])
+            if priced.get("base_price"):
+                base_rate = priced["base_price"] + (priced.get("maternity_surcharge") or 0.0)
+                basis = "card"
+        reviewed_rate = base_rate * (1 + (pct or 0.0) / 100)
         factor = 1.0
         f = factors_by_cell.get((scope_key, band, g))
         if f:
@@ -794,8 +825,9 @@ def reviewed_price_for_census(
         price = reviewed_rate * factor
         total += price
         factor_weighted += factor
+        card_members += 1 if basis == "card" else 0
         members_out.append({
-            **m, "scope": scope_key, "age_band": band, "cell_rate": round(cell["current_rate"], 2),
+            **m, "scope": scope_key, "age_band": band, "cell_rate": round(base_rate, 2), "rate_basis": basis,
             "decision_change_pct": pct if cell.get("decision") is not None else None,
             "reviewed_rate": round(reviewed_rate, 2), "nationality_factor": round(factor, 4),
             "price": round(price, 2),
@@ -807,6 +839,8 @@ def reviewed_price_for_census(
         "priced_member_count": priced,
         "unmatched_member_count": unmatched,
         "undecided_member_count": undecided,
+        "card_priced_member_count": card_members,
+        "rate_basis": "card" if (priced and card_members == priced) else "earned premium" if card_members == 0 else "mixed",
         "reviewed_premium": round(total, 2),
         "reviewed_per_member": round(total / priced, 2) if priced else None,
         "average_nationality_factor": round(factor_weighted / priced, 4) if priced else None,
@@ -912,6 +946,7 @@ def underwriter_findings(
     prices = {
         "card": {"total": card_total, "per_member": round(card_total / lives, 2) if card_total else None},
         "reviewed": {"total": reviewed_total, "per_member": reviewed.get("reviewed_per_member"),
+                     "basis": reviewed.get("rate_basis"), "card_priced_members": reviewed.get("card_priced_member_count"),
                      "priced_members": reviewed["priced_member_count"], "undecided_members": reviewed["undecided_member_count"],
                      "unmatched_members": reviewed["unmatched_member_count"]},
         "book_cost": {"total": risk_total, "per_member": (risk or {}).get("suggested_per_member"),
@@ -937,6 +972,11 @@ def underwriter_findings(
         flag("ok", f"All {lives} members priced on a reviewed cell.")
     if reviewed["undecided_member_count"]:
         flag("watch", f"{reviewed['undecided_member_count']} member(s) sit in cells with no rate decision yet - priced at today's rate.")
+    basis = reviewed.get("rate_basis")
+    if basis == "earned premium":
+        flag("watch", "No rate card row for these members - the reviewed rate starts from the book's earned premium, not the card. Upload the rate card for a card-based figure.")
+    elif basis == "mixed":
+        flag("watch", f"{lives - (reviewed.get('card_priced_member_count') or 0)} member(s) have no rate card row and start from the book's earned premium instead of the card.")
     cred = prices["book_cost"]["credibility"]
     if cred is not None and cred < 0.5:
         flag("watch", f"Book cost price rests on cells below 50% credibility ({cred:.0%}) - treat it as a ceiling, not a target.")

@@ -9261,7 +9261,7 @@ function _findingsBodyHtml(d) {
     <div class="fd-verdict">
       <div class="rec"><div class="k">Recommendation</div><div class="v"><span class="fd-pill ${tonePill}">${escapeHtml(rec.verdict)}</span></div><div class="s">${escapeHtml(rec.rule)}</div></div>
       <div><div class="k">Card price</div><div class="v">${_fdMoney(pr.card.total)}</div><div class="s">${pr.card.total ? _fdNum(pr.card.per_member) + ' / member' : 'compute a quote on Set-up &amp; quote'}</div></div>
-      <div><div class="k">Reviewed rate</div><div class="v">${_fdMoney(pr.reviewed.total)}</div><div class="s">${_fdNum(pr.reviewed.per_member)} / member &middot; decisions + nationality${pr.reviewed_vs_card_pct != null ? ' &middot; ' + (pr.reviewed_vs_card_pct > 0 ? '+' : '') + pr.reviewed_vs_card_pct + '% vs card' : ''}</div></div>
+      <div><div class="k">Reviewed rate</div><div class="v">${_fdMoney(pr.reviewed.total)}</div><div class="s">${_fdNum(pr.reviewed.per_member)} / member &middot; ${pr.reviewed.basis === 'card' ? 'card' : pr.reviewed.basis === 'mixed' ? 'card / earned' : 'book earned'} &times; decisions &times; nationality${pr.reviewed_vs_card_pct != null ? ' &middot; ' + (pr.reviewed_vs_card_pct > 0 ? '+' : '') + pr.reviewed_vs_card_pct + '% vs card' : ''}</div></div>
       <div><div class="k">Book cost price</div><div class="v">${bookCost.error ? '&mdash;' : _fdMoney(bookCost.total)}</div><div class="s">${bookCost.error ? escapeHtml(bookCost.error) : _fdNum(bookCost.per_member) + ' / member &middot; risk-based, ' + _fdPct(bookCost.credibility) + ' credible'}</div></div>
     </div>
     <h4 class="fd-h">Why</h4>
@@ -9273,7 +9273,7 @@ function _findingsBodyHtml(d) {
           ${pop}
           <tr class="total"><td colspan="3">Total</td><td class="num">${d.lives}</td><td class="num">${_fdNum(pr.reviewed.total)}</td><td></td><td></td></tr>
         </table>
-        <div class="fd-foot">Book LR = ${escapeHtml(d.plan.product)} loss ratio for that age &times; sex cell on the same networks, claims incl. IBNR. Reviewed rate = cell rate after the agreed decision &times; nationality factor.</div>
+        <div class="fd-foot">Book LR = ${escapeHtml(d.plan.product)} loss ratio for that age &times; sex cell on the same networks, claims incl. IBNR. Reviewed rate = each member's ${pr.reviewed.basis === 'card' ? 'rate card price' : pr.reviewed.basis === 'mixed' ? 'rate card price (book earned premium where the card has no row)' : 'book earned premium (no rate card row)'} &times; the agreed decision &times; nationality factor.</div>
       </div>
       <div>
         <h4 class="fd-h">Nationality mix</h4>
