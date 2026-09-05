@@ -99,6 +99,20 @@ def member_cube_key(
     return tuple(key)
 
 
+def member_incurred_claims(result: dict) -> float:
+    """What one member has cost so far: paid + outstanding + IBNR.
+
+    The cube used to read `actual_claims` alone, which leaves out the
+    claims incurred but not yet reported. On a book whose claims file is
+    a few weeks old that is 10-20% of the cost, and a price built without
+    it is short by exactly that much before anyone has quoted. The same
+    incurred figure is what every loss-ratio screen already reports, so
+    the cost a cell is priced at and the loss ratio the same cell shows
+    now come from one number.
+    """
+    return (result.get("actual_claims") or 0.0) + (result.get("ibnr") or 0.0)
+
+
 def burning_cost_cube(
     member_results: List[dict],
     rate_cards: List[dict],
@@ -106,6 +120,8 @@ def burning_cost_cube(
     full_credibility_member_years: float = FULL_CREDIBILITY_MEMBER_YEARS,
     min_relativity: float = 0.5,
     max_relativity: float = 2.0,
+    large_claim_cap: Optional[float] = None,
+    age_bands: Optional[List[tuple]] = None,
 ) -> dict:
     """The book's own experience as a credibility-blended hierarchy.
 
@@ -122,10 +138,30 @@ def burning_cost_cube(
     leans on a (product, network, age, gender, relation) cell that has
     itself already been stabilised, rather than inheriting whatever noise
     sits one level up.
+
+    The blended cost is also held within `min_relativity`..`max_relativity`
+    of its parent. Credibility alone is not enough on a cell with a dozen
+    member-years and one six-figure claim: at Z=0.35 that claim still
+    moves the cell's price by a multiple, and a rate card cannot carry a
+    number that one member wrote. The cap is stated on the cell
+    (`capped`) rather than hidden.
+
+    `large_claim_cap`, when set, truncates each member's incurred claims
+    at that amount before they reach any cell; the excess is pooled and
+    spread across the whole book as a flat load per member-year
+    (`pooled_load_per_member_year`), which every cell's expected cost
+    carries. That is how a catastrophic claim is meant to be priced -
+    everyone pays a little for the risk of it, rather than the one cell
+    it happened to land in paying for all of it.
+
+    `age_bands` overrides the bands read from the rate card, for a review
+    that wants to test a finer split than the card currently prices by.
     """
     from app.scoring.rules.portfolio_analysis import age_bands_from_rate_cards
 
-    bands = age_bands_from_rate_cards(rate_cards) if rate_cards else []
+    bands = [tuple(b) for b in age_bands] if age_bands else []
+    if not bands:
+        bands = age_bands_from_rate_cards(rate_cards) if rate_cards else []
     if not bands:
         bands = list(FALLBACK_AGE_BANDS)
 
@@ -135,12 +171,18 @@ def burning_cost_cube(
     totals: Dict[Tuple[int, Tuple[str, ...]], dict] = defaultdict(
         lambda: {"member_count": 0, "earned_member_years": 0.0, "actual_claims": 0.0}
     )
+    pooled_excess = 0.0
+    capped_members = 0
 
     for result in member_results:
         if not result.get("in_scope", True):
             continue
         exposure = result.get("earned_premium_fraction") or 0.0
-        claims = result.get("actual_claims") or 0.0
+        claims = member_incurred_claims(result)
+        if large_claim_cap is not None and claims > large_claim_cap:
+            pooled_excess += claims - large_claim_cap
+            capped_members += 1
+            claims = large_claim_cap
         full_key = member_cube_key(result, dimensions, bands)
         for level in range(len(dimensions) + 1):
             bucket = totals[(level, full_key[:level])]
@@ -153,7 +195,13 @@ def burning_cost_cube(
         return (bucket["actual_claims"] / years) if years else None
 
     book = totals.get((0, ()))
+    book_years = book["earned_member_years"] if book else 0.0
+    # The pooled excess is spread over every member-year on the book, so
+    # each cell's expected cost carries the same flat load for it.
+    pooled_load = (pooled_excess / book_years) if (pooled_excess and book_years) else 0.0
     book_rate = own_rate_of(book) if book else None
+    if book_rate is not None:
+        book_rate += pooled_load
 
     # Blend level by level, so a level's parents are always already
     # blended by the time their children need them as a complement.
@@ -165,11 +213,18 @@ def burning_cost_cube(
             if lvl != level:
                 continue
             own = own_rate_of(bucket)
+            if own is not None:
+                own += pooled_load
             complement = blended_by_key.get((level - 1, key[:-1]))
             blend = blend_with_complement(
                 own, complement, bucket["earned_member_years"], full_credibility_member_years
             )
             expected = blend["blended_rate"]
+            capped = False
+            if expected is not None and complement:
+                bounded = max(min_relativity * complement, min(max_relativity * complement, expected))
+                capped = abs(bounded - expected) > 1e-9
+                expected = bounded
             blended_by_key[(level, key)] = expected
             cells.append(
                 {
@@ -183,6 +238,7 @@ def burning_cost_cube(
                     "complement_rate": round(complement, 2) if complement is not None else None,
                     "credibility": blend["credibility"],
                     "expected_cost": round(expected, 2) if expected is not None else None,
+                    "capped": capped,
                     "relativity": relativity(expected, book_rate, min_relativity, max_relativity),
                 }
             )
@@ -192,6 +248,10 @@ def burning_cost_cube(
         "dimensions": list(dimensions),
         "age_bands": [[low, high] for low, high in bands],
         "full_credibility_member_years": full_credibility_member_years,
+        "large_claim_cap": large_claim_cap,
+        "pooled_excess": round(pooled_excess, 2),
+        "capped_member_count": capped_members,
+        "pooled_load_per_member_year": round(pooled_load, 2),
         "book": {
             "member_count": book["member_count"] if book else 0,
             "earned_member_years": round(book["earned_member_years"], 4) if book else 0.0,

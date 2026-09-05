@@ -107,7 +107,7 @@ def _cube_expected_cost(
 def rate_card_calibration(
     rate_cards: List[dict],
     cube: dict,
-    loading_pct: float,
+    loading_pct: Optional[float] = None,
     target_loss_ratio: float = DEFAULT_TARGET_LOSS_RATIO,
     min_exposure_member_years: float = 5.0,
 ) -> dict:
@@ -118,20 +118,31 @@ def rate_card_calibration(
     loading), not the price itself. Comparing claims against the gross
     price would flatter every cell by the whole expense load and make a
     card that is losing money look like it is running at 70%.
+
+    `loading_pct` is an override applied to every cell. Left as None,
+    each row is loaded at its own product's standard figure (30% on
+    Platinum/Gold, 26.5% on Silver/Bronze - see category_loading_pct),
+    since a card that prices four products cannot be calibrated at one
+    product's loading without misstating the other three.
     """
-    if loading_pct >= 1:
+    from app.scoring.rules.new_business_rating import category_loading_pct
+
+    if loading_pct is not None and loading_pct >= 1:
         raise ValueError("loading_pct must be less than 1.")
     if target_loss_ratio <= 0:
         raise ValueError("target_loss_ratio must be positive.")
 
     index = build_cube_index(cube)
     cells: List[dict] = []
+    loadings_used = set()
 
     for row in rate_cards:
         from_age, to_age = row.get("from_age"), row.get("to_age")
         if from_age is None or to_age is None:
             continue
         age_band = f"{from_age}-{to_age}"
+        row_loading = loading_pct if loading_pct is not None else category_loading_pct(row.get("product") or "")
+        loadings_used.add(row_loading)
 
         for card_gender, cube_gender in CARD_GENDERS:
             price = row.get(f"{card_gender}_price")
@@ -149,11 +160,11 @@ def rate_card_calibration(
             if match is None:
                 continue
 
-            available_for_claims = price * (1 - loading_pct)
+            available_for_claims = price * (1 - row_loading)
             implied_lr = (
                 match["expected_cost"] / available_for_claims if available_for_claims else None
             )
-            suggested = match["expected_cost"] / target_loss_ratio / (1 - loading_pct)
+            suggested = match["expected_cost"] / target_loss_ratio / (1 - row_loading)
 
             cells.append({
                 "product": row.get("product"),
@@ -163,6 +174,7 @@ def rate_card_calibration(
                 "age_band": age_band,
                 "from_age": from_age,
                 "gender": card_gender,
+                "loading_pct": row_loading,
                 "card_price": round(price, 2),
                 "expected_cost": match["expected_cost"],
                 "available_for_claims": round(available_for_claims, 2),
@@ -188,7 +200,13 @@ def rate_card_calibration(
     overpriced = [c for c in solid if c["verdict"] == "overpriced"]
 
     return {
-        "loading_pct": loading_pct,
+        # One figure when the card is loaded uniformly (an override, or a
+        # single-product card); None when each product carried its own.
+        "loading_pct": loading_pct if loading_pct is not None else (loadings_used.pop() if len(loadings_used) == 1 else None),
+        "loading_by_product": {
+            (row.get("product") or ""): (loading_pct if loading_pct is not None else category_loading_pct(row.get("product") or ""))
+            for row in rate_cards
+        },
         "target_loss_ratio": target_loss_ratio,
         "cell_count": len(cells),
         "measurable_cell_count": len(solid),

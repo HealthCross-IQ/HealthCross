@@ -148,3 +148,16 @@ def test_product_summary_ignores_thin_cells_like_the_headline_counts_do():
         CARD, _cube([_member(50_000.0)]), loading_pct=0.33, min_exposure_member_years=5.0
     )
     assert calibration_summary_by_product(result) == []
+
+
+def test_each_product_is_calibrated_at_its_own_loading_when_none_is_given():
+    # A Gold row and a Bronze row on one card: Gold at 30%, Bronze at
+    # 26.5%. One flat loading would misstate one of them.
+    card = CARD + [{**CARD[0], "product": "Bronze"}]
+    members = [_member(2000.0) for _ in range(150)] + [_member(2000.0, product="Bronze") for _ in range(150)]
+    result = rate_card_calibration(card, burning_cost_cube(members, card))
+    by_product = {(c["product"], c["gender"]): c for c in result["cells"]}
+    assert by_product[("Gold", "male")]["loading_pct"] == pytest.approx(0.30)
+    assert by_product[("Bronze", "male")]["loading_pct"] == pytest.approx(0.265)
+    assert result["loading_pct"] is None
+    assert result["loading_by_product"] == {"Gold": pytest.approx(0.30), "Bronze": pytest.approx(0.265)}

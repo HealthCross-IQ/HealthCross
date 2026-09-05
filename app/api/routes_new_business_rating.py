@@ -909,17 +909,12 @@ def get_rate_card_calibration(
     if cube["book"]["burning_cost"] is None:
         raise HTTPException(status_code=400, detail="The book has no claims experience to calibrate against")
 
-    # Loading varies per product on the card itself, so the default here
-    # is the standard product loading rather than one flat figure - using
-    # a single average would misstate the implied loss ratio on every
-    # product whose real loading differs from it.
-    effective_loading = (
-        loading_pct if loading_pct is not None
-        else category_loading_pct(rate_cards[0].get("product") or "")
-    )
+    # Loading varies per product on the card itself, so with no override
+    # each row is calibrated at its own product's standard loading (see
+    # rate_card_calibration) rather than one flat figure.
     calibration = rate_card_calibration(
         rate_cards, cube,
-        loading_pct=effective_loading,
+        loading_pct=loading_pct,
         target_loss_ratio=target_loss_ratio,
         min_exposure_member_years=min_exposure_member_years,
     )

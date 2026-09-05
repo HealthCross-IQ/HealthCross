@@ -154,3 +154,50 @@ def test_the_index_finds_the_same_cells_the_lookup_walks():
     with_index = expected_cost_for_member(_r(0), cube, index)
     without = expected_cost_for_member(_r(0), cube)
     assert with_index == without
+
+
+def test_ibnr_is_part_of_the_cost_a_cell_is_priced_at():
+    # Paid 1000 + IBNR 200 per member: the cell costs 1200, not 1000. A
+    # price built from paid claims alone is short by the whole IBNR.
+    members = [dict(_r(1000.0), ibnr=200.0) for _ in range(150)]
+    cube = burning_cost_cube(members, RATE_CARDS)
+    assert cube["book"]["burning_cost"] == pytest.approx(1200.0)
+
+
+def test_a_blended_cell_is_held_within_the_relativity_band_of_its_parent():
+    # 20 member-years at 50,000 against a 2,000 parent: credibility
+    # sqrt(20/100)=0.45 alone would still price the cell near 23,000 -
+    # more than 11x its parent. The cap holds it at 2x and says so.
+    members = [_r(2000.0, zone="Zone 3") for _ in range(200)]
+    members += [_r(50_000.0, zone="Zone 1") for _ in range(20)]
+    cube = burning_cost_cube(members, RATE_CARDS)
+    leaf = [c for c in cube["cells"]
+            if c["level"] == len(DEFAULT_CUBE_DIMENSIONS) and c["key"]["nationality_zone"] == "Zone 1"][0]
+    assert leaf["capped"] is True
+    assert leaf["expected_cost"] == pytest.approx(2 * leaf["complement_rate"], rel=1e-3)
+
+
+def test_a_large_claim_cap_pools_the_excess_across_the_whole_book():
+    # One 210,000 claim in a 100-member book, capped at 100,000: the cell
+    # it landed in sees 100,000; the other 110,000 is spread over every
+    # member-year as a flat load, so every cell pays 1,100 for it.
+    members = [_r(1000.0, zone="Zone 3") for _ in range(99)]
+    members.append(_r(210_000.0, zone="Zone 1"))
+    cube = burning_cost_cube(members, RATE_CARDS, large_claim_cap=100_000.0)
+    assert cube["pooled_excess"] == pytest.approx(110_000.0)
+    assert cube["capped_member_count"] == 1
+    assert cube["pooled_load_per_member_year"] == pytest.approx(1100.0)
+    zone3 = [c for c in cube["cells"]
+             if c["level"] == len(DEFAULT_CUBE_DIMENSIONS) and c["key"]["nationality_zone"] == "Zone 3"][0]
+    assert zone3["own_rate"] == pytest.approx(1000.0 + 1100.0)
+    # Without the cap the book cost is identical - the cap moves cost
+    # between cells, it never removes any.
+    uncapped = burning_cost_cube(members, RATE_CARDS)
+    assert cube["book"]["burning_cost"] == pytest.approx(uncapped["book"]["burning_cost"])
+
+
+def test_review_age_bands_override_the_rate_card_bands():
+    cube = burning_cost_cube([_r(1000.0, age=1), _r(1000.0, age=10)], RATE_CARDS, age_bands=[(0, 1), (2, 17)])
+    assert cube["age_bands"] == [[0, 1], [2, 17]]
+    bands = {c["key"]["age_band"] for c in cube["cells"] if c["level"] == 3}
+    assert bands == {"0-1", "2-17"}

@@ -1854,11 +1854,11 @@ function renderAccountDashboard(data) {
    cell, before anyone quotes rather than as a footnote after. A cell at
    140% implied loss ratio is not an opinion - it has lost money on every
    case it ever priced, and will keep doing so until the number changes. */
-let calibrationState = { target: 85, loading: null, minYears: 5, filter: 'all', pivotProduct: '', pivotNetwork: '' };
+let calibrationState = { target: 95, loading: null, minYears: 5, filter: 'all', pivotProduct: '', pivotNetwork: '', pivotRegion: '' };
 
-function _calibrationPivotHtml(cells, product, network) {
+function _calibrationPivotHtml(cells, product, network, region) {
   const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
-  const relevant = cells.filter(c => c.product === product && c.network === network && (c.gender === 'male' || c.gender === 'female'));
+  const relevant = cells.filter(c => c.product === product && c.network === network && (!region || c.region === region) && (c.gender === 'male' || c.gender === 'female'));
   const byBand = {};
   relevant.forEach(c => {
     const b = byBand[c.age_band] || (byBand[c.age_band] = { from_age: c.from_age });
@@ -1959,6 +1959,8 @@ async function hcRailRateCardCalibration() {
     if (!calibrationState.pivotProduct && productOptions.length) calibrationState.pivotProduct = productOptions[0];
     const networkOptions = [...new Set(r.cells.filter(c => c.product === calibrationState.pivotProduct).map(c => c.network).filter(Boolean))].sort();
     if (!networkOptions.includes(calibrationState.pivotNetwork)) calibrationState.pivotNetwork = networkOptions[0] || '';
+    const regionOptions = [...new Set(r.cells.filter(c => c.product === calibrationState.pivotProduct && c.network === calibrationState.pivotNetwork).map(c => c.region).filter(Boolean))].sort();
+    if (!regionOptions.includes(calibrationState.pivotRegion)) calibrationState.pivotRegion = regionOptions[0] || '';
 
     main.innerHTML = `
       <div class="card">
@@ -1967,11 +1969,14 @@ async function hcRailRateCardCalibration() {
           <div><label>Product</label><select style="width:140px;" onchange="calibrationState.pivotProduct = this.value; calibrationState.pivotNetwork = ''; hcRailRateCardCalibration();">
             ${productOptions.map(p => `<option value="${escapeHtml(p)}" ${p === calibrationState.pivotProduct ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
           </select></div>
-          <div><label>Network</label><select style="width:180px;" onchange="calibrationState.pivotNetwork = this.value; hcRailRateCardCalibration();">
+          <div><label>Network</label><select style="width:180px;" onchange="calibrationState.pivotNetwork = this.value; calibrationState.pivotRegion = ''; hcRailRateCardCalibration();">
             ${networkOptions.map(n => `<option value="${escapeHtml(n)}" ${n === calibrationState.pivotNetwork ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
           </select></div>
+          ${regionOptions.length > 1 ? `<div><label>Region</label><select style="width:140px;" onchange="calibrationState.pivotRegion = this.value; hcRailRateCardCalibration();">
+            ${regionOptions.map(n => `<option value="${escapeHtml(n)}" ${n === calibrationState.pivotRegion ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+          </select></div>` : ''}
         </div>
-        ${_calibrationPivotHtml(r.cells, calibrationState.pivotProduct, calibrationState.pivotNetwork)}
+        ${_calibrationPivotHtml(r.cells, calibrationState.pivotProduct, calibrationState.pivotNetwork, calibrationState.pivotRegion)}
       </div>
       <div class="card">
         <h3>Rate Card Calibration - every cell</h3>
@@ -1979,8 +1984,8 @@ async function hcRailRateCardCalibration() {
         <div class="hint">The suggested price sits beside the current one rather than replacing it: a rate card is a commercial document too, and a cell may be knowingly held below cost to win a segment. Cells marked <strong>thin</strong> lack the exposure to be a finding; <strong>fallback</strong> means the book had no experience for that exact cell and the cost came from a broader one.</div>
         <div class="row" style="align-items:flex-end; margin:14px 0; gap:10px; flex-wrap:wrap;">
           <div><label>Target LR %</label><input type="number" step="1" value="${calibrationState.target}" style="width:90px;"
-            onchange="calibrationState.target = parseFloat(this.value) || 85; hcRailRateCardCalibration();"></div>
-          <div><label>Loading %</label><input type="number" step="0.5" value="${(r.loading_pct * 100).toFixed(1)}" style="width:90px;"
+            onchange="calibrationState.target = parseFloat(this.value) || 95; hcRailRateCardCalibration();"></div>
+          <div><label>Loading %</label><input type="number" step="0.5" value="${r.loading_pct == null ? '' : (r.loading_pct * 100).toFixed(1)}" placeholder="per product" style="width:90px;"
             onchange="calibrationState.loading = parseFloat(this.value); hcRailRateCardCalibration();"></div>
           <div><label>Min member-years</label><input type="number" value="${calibrationState.minYears}" style="width:110px;"
             onchange="calibrationState.minYears = parseFloat(this.value) || 0; hcRailRateCardCalibration();"></div>
