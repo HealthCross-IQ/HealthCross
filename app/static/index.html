@@ -9984,15 +9984,51 @@ async function _rrDrillEnrollment(enrollmentType) {
   if (!drillArea) return;
   drillArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
   try {
-    const results = await Promise.all(RR_DRILL_DIMENSIONS.map(([dim]) => {
-      const params = _rrProductParams({ group_by: dim, enrollment_type: enrollmentType });
-      return api(`/portfolio-analysis/summary?${params.toString()}`);
-    }));
-    rrData.enrollmentDrill = { enrollmentType, byDimension: Object.fromEntries(RR_DRILL_DIMENSIONS.map(([dim], i) => [dim, results[i].rows || []])) };
+    const [dimResults, claimantsResult] = await Promise.all([
+      Promise.all(RR_DRILL_DIMENSIONS.map(([dim]) => {
+        const params = _rrProductParams({ group_by: dim, enrollment_type: enrollmentType });
+        return api(`/portfolio-analysis/summary?${params.toString()}`);
+      })),
+      // A member with no claims on file (e.g. a very recent Addition)
+      // simply won't appear here - large-claims is a claims-only view,
+      // not a second copy of the enrollment_type member roster above.
+      api(`/portfolio-analysis/large-claims?${_rrProductParams({ enrollment_type: enrollmentType, top_n_members: '10' }).toString()}`)
+        .then(r => r.top_members || [])
+        .catch(() => []),
+    ]);
+    rrData.enrollmentDrill = {
+      enrollmentType,
+      byDimension: Object.fromEntries(RR_DRILL_DIMENSIONS.map(([dim], i) => [dim, dimResults[i].rows || []])),
+      topClaimants: claimantsResult,
+    };
     drillArea.innerHTML = _rrEnrollmentDrillHtml(rrData.enrollmentDrill);
   } catch (err) {
     drillArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
   }
+}
+
+function _rrEnrollmentTopClaimantsHtml(rows) {
+  const body = (rows || []).map((r, i) => `
+    <tr>
+      <td class="num">${i + 1}</td>
+      <td>${escapeHtml(r.patient_id || '-')}</td>
+      <td>${escapeHtml(r.client_name || r.group_name || '-')}</td>
+      <td class="num">${_lrMoney(r.total_claims)}</td>
+      <td class="num">${r.claim_count.toLocaleString()}</td>
+      <td>${escapeHtml((r.diagnoses || []).slice(0, 2).join('; ')) || '-'}</td>
+      <td>${_rrStatusPill(r.member_status)}</td>
+    </tr>`).join('');
+  return `
+    <div>
+      <div class="lr-card-note" style="margin:0 0 4px; font-weight:600; color:var(--lr-ink,#0f1c2e);">Top 10 claimants</div>
+      <div class="lr-table-wrap">
+        <table class="lr-table">
+          <thead><tr><th>#</th><th>Patient ID</th><th>Account</th><th class="num">Total claims</th><th class="num">Claim count</th><th>Medical conditions</th><th>Status</th></tr></thead>
+          <tbody>${body || '<tr><td colspan="7" class="lr-empty">No claims on file for this slice.</td></tr>'}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
 }
 
 function _rrEnrollmentDrillHtml(drill) {
@@ -10002,6 +10038,7 @@ function _rrEnrollmentDrillHtml(drill) {
       <div class="lr-card-note" style="margin-bottom:8px;">Drilling into <b>${escapeHtml(drill.enrollmentType)}</b> members - which segments are driving the difference from the rest of the book.
         <button class="lr-btn ghost" style="padding:4px 10px; font-size:12px; margin-left:8px;" onclick="rrData.enrollmentDrill=null; document.getElementById('rr-enrollment-drill-area').innerHTML='';">Close</button>
       </div>
+      <div style="margin-bottom:14px;">${_rrEnrollmentTopClaimantsHtml(drill.topClaimants)}</div>
       <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
         ${tables}
       </div>

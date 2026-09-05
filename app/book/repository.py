@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from app.models import db_models as models
 from app.scoring.rules.portfolio_analysis import (
+    enrollment_type_label,
     normalize_subgroup_key,
     resolve_group_product,
     resolve_master_client,
@@ -134,6 +135,22 @@ def claims(db: Session) -> List[dict]:
     ]
 
 
+def enrollment_type_by_beneficiary(db: Session) -> Dict[str, str]:
+    """beneficiary_id -> 'Initial'/'Addition' (see enrollment_type_label),
+    for attributing a raw claim line to the same enrollment classification
+    every other view uses - shared by claims-only views (Large Claims)
+    that need to filter/scope by it without a full membership join.
+    """
+    return {
+        m.beneficiary_id: label
+        for m in db.query(
+            models.PortfolioMember.beneficiary_id, models.PortfolioMember.member_start_date,
+            models.PortfolioMember.policy_start_date,
+        ).all()
+        if m.beneficiary_id and (label := enrollment_type_label(m.member_start_date, m.policy_start_date))
+    }
+
+
 def large_claim_lines(db: Session) -> List[dict]:
     """Every uploaded claim line's own group_name/client_name/provider_name
     are already denormalized onto PortfolioClaimEntry itself (a book-wide
@@ -150,6 +167,7 @@ def large_claim_lines(db: Session) -> List[dict]:
     """
     master_by_beneficiary = master_client_by_beneficiary(db)
     product_by_ben = product_by_beneficiary(db)
+    enrollment_by_ben = enrollment_type_by_beneficiary(db)
 
     rows = db.query(
         models.PortfolioClaimEntry.patient_id,
@@ -191,6 +209,7 @@ def large_claim_lines(db: Session) -> List[dict]:
             "group_name": group_name,
             "client_name": master_by_beneficiary.get(patient_id) or client_name,
             "product": product_by_ben.get(patient_id),
+            "enrollment_type": enrollment_by_ben.get(patient_id),
             "provider_name": provider_name,
             "diagnosis_description": diagnosis_description,
             "diagnosis_code": diagnosis_code,

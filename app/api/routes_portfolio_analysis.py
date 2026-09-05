@@ -2008,6 +2008,10 @@ def large_claims(
         [],
         description="Restrict to claims from members on these Products (Platinum/Gold/Silver/Bronze/Group). Omit for every product.",
     ),
+    enrollment_type: Optional[str] = Query(
+        None,
+        description="Restrict to 'Initial' (enrolled the day the policy incepted) or 'Addition' (joined later via endorsement).",
+    ),
     db: Session = Depends(get_db),
 ):
     """Large-loss analysis over the uploaded claims book - the usual
@@ -2038,6 +2042,8 @@ def large_claims(
         claims = [c for c in claims if c.get("client_name") == master_client]
     if products:
         claims = [c for c in claims if c.get("product") in products]
+    if enrollment_type:
+        claims = [c for c in claims if c.get("enrollment_type") == enrollment_type]
     if not claims:
         raise HTTPException(status_code=400, detail="No claims uploaded yet")
 
