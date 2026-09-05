@@ -785,3 +785,79 @@ class PortfolioDataSnapshot(Base):
 
     id = Column(Integer, primary_key=True)
     data_as_of_date = Column(Date, nullable=True)
+
+
+class RateReviewParameter(Base):
+    """One row per review parameter - the figures the monthly rate review
+    is judged against (target loss ratio, loading per product, how much
+    exposure earns full credibility, the most a cell may move in one
+    round, the large-claim cap...). Kept as key/value rows with a JSON
+    value rather than one wide table so adding a parameter is a code
+    default, not a migration, and so each figure carries its own
+    updated_at: "who changed the target and when" is exactly the
+    question a reviewer asks when a cell flips from Hold to Increase.
+    Missing keys take the code default (see rate_review.DEFAULT_PARAMETERS).
+    """
+
+    __tablename__ = "rate_review_parameters"
+
+    id = Column(Integer, primary_key=True)
+    key = Column(String, nullable=False, unique=True)
+    value = Column(JSON, nullable=True)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class RateReviewDecision(Base):
+    """A rate action the underwriting team has actually agreed on - "Bronze,
+    excluding MSH Platinum, females 26-35: +100%" - stored separately from
+    what the book *suggests*, because the two are different things. The
+    suggestion is arithmetic; the decision is a commercial call that may
+    knowingly stop short of it. The review screen shows both side by
+    side, and each month re-measures the cell so the decision is
+    validated against new data rather than taken on faith.
+
+    `network_scope` is "all", "only" (this network alone) or "excluding"
+    (every network but this one) - the way the review is actually run,
+    with a hot network pulled out onto its own table. `gender` None
+    means both. The age range may span several review bands; the
+    decision applies to every band inside it.
+    """
+
+    __tablename__ = "rate_review_decisions"
+
+    id = Column(Integer, primary_key=True)
+    product = Column(String, nullable=False)
+    network_scope = Column(String, nullable=False, default="all")
+    network = Column(String, nullable=True)
+    from_age = Column(Integer, nullable=False)
+    to_age = Column(Integer, nullable=False)
+    gender = Column(String, nullable=True)
+    #: increase / discount / hold / review
+    action = Column(String, nullable=False, default="hold")
+    change_pct = Column(Float, nullable=False, default=0.0)
+    note = Column(String, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class RateReviewSnapshot(Base):
+    """What one product's rate review said on one data-as-of date - the
+    parameters it ran with and every cell's figures - so next month's
+    review can be read as a movement rather than a fresh set of numbers:
+    lives grown by how much, which cells crossed the credibility line,
+    which recommendations flipped. Saved deliberately by the reviewer,
+    not on every page load, so the history is a record of reviews that
+    were actually done.
+    """
+
+    __tablename__ = "rate_review_snapshots"
+
+    id = Column(Integer, primary_key=True)
+    product = Column(String, nullable=False)
+    network_scope = Column(String, nullable=False, default="all")
+    network = Column(String, nullable=True)
+    data_as_of = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    parameters = Column(JSON, nullable=True)
+    summary = Column(JSON, nullable=True)
+    cells = Column(JSON, nullable=True)

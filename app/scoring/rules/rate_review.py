@@ -1,0 +1,592 @@
+"""The monthly rate review: what each card cell costs, what the book says
+it should be priced at, what the team decided, and how that decision is
+holding up on this month's data.
+
+Rate Card Calibration (rate_card_calibration.py) answers "is the card
+priced right?" for every cell on the card at once. This is the narrower,
+slower question an underwriter actually works through at month end, one
+product at a time: for each age band and sex, how many lives, what they
+cost, what the loss ratio is, what the arithmetic suggests - and beside
+it, what was agreed and whether the cell is moving the right way.
+
+Three things are kept deliberately separate, because they are:
+
+  the SUGGESTION - cost / target / (1 - loading), credibility-blended
+  and held within the round's caps. Pure arithmetic off the book.
+
+  the DECISION - what the team agreed (a +100% here, a hold there),
+  stored as rows (RateReviewDecision) and validated each month against
+  fresh data. A decision may knowingly stop short of the suggestion;
+  a cell with no decision says so rather than reading as "hold".
+
+  the PARAMETERS - the figures the review is judged against (target
+  loss ratio, loading, credibility standard, caps). Stored, editable,
+  and re-validated monthly as the book grows (DEFAULT_PARAMETERS below).
+
+A hot network is reviewed on its own table (`network_scope` = "only")
+and kept out of the main one ("excluding"), because a network that costs
+2.5x the others cannot be averaged into them without hiding both.
+
+Pure functions over member-result dicts and plain parameter dicts -
+no ORM, no database.
+"""
+import math
+from collections import defaultdict
+from datetime import date
+from typing import Dict, List, Optional, Tuple
+
+from app.scoring.rules.burning_cost_cube import member_incurred_claims
+from app.scoring.rules.experience_pricing import HOUSE_TARGET_LOSS_RATIO
+from app.scoring.rules.new_business_rating import DEFAULT_LOADING_BY_PRODUCT
+
+#: The review's parameters and their house defaults. Every one is a
+#: judgement that should be re-examined as the book grows - which is
+#: why they are stored and shown, not buried here.
+DEFAULT_PARAMETERS: Dict[str, object] = {
+    # Loss ratio a cell is priced TO, net of loading.
+    "target_loss_ratio": HOUSE_TARGET_LOSS_RATIO,
+    # Expense loading per product; the suggested rate is grossed up by it.
+    "loading_by_product": {k.capitalize(): v for k, v in DEFAULT_LOADING_BY_PRODUCT.items()},
+    # Member-years at which a cell's own experience is trusted in full.
+    "full_credibility_member_years": 100.0,
+    # Below this a cell is shown but never gets an Increase/Discount call.
+    "min_member_years_to_act": 25.0,
+    # The most any cell may move in one review round, either way.
+    "max_increase_pct": 100.0,
+    "max_discount_pct": 15.0,
+    # Per-member claims above this are pooled across the whole book for
+    # pricing (the cell's own loss ratio is still shown uncapped).
+    "large_claim_cap": 100000.0,
+    # A loss-ratio move smaller than this (in points) is noise, not news.
+    "materiality_pct": 10.0,
+    # Blended cost is held within these multiples of the scope's average.
+    "min_relativity": 0.5,
+    "max_relativity": 2.0,
+    # The bands the review is run on - finer than the card where the
+    # book showed a band hiding two different risks (0-1 vs 2-17).
+    "age_bands": [[0, 1], [2, 17], [18, 25], [26, 35], [36, 40], [41, 59], [60, 69], [70, 99]],
+    # Networks reviewed on their own table and kept out of the main one.
+    "separate_networks": ["MSH Platinum"],
+    # Data older than this at review time is flagged as stale.
+    "stale_after_days": 45,
+}
+
+GENDERS = ("M", "F")
+
+
+def parameters_with_defaults(stored: Optional[dict]) -> dict:
+    """Stored parameters over the code defaults, so a parameter added
+    after a deployment still has a value."""
+    merged = {k: (v.copy() if isinstance(v, (dict, list)) else v) for k, v in DEFAULT_PARAMETERS.items()}
+    for key, value in (stored or {}).items():
+        if value is not None:
+            merged[key] = value
+    return merged
+
+
+def loading_for_product(params: dict, product: Optional[str]) -> float:
+    table = params.get("loading_by_product") or {}
+    for name, value in table.items():
+        if (name or "").strip().lower() == (product or "").strip().lower():
+            return float(value)
+    return float(max(DEFAULT_LOADING_BY_PRODUCT.values()))
+
+
+def _band_label(age: Optional[int], bands: List[tuple]) -> Optional[str]:
+    if age is None:
+        return None
+    for low, high in bands:
+        if low <= age <= high:
+            return f"{low}-{high}"
+    return None
+
+
+def _is_separate(network: Optional[str], separate_networks: List[str]) -> bool:
+    n = (network or "").strip().lower()
+    return any(n == (s or "").strip().lower() for s in separate_networks)
+
+
+def scope_members(
+    results: List[dict],
+    product: str,
+    network_scope: str = "excluding",
+    network: Optional[str] = None,
+    separate_networks: Optional[List[str]] = None,
+) -> List[dict]:
+    """The members one review table is about.
+
+    "excluding" is the main table: the product minus every network that
+    is reviewed separately. "only" is one such network on its own.
+    "all" is the whole product, for a product with no split.
+    """
+    rows = [r for r in results if r.get("in_scope", True) and (r.get("product") or "") == product]
+    if network_scope == "only":
+        return [r for r in rows if (r.get("network") or "").strip().lower() == (network or "").strip().lower()]
+    if network_scope == "excluding":
+        excluded = list(separate_networks or [])
+        if network:
+            excluded.append(network)
+        return [r for r in rows if not _is_separate(r.get("network"), excluded)]
+    return rows
+
+
+def _totals(rows: List[dict], cap: Optional[float]) -> dict:
+    my = prem = inc = priced = 0.0
+    capped = 0
+    for r in rows:
+        my += r.get("earned_premium_fraction") or 0.0
+        prem += r.get("actual_premium") or 0.0
+        claims = member_incurred_claims(r)
+        inc += claims
+        if cap is not None and claims > cap:
+            priced += cap
+            capped += 1
+        else:
+            priced += claims
+    return {
+        "lives": len(rows),
+        "member_years": my,
+        "premium": prem,
+        "incurred": inc,
+        "priced_claims": priced,
+        "capped_members": capped,
+    }
+
+
+def _recommendation(change_pct: Optional[float], member_years: float, params: dict) -> Tuple[str, Optional[float]]:
+    """What the arithmetic says to do, and the change after the round's
+    caps. Thin cells get 'Review - thin data' rather than a call either
+    way; a move inside materiality is a Hold."""
+    if change_pct is None:
+        return "No data", None
+    if member_years < float(params["min_member_years_to_act"]):
+        return "Review - thin data", None
+    materiality = float(params["materiality_pct"])
+    if change_pct > materiality:
+        return "Increase", min(change_pct, float(params["max_increase_pct"]))
+    if change_pct < -materiality:
+        return "Discount", max(change_pct, -float(params["max_discount_pct"]))
+    return "Hold", 0.0
+
+
+def _reason(cell: dict, params: dict) -> str:
+    """Plain words for the row, from the row's own numbers."""
+    if cell["member_years"] <= 0 or cell["premium"] <= 0:
+        return "No exposure in this cell."
+    z = cell["credibility"]
+    cred = "fully credible" if z >= 1 else f"{z:.0%} credible - rest from the {cell['scope_label']} average"
+    text = (
+        f"{cell['lives']} lives, {cell['member_years']:.0f} member-years ({cred}). "
+        f"Costs AED {cell['cost_pmpy']:,.0f} per member-year against {cell['premium_pmpy']:,.0f} earned: "
+        f"{cell['gross_loss_ratio']:.0%} gross / {cell['net_loss_ratio']:.0%} net loss ratio."
+    )
+    if cell["capped_members"]:
+        text += (
+            f" {cell['capped_members']} member(s) above the AED {float(params['large_claim_cap']):,.0f} cap - "
+            f"excess pooled across the book, priced cost {cell['pricing_cost_pmpy']:,.0f}."
+        )
+    if cell["relativity_capped"]:
+        text += " Blended cost held within the relativity band of the scope average."
+    if cell["recommendation"] in ("Increase", "Discount") and cell["capped_change_pct"] != cell["change_pct"]:
+        text += f" Cost-to-target is {cell['change_pct']:+.0f}%; capped at {cell['capped_change_pct']:+.0f}% for this round."
+    return text
+
+
+def review_cells(
+    results: List[dict],
+    product: str,
+    params: dict,
+    network_scope: str = "excluding",
+    network: Optional[str] = None,
+    rate_cards: Optional[List[dict]] = None,
+    region: Optional[str] = None,
+) -> dict:
+    """Every review band x sex for one product scope, with the book's
+    figures, the suggested rate and the arithmetic's recommendation.
+
+    `current_rate` is the card price for the cell when a rate card row
+    matches (product, network for an "only" scope, review band, sex),
+    otherwise the premium actually earned per member-year in the cell -
+    which is what the book was really charging, card or no card.
+    """
+    bands = [tuple(b) for b in params["age_bands"]]
+    cap = params.get("large_claim_cap")
+    cap = float(cap) if cap not in (None, "", 0) else None
+    target = float(params["target_loss_ratio"])
+    loading = loading_for_product(params, product)
+    full_cred = float(params["full_credibility_member_years"])
+    min_rel, max_rel = float(params["min_relativity"]), float(params["max_relativity"])
+
+    members = scope_members(results, product, network_scope, network, params.get("separate_networks") or [])
+    scope_label = (
+        f"{product} on {network}" if network_scope == "only"
+        else f"{product} excluding {', '.join(params.get('separate_networks') or [])}" if network_scope == "excluding" and params.get("separate_networks")
+        else product
+    )
+
+    totals = _totals(members, cap)
+    # Excess above the cap is pooled over the whole scope as a flat
+    # load per member-year, so every cell pays a little for the risk of
+    # the one big claim rather than one cell paying for all of it.
+    pooled_load = ((totals["incurred"] - totals["priced_claims"]) / totals["member_years"]) if totals["member_years"] else 0.0
+    scope_cost = (totals["priced_claims"] / totals["member_years"] + pooled_load) if totals["member_years"] else None
+
+    card_price = _card_price_lookup(rate_cards or [], product, network if network_scope == "only" else None, region)
+
+    by_cell: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    for r in members:
+        label = _band_label(r.get("age"), bands)
+        g = (r.get("gender") or "").strip().upper()[:1]
+        if label and g in GENDERS:
+            by_cell[(label, g)].append(r)
+
+    cells: List[dict] = []
+    for low, high in bands:
+        label = f"{low}-{high}"
+        for g in GENDERS:
+            rows = by_cell.get((label, g), [])
+            t = _totals(rows, cap)
+            my = t["member_years"]
+            own_cost = (t["incurred"] / my) if my else None
+            own_priced = (t["priced_claims"] / my + pooled_load) if my else None
+            z = min(1.0, math.sqrt(my / full_cred)) if my > 0 and full_cred > 0 else 0.0
+            if own_priced is None:
+                blended = scope_cost
+            elif scope_cost is None:
+                blended = own_priced
+            else:
+                blended = z * own_priced + (1 - z) * scope_cost
+            rel_capped = False
+            if blended is not None and scope_cost:
+                bounded = max(min_rel * scope_cost, min(max_rel * scope_cost, blended))
+                rel_capped = abs(bounded - blended) > 1e-9
+                blended = bounded
+            suggested = (blended / target / (1 - loading)) if blended is not None else None
+            premium_pmpy = (t["premium"] / my) if my else None
+            card = card_price.get((low, high, g))
+            current = card if card is not None else premium_pmpy
+            change = ((suggested / current - 1) * 100) if (suggested is not None and current) else None
+            gross = (t["incurred"] / t["premium"]) if t["premium"] else None
+            net = (gross / (1 - loading)) if gross is not None else None
+            rec, capped_change = _recommendation(change, my, params)
+            cell = {
+                "age_band": label,
+                "from_age": low,
+                "to_age": high,
+                "gender": g,
+                "lives": t["lives"],
+                "member_years": round(my, 1),
+                "premium": round(t["premium"], 2),
+                "incurred": round(t["incurred"], 2),
+                "premium_pmpy": round(premium_pmpy, 2) if premium_pmpy is not None else None,
+                "card_price": round(card, 2) if card is not None else None,
+                "current_rate": round(current, 2) if current is not None else None,
+                "current_rate_basis": "card" if card is not None else "earned premium",
+                "cost_pmpy": round(own_cost, 2) if own_cost is not None else None,
+                "pricing_cost_pmpy": round(own_priced, 2) if own_priced is not None else None,
+                "capped_members": t["capped_members"],
+                "credibility": round(z, 4),
+                "blended_cost_pmpy": round(blended, 2) if blended is not None else None,
+                "relativity_capped": rel_capped,
+                "gross_loss_ratio": round(gross, 4) if gross is not None else None,
+                "net_loss_ratio": round(net, 4) if net is not None else None,
+                "suggested_rate": round(suggested, 2) if suggested is not None else None,
+                "change_pct": round(change, 1) if change is not None else None,
+                "recommendation": rec,
+                "capped_change_pct": round(capped_change, 1) if capped_change is not None else None,
+                "thin": my < float(params["min_member_years_to_act"]),
+                "scope_label": scope_label,
+            }
+            cell["reason"] = _reason(cell, params)
+            cells.append(cell)
+
+    gross_total = (totals["incurred"] / totals["premium"]) if totals["premium"] else None
+    return {
+        "product": product,
+        "network_scope": network_scope,
+        "network": network,
+        "scope_label": scope_label,
+        "loading_pct": loading,
+        "target_loss_ratio": target,
+        "large_claim_cap": cap,
+        "pooled_load_per_member_year": round(pooled_load, 2),
+        "totals": {
+            "lives": totals["lives"],
+            "member_years": round(totals["member_years"], 1),
+            "premium": round(totals["premium"], 2),
+            "incurred": round(totals["incurred"], 2),
+            "premium_pmpy": round(totals["premium"] / totals["member_years"], 2) if totals["member_years"] else None,
+            "cost_pmpy": round(totals["incurred"] / totals["member_years"], 2) if totals["member_years"] else None,
+            "gross_loss_ratio": round(gross_total, 4) if gross_total is not None else None,
+            "net_loss_ratio": round(gross_total / (1 - loading), 4) if gross_total is not None else None,
+            "capped_members": totals["capped_members"],
+        },
+        "cells": cells,
+    }
+
+
+def _card_price_lookup(rate_cards: List[dict], product: str, network: Optional[str], region: Optional[str]) -> Dict[tuple, float]:
+    """Card price per (from_age, to_age, gender) for the scope, where a
+    card row lines up exactly with a review band. A card whose bands
+    differ from the review's (the usual case while a split is being
+    tested) simply yields nothing, and the cell falls back to earned
+    premium - a partial match would compare unlike bands."""
+    prices: Dict[tuple, List[float]] = defaultdict(list)
+    for row in rate_cards:
+        if (row.get("product") or "").strip().lower() != product.strip().lower():
+            continue
+        if network and (row.get("network") or "").strip().lower() != network.strip().lower():
+            continue
+        if region and (row.get("region") or "").strip().lower() != region.strip().lower():
+            continue
+        if row.get("from_age") is None or row.get("to_age") is None:
+            continue
+        for g, field in (("M", "male_price"), ("F", "female_price")):
+            if row.get(field):
+                prices[(row["from_age"], row["to_age"], g)].append(float(row[field]))
+    # Several regions/networks on the same band: the simple mean, flagged
+    # by basis only - the review is about the band, the card about where.
+    return {k: sum(v) / len(v) for k, v in prices.items() if v}
+
+
+def apply_decisions(review: dict, decisions: List[dict]) -> dict:
+    """Attach the agreed decision to each cell and what the cell's loss
+    ratio becomes under it - the same claims over the changed premium.
+    A cell with no decision is marked as such rather than as a hold."""
+    loading = review["loading_pct"]
+    scope, network, product = review["network_scope"], review["network"], review["product"]
+    for cell in review["cells"]:
+        match = None
+        for d in decisions:
+            if (d.get("product") or "").strip().lower() != product.strip().lower():
+                continue
+            if (d.get("network_scope") or "all") != scope:
+                continue
+            if scope in ("only", "excluding") and (d.get("network") or "").strip().lower() != (network or "").strip().lower():
+                # An "excluding" decision with no network named applies to
+                # the product's standard excluding-table.
+                if not (scope == "excluding" and not d.get("network") and not network):
+                    continue
+            if d.get("gender") and d["gender"].strip().upper()[:1] != cell["gender"]:
+                continue
+            if not (d["from_age"] <= cell["from_age"] and cell["to_age"] <= d["to_age"]):
+                continue
+            match = d
+            break
+        if match is None:
+            cell["decision"] = None
+            cell["decision_action"] = "No decision yet"
+            cell["decision_change_pct"] = None
+            cell["rate_after_decision"] = None
+            cell["gross_loss_ratio_after"] = None
+            cell["net_loss_ratio_after"] = None
+            continue
+        pct = float(match.get("change_pct") or 0.0)
+        cell["decision"] = match
+        cell["decision_action"] = match.get("action") or "hold"
+        cell["decision_change_pct"] = pct
+        cell["rate_after_decision"] = round(cell["current_rate"] * (1 + pct / 100), 2) if cell["current_rate"] else None
+        g_after = (cell["gross_loss_ratio"] / (1 + pct / 100)) if cell["gross_loss_ratio"] is not None and pct > -100 else None
+        cell["gross_loss_ratio_after"] = round(g_after, 4) if g_after is not None else None
+        cell["net_loss_ratio_after"] = round(g_after / (1 - loading), 4) if g_after is not None else None
+
+    # Scope totals under the decisions: premium rises by each cell's
+    # action, claims stay where they are.
+    prem_after = sum(
+        c["premium"] * (1 + (c["decision_change_pct"] or 0.0) / 100) for c in review["cells"]
+    )
+    t = review["totals"]
+    t["premium_after_decisions"] = round(prem_after, 2)
+    t["premium_change_pct"] = round((prem_after / t["premium"] - 1) * 100, 1) if t["premium"] else None
+    t["gross_loss_ratio_after"] = round(t["incurred"] / prem_after, 4) if prem_after else None
+    t["net_loss_ratio_after"] = round(t["incurred"] / prem_after / (1 - loading), 4) if prem_after else None
+    return review
+
+
+def network_breakdown(results: List[dict], product: str, loading: float) -> List[dict]:
+    """Where the product's cost sits by network, with each network's cost
+    as a multiple of the cheapest credible one - the 'network factor' a
+    card should carry."""
+    by_net: Dict[str, List[dict]] = defaultdict(list)
+    for r in results:
+        if r.get("in_scope", True) and (r.get("product") or "") == product:
+            by_net[(r.get("network") or "Unmapped").strip()].append(r)
+    rows = []
+    for net, members in by_net.items():
+        t = _totals(members, None)
+        my = t["member_years"]
+        rows.append({
+            "network": net,
+            "lives": t["lives"],
+            "member_years": round(my, 1),
+            "premium_pmpy": round(t["premium"] / my, 2) if my else None,
+            "cost_pmpy": round(t["incurred"] / my, 2) if my else None,
+            "gross_loss_ratio": round(t["incurred"] / t["premium"], 4) if t["premium"] else None,
+            "net_loss_ratio": round(t["incurred"] / t["premium"] / (1 - loading), 4) if t["premium"] else None,
+        })
+    base = [r for r in rows if r["member_years"] >= 25 and r["cost_pmpy"]]
+    base_cost = min(r["cost_pmpy"] for r in base) if base else None
+    base_prem = None
+    if base_cost is not None:
+        base_prem = next(r["premium_pmpy"] for r in base if r["cost_pmpy"] == base_cost)
+    for r in rows:
+        r["cost_factor"] = round(r["cost_pmpy"] / base_cost, 2) if (base_cost and r["cost_pmpy"]) else None
+        r["premium_factor"] = round(r["premium_pmpy"] / base_prem, 2) if (base_prem and r["premium_pmpy"]) else None
+    rows.sort(key=lambda r: -(r["member_years"] or 0))
+    return rows
+
+
+def relation_breakdown(members: List[dict], loading: float) -> List[dict]:
+    """Relation x sex for one scope - whether a female result is a spouse
+    story or a female story, which decides whether the fix is a spouse
+    surcharge or the female rate."""
+    by_key: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    for r in members:
+        g = (r.get("gender") or "").strip().upper()[:1]
+        if g in GENDERS:
+            by_key[((r.get("relation") or "unknown").strip().lower(), g)].append(r)
+    rows = []
+    for (rel, g), rows_ in sorted(by_key.items()):
+        t = _totals(rows_, None)
+        my = t["member_years"]
+        rows.append({
+            "relation": rel,
+            "gender": g,
+            "lives": t["lives"],
+            "member_years": round(my, 1),
+            "premium_pmpy": round(t["premium"] / my, 2) if my else None,
+            "cost_pmpy": round(t["incurred"] / my, 2) if my else None,
+            "gross_loss_ratio": round(t["incurred"] / t["premium"], 4) if t["premium"] else None,
+            "net_loss_ratio": round(t["incurred"] / t["premium"] / (1 - loading), 4) if t["premium"] else None,
+        })
+    order = {"employee": 0, "spouse": 1, "child": 2}
+    rows.sort(key=lambda r: (order.get(r["relation"], 9), r["gender"]))
+    return rows
+
+
+def validate_against_snapshot(
+    review: dict,
+    last: Optional[dict],
+    params: dict,
+    data_as_of: Optional[date],
+    today: Optional[date] = None,
+) -> dict:
+    """This month against the last saved review of the same scope.
+
+    Growth in lives and member-years says how much new evidence there
+    is; loss-ratio moves beyond materiality are the cells to look at;
+    a cell that crossed the credibility line is one whose 'thin' caveat
+    has expired; and identical data-as-of means nothing new has been
+    uploaded, which is its own finding.
+    """
+    today = today or date.today()
+    warnings: List[str] = []
+    stale_days = int(params.get("stale_after_days") or 45)
+    if data_as_of is None:
+        warnings.append("The book has no data-as-of date recorded - set it on upload so the review can tell old data from new.")
+    elif (today - data_as_of).days > stale_days:
+        warnings.append(f"Data is {(today - data_as_of).days} days old (as of {data_as_of.isoformat()}) - older than the {stale_days}-day limit. Upload the latest members and claims before acting on this review.")
+
+    out = {
+        "data_as_of": data_as_of.isoformat() if data_as_of else None,
+        "last_review": None,
+        "warnings": warnings,
+        "material_moves": [],
+        "newly_credible": [],
+        "recommendation_changes": [],
+    }
+    if not last:
+        warnings.append("No earlier review saved for this scope - save this one so next month can be read as a movement.")
+        return out
+
+    last_as_of = last.get("data_as_of")
+    out["last_review"] = {
+        "data_as_of": last_as_of,
+        "created_at": last.get("created_at"),
+        "lives": (last.get("summary") or {}).get("lives"),
+        "member_years": (last.get("summary") or {}).get("member_years"),
+        "gross_loss_ratio": (last.get("summary") or {}).get("gross_loss_ratio"),
+    }
+    if last_as_of and data_as_of and last_as_of == data_as_of.isoformat():
+        warnings.append(f"Same data as the last saved review ({last_as_of}) - nothing new has been uploaded since.")
+
+    t = review["totals"]
+    ls = last.get("summary") or {}
+    out["lives_change"] = (t["lives"] - ls["lives"]) if ls.get("lives") is not None else None
+    out["lives_change_pct"] = round((t["lives"] / ls["lives"] - 1) * 100, 1) if ls.get("lives") else None
+    out["member_years_change"] = round(t["member_years"] - ls["member_years"], 1) if ls.get("member_years") is not None else None
+    out["gross_loss_ratio_change_points"] = (
+        round((t["gross_loss_ratio"] - ls["gross_loss_ratio"]) * 100, 1)
+        if t.get("gross_loss_ratio") is not None and ls.get("gross_loss_ratio") is not None else None
+    )
+    if ls.get("gross_loss_ratio") is not None and ls.get("target_loss_ratio") not in (None, review["target_loss_ratio"]):
+        warnings.append(f"Target loss ratio changed since the last review ({ls['target_loss_ratio']:.0%} -> {review['target_loss_ratio']:.0%}).")
+
+    materiality = float(params["materiality_pct"])
+    min_act = float(params["min_member_years_to_act"])
+    last_cells = {(c["age_band"], c["gender"]): c for c in (last.get("cells") or [])}
+    for c in review["cells"]:
+        prev = last_cells.get((c["age_band"], c["gender"]))
+        if not prev:
+            continue
+        if c["gross_loss_ratio"] is not None and prev.get("gross_loss_ratio") is not None:
+            move = (c["gross_loss_ratio"] - prev["gross_loss_ratio"]) * 100
+            if abs(move) >= materiality:
+                out["material_moves"].append({
+                    "age_band": c["age_band"], "gender": c["gender"],
+                    "from": prev["gross_loss_ratio"], "to": c["gross_loss_ratio"],
+                    "points": round(move, 1),
+                })
+        if (prev.get("member_years") or 0) < min_act <= c["member_years"]:
+            out["newly_credible"].append({"age_band": c["age_band"], "gender": c["gender"], "member_years": c["member_years"]})
+        if prev.get("recommendation") and prev["recommendation"] != c["recommendation"]:
+            out["recommendation_changes"].append({
+                "age_band": c["age_band"], "gender": c["gender"],
+                "from": prev["recommendation"], "to": c["recommendation"],
+            })
+    return out
+
+
+def snapshot_of(review: dict, params: dict, data_as_of: Optional[date]) -> dict:
+    """What gets stored for next month's comparison - the totals, the
+    parameters, and per-cell figures small enough to keep for years."""
+    return {
+        "product": review["product"],
+        "network_scope": review["network_scope"],
+        "network": review["network"],
+        "data_as_of": data_as_of,
+        "parameters": params,
+        "summary": {**review["totals"], "target_loss_ratio": review["target_loss_ratio"], "loading_pct": review["loading_pct"]},
+        "cells": [
+            {k: c.get(k) for k in (
+                "age_band", "gender", "lives", "member_years", "premium_pmpy", "cost_pmpy",
+                "gross_loss_ratio", "net_loss_ratio", "credibility", "suggested_rate",
+                "change_pct", "recommendation", "decision_action", "decision_change_pct",
+            )}
+            for c in review["cells"]
+        ],
+    }
+
+
+#: The decisions agreed for Bronze on the 31 Aug 2026 book, loaded once
+#: into an empty decisions table so the review opens with the team's
+#: actual position rather than a blank sheet. Editable on screen; once
+#: the table has rows this list is never consulted again.
+SEED_DECISIONS: List[dict] = [
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 0, "to_age": 1, "gender": None,
+     "action": "increase", "change_pct": 100.0, "note": "Infants 0-1 ran at 215% gross (29 lives) - priced as a separate band from 2-17."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 18, "to_age": 35, "gender": "M",
+     "action": "discount", "change_pct": -15.0, "note": "Males 18-35 at 52% gross, fully credible - room to compete."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 26, "to_age": 35, "gender": "F",
+     "action": "increase", "change_pct": 100.0, "note": "Females 26-35 at 158% gross (211 lives) - the single cell driving the 18-40 result. Capped at +100% for this round; cost-to-target is +127%."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 18, "to_age": 25, "gender": "F",
+     "action": "hold", "change_pct": 0.0, "note": "Held this round (34 lives, 109% gross) - watch."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 36, "to_age": 40, "gender": None,
+     "action": "hold", "change_pct": 0.0, "note": "Held this round (90-98% gross) - watch."},
+    {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 35, "gender": "M",
+     "action": "increase", "change_pct": 50.0, "note": "Platinum males 18-35: 105% gross excluding one AED 209k claim; usage-driven (OP 2.4x, IP 3.4x other networks)."},
+    {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 35, "gender": "F",
+     "action": "increase", "change_pct": 100.0, "note": "Platinum females 18-35 at 146% gross; maternity only 19% of claims."},
+    {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 36, "to_age": 40, "gender": None,
+     "action": "review", "change_pct": 50.0, "note": "Under review - 128-181% gross on 8-12 member-years each; +50% suggested as a half step."},
+]
