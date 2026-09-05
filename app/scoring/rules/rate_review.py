@@ -619,7 +619,7 @@ SEED_DECISIONS: List[dict] = [
      "action": "increase", "change_pct": 30.0, "note": "Underwriting judgement, not book data - one life on risk (0.4 member-years, one AED 105k claim). +30% as a precaution for an age band the book has no experience in; refer any 70+ quote to an underwriter."},
     # Silver, agreed on the same book.
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 0, "to_age": 1, "gender": None,
-     "action": "increase", "change_pct": 15.0, "note": "Infants 0-1 at 126-155% gross (43 lives) - a first step; still above 100% after it, re-check monthly."},
+     "action": "increase", "change_pct": 20.0, "note": "Infants 0-1 at 126-155% gross (43 lives) - a first step; still above 100% after it, re-check monthly."},
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 2, "to_age": 17, "gender": None,
      "action": "discount", "change_pct": -10.0, "note": "Children 2-17 at 50-55% gross (193 lives, fully credible) - room to compete on family groups."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 2, "to_age": 17, "gender": None,
