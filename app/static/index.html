@@ -948,6 +948,49 @@
   .rdl-pill.watch { background: var(--warning-bg); color: var(--warning); }
   .rdl-pill.clear { background: var(--good-bg); color: var(--good); }
   .rdl-pill.none { background: var(--surface-2); color: var(--ink-2); }
+
+  /* Rate Review - one product, one table, read top to bottom. */
+  .rv-controls { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+  .rv-controls > div { min-width: 150px; }
+  .rv-controls label { margin-top: 0; }
+  .rv-actions { display: flex; gap: 8px; margin-left: auto; align-items: flex-end; }
+  .rv-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 6px; }
+  .rv-strip .kpi .value { font-size: 19px; }
+  .rv-strip .kpi .after { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+  .rv-table { width: 100%; min-width: 880px; }
+  .rv-table th, .rv-table td { padding: 7px 6px; }
+  .rv-table th { white-space: normal; }
+  .rv-table td { vertical-align: middle; white-space: nowrap; }
+  .rv-table td.band { font-weight: 700; }
+  .rv-table tr.band-first td { border-top: 2px solid var(--border-strong); }
+  .rv-table tr:not(.why-row) td { border-bottom: none; padding-bottom: 4px; }
+  .rv-table tr.why-row td { padding-top: 0; padding-bottom: 8px; }
+  .rv-table td.num, .rv-table th.num { text-align: right; }
+  .rv-table td.why { font-size: 11px; color: var(--ink-2); line-height: 1.4; white-space: normal; max-width: 0; }
+  .rv-table td.why b { color: var(--ink); }
+  .rv-table tr.undecided td { color: var(--ink-muted); }
+  .rv-table tr.undecided td.why { color: var(--ink-muted); }
+  .rv-lr { display: inline-flex; min-width: 54px; justify-content: center; padding: 2px 8px; border-radius: 4px; font-weight: 700; font-size: 12px; }
+  .rv-lr.good { background: var(--good-bg); color: var(--good); }
+  .rv-lr.warn { background: var(--warning-bg); color: var(--warning); }
+  .rv-lr.bad { background: var(--critical-bg); color: var(--critical); }
+  .rv-lr.none { background: var(--surface-2); color: var(--ink-muted); }
+  .rv-act { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .rv-act.increase { background: var(--critical-bg); color: var(--critical); }
+  .rv-act.discount { background: var(--good-bg); color: var(--good); }
+  .rv-act.hold { background: var(--surface-2); color: var(--ink-2); }
+  .rv-act.review { background: var(--warning-bg); color: var(--warning); }
+  .rv-act.none { background: transparent; color: var(--ink-muted); border: 1px dashed var(--border-strong); font-weight: 500; }
+  .rv-thin { font-size: 10px; font-weight: 700; color: var(--warning); background: var(--warning-bg); padding: 1px 6px; border-radius: 3px; margin-left: 5px; }
+  .rv-warn { border-left: 3px solid var(--warning); background: var(--warning-bg); padding: 8px 12px; border-radius: 6px; margin: 6px 0; font-size: 12.5px; }
+  .rv-move { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+  .rv-move .kpi .value { font-size: 17px; }
+  .rv-params { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px 14px; }
+  .rv-params label { margin-top: 0; }
+  .rv-params .hint { margin: 2px 0 0; font-size: 11px; }
+  .rv-foot { font-size: 11.5px; color: var(--ink-2); line-height: 1.6; margin-top: 12px; }
+  .rv-two { display: grid; grid-template-columns: 1fr; gap: 0; }
+  @media (min-width: 1700px) { .rv-two { grid-template-columns: 1fr 1fr; gap: 16px; } }
 </style>
 </head>
 <body>
@@ -976,6 +1019,7 @@
       <div class="hc-rail-group">
         <div class="hc-rail-label">New Business</div>
         <button class="hc-rail-item" id="hc-rail-new-quote" onclick="hcRailNewQuote()">New Quote</button>
+        <button class="hc-rail-item" id="hc-rail-rate-review" onclick="hcRailRateReview()">Rate Review</button>
         <button class="hc-rail-item" id="hc-rail-card-calibration" onclick="hcRailRateCardCalibration()">Rate Card Calibration</button>
         <button class="hc-rail-item" id="hc-rail-rate-cards" onclick="hcRailRateCards()">Rate Cards</button>
         <button class="hc-rail-item" id="hc-rail-intl-comparison" onclick="hcRailIntlComparison()">International Comparison</button>
@@ -1908,6 +1952,332 @@ function _calibrationPivotHtml(cells, product, network, region) {
       </tr>
     </table>
   `;
+}
+
+/* Rate Review - the monthly question, one product at a time: what does
+   each age band and sex cost, what does the book say it should be priced
+   at, what did we decide, and is the decision holding up on this month's
+   data. Suggestion (arithmetic), decision (agreed) and parameters (what
+   the review is judged against) are shown as three separate things,
+   because they are. */
+let rvState = { product: 'Bronze', scope: 'excluding', network: 'MSH Platinum', showParams: false, showDecisions: false };
+
+function _rvLrClass(v) {
+  if (v == null) return 'none';
+  return v > 1.0 ? 'bad' : v >= 0.7 ? 'warn' : 'good';
+}
+function _rvLr(v) {
+  return `<span class="rv-lr ${_rvLrClass(v)}">${v == null ? '-' : (v * 100).toFixed(0) + '%'}</span>`;
+}
+function _rvActClass(action) {
+  return { increase: 'increase', discount: 'discount', hold: 'hold', review: 'review' }[action] || 'none';
+}
+function _rvActLabel(cell) {
+  const a = cell.decision_action;
+  if (!cell.decision) return 'No decision yet';
+  const pct = cell.decision_change_pct;
+  if (a === 'hold') return 'Hold';
+  if (a === 'review') return `Review ${pct > 0 ? '+' : ''}${pct.toFixed(0)}%`;
+  return `${pct > 0 ? '+' : ''}${pct.toFixed(0)}%`;
+}
+function _rvSuggestLabel(cell) {
+  const r = cell.recommendation;
+  if (r === 'No data') return '<span class="rv-act none">No data</span>';
+  if (r === 'Review - thin data') return `<span class="rv-act review">Thin data</span>`;
+  if (r === 'Hold') return `<span class="rv-act hold">Hold</span>`;
+  const pct = cell.capped_change_pct;
+  const capped = Math.abs((cell.change_pct || 0) - pct) > 0.5;
+  return `<span class="rv-act ${r === 'Increase' ? 'increase' : 'discount'}">${pct > 0 ? '+' : ''}${pct.toFixed(0)}%${capped ? ' cap' : ''}</span>`;
+}
+
+function _rvMainTableHtml(r) {
+  const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const bands = [];
+  r.cells.forEach(c => { if (!bands.includes(c.age_band)) bands.push(c.age_band); });
+  const rows = bands.map(band => {
+    const cells = r.cells.filter(c => c.age_band === band);
+    if (!cells.some(c => c.lives)) return '';  // a band with no lives on either sex says nothing
+    return cells.map((c, i) => `
+      <tr class="${i === 0 ? 'band-first' : 'band-second'} ${c.decision ? '' : 'undecided'}">
+        <td class="band">${i === 0 ? escapeHtml(band) : ''}</td>
+        <td>${c.gender === 'M' ? 'Male' : 'Female'}</td>
+        <td class="num">${c.lives}${c.thin && c.lives ? '<span class="rv-thin">thin</span>' : ''}</td>
+        <td class="num">${money(c.current_rate)}</td>
+        <td class="num">${money(c.cost_pmpy)}</td>
+        <td class="num">${_rvLr(c.gross_loss_ratio)}</td>
+        <td class="num">${_rvLr(c.net_loss_ratio)}</td>
+        <td class="num">${money(c.suggested_rate)}</td>
+        <td>${_rvSuggestLabel(c)}</td>
+        <td><span class="rv-act ${_rvActClass(c.decision ? c.decision_action : null)}">${escapeHtml(_rvActLabel(c))}</span></td>
+        <td class="num">${c.decision ? money(c.rate_after_decision) : '-'}</td>
+        <td class="num">${c.decision ? _rvLr(c.gross_loss_ratio_after) : '<span class="rv-lr none">-</span>'}</td>
+      </tr>
+      <tr class="why-row ${c.decision ? '' : 'undecided'}"><td></td><td colspan="11" class="why">${escapeHtml(c.reason)}${c.decision && c.decision.note ? ` <b>Decision:</b> ${escapeHtml(c.decision.note)}` : ''}</td></tr>`).join('');
+  }).join('');
+  return `
+    <div style="overflow-x:auto;">
+    <table class="rv-table">
+      <tr>
+        <th>Age</th><th>Sex</th><th class="num">Lives</th>
+        <th class="num">Rate now</th>
+        <th class="num">Cost / yr</th>
+        <th class="num">Gross LR</th><th class="num">Net LR</th>
+        <th class="num">Suggested</th><th>Book says</th>
+        <th>Agreed action</th>
+        <th class="num">Rate after</th><th class="num">Gross after</th>
+      </tr>
+      ${rows}
+    </table>
+    </div>`;
+}
+
+function _rvValidationHtml(r) {
+  const v = r.validation || {};
+  const pct = x => x == null ? '-' : (x * 100).toFixed(0) + '%';
+  const warnings = (v.warnings || []).map(w => `<div class="rv-warn">${escapeHtml(w)}</div>`).join('');
+  let movement = '';
+  if (v.last_review) {
+    const sign = x => x == null ? '-' : (x > 0 ? '+' : '') + x;
+    movement = `
+      <div class="hint" style="margin-top:8px;">Compared with the review saved on <strong>${escapeHtml(v.last_review.data_as_of || '?')}</strong> data (${escapeHtml((v.last_review.created_at || '').slice(0, 10))}).</div>
+      <div class="rv-move">
+        <div class="kpi"><span class="label">Lives</span><div class="value">${sign(v.lives_change)}</div><span class="label">${v.lives_change_pct == null ? '' : sign(v.lives_change_pct) + '%'} growth</span></div>
+        <div class="kpi"><span class="label">Member-years</span><div class="value">${sign(v.member_years_change)}</div><span class="label">new evidence since last review</span></div>
+        <div class="kpi"><span class="label">Gross LR</span><div class="value">${pct(v.last_review.gross_loss_ratio)} &rarr; ${pct(r.totals.gross_loss_ratio)}</div><span class="label">${v.gross_loss_ratio_change_points == null ? '' : sign(v.gross_loss_ratio_change_points) + ' points'}</span></div>
+        <div class="kpi"><span class="label">Cells that moved</span><div class="value">${(v.material_moves || []).length}</div><span class="label">by more than ${r.parameters.materiality_pct} points</span></div>
+        <div class="kpi"><span class="label">Newly credible</span><div class="value">${(v.newly_credible || []).length}</div><span class="label">crossed ${r.parameters.min_member_years_to_act} member-years</span></div>
+        <div class="kpi"><span class="label">Recommendation changed</span><div class="value">${(v.recommendation_changes || []).length}</div><span class="label">cells</span></div>
+      </div>
+      ${(v.material_moves || []).length ? `<table style="margin-top:10px;"><tr><th>Cell</th><th class="num">Was</th><th class="num">Now</th><th class="num">Move</th></tr>
+        ${v.material_moves.map(m => `<tr><td>${escapeHtml(m.age_band)} ${m.gender === 'M' ? 'Male' : 'Female'}</td><td class="num">${pct(m.from)}</td><td class="num">${_rvLr(m.to)}</td><td class="num" style="font-weight:700;">${m.points > 0 ? '+' : ''}${m.points} pts</td></tr>`).join('')}
+      </table>` : ''}
+      ${(v.recommendation_changes || []).length ? `<div class="hint" style="margin-top:8px;"><strong>Recommendation changed:</strong> ${v.recommendation_changes.map(c => `${escapeHtml(c.age_band)} ${c.gender === 'M' ? 'M' : 'F'}: ${escapeHtml(c.from)} &rarr; ${escapeHtml(c.to)}`).join(' &middot; ')}</div>` : ''}
+      ${(v.newly_credible || []).length ? `<div class="hint" style="margin-top:4px;"><strong>Now credible enough to act on:</strong> ${v.newly_credible.map(c => `${escapeHtml(c.age_band)} ${c.gender} (${c.member_years} member-years)`).join(' &middot; ')}</div>` : ''}`;
+  }
+  return `
+    <div class="card">
+      <h3>This month's validation</h3>
+      <div class="hint">Data as of <strong>${escapeHtml(r.data_as_of || 'not recorded')}</strong>. Every figure on this page is re-computed from the current upload; the parameters and decisions are stored and re-checked against it.</div>
+      ${warnings}
+      ${movement}
+    </div>`;
+}
+
+function _rvBreakdownHtml(r) {
+  const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const nets = (r.networks || []).map(n => `
+    <tr><td>${escapeHtml(n.network)}</td><td class="num">${n.lives}</td><td class="num">${money(n.premium_pmpy)}</td><td class="num">${money(n.cost_pmpy)}</td>
+      <td class="num">${_rvLr(n.gross_loss_ratio)}</td><td class="num">${n.cost_factor == null ? '-' : n.cost_factor.toFixed(2) + '&times;'}</td><td class="num">${n.premium_factor == null ? '-' : n.premium_factor.toFixed(2) + '&times;'}</td></tr>`).join('');
+  const rels = (r.relations || []).map(x => `
+    <tr><td>${escapeHtml(x.relation)}</td><td>${x.gender === 'M' ? 'Male' : 'Female'}</td><td class="num">${x.lives}</td><td class="num">${money(x.premium_pmpy)}</td><td class="num">${money(x.cost_pmpy)}</td><td class="num">${_rvLr(x.gross_loss_ratio)}</td></tr>`).join('');
+  return `
+    <div class="rv-two">
+      <div class="card">
+        <h3>${escapeHtml(r.product)} by network</h3>
+        <div class="hint">Cost factor = each network's cost per member-year against the cheapest credible network; premium factor = what the card actually charges. Where the two differ is a network loading the card is missing.</div>
+        <table><tr><th>Network</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Cost factor</th><th class="num">Premium factor</th></tr>${nets}</table>
+      </div>
+      <div class="card">
+        <h3>${escapeHtml(r.scope_label)} by relation</h3>
+        <div class="hint">Whether a female result is a spouse story or a female story decides whether the fix is a spouse surcharge or the female rate.</div>
+        <table><tr><th>Relation</th><th>Sex</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th></tr>${rels}</table>
+      </div>
+    </div>`;
+}
+
+function _rvParametersHtml(r) {
+  const p = r.parameters;
+  const field = (key, label, value, hint, step) => `
+    <div><label>${label}</label><input type="number" step="${step || 'any'}" value="${value}" id="rv-param-${key}"><div class="hint">${hint}</div></div>`;
+  const loadings = Object.entries(p.loading_by_product || {}).map(([prod, v]) =>
+    `<div><label>Loading - ${escapeHtml(prod)} %</label><input type="number" step="0.5" value="${(v * 100).toFixed(1)}" data-loading-product="${escapeHtml(prod)}"><div class="hint">expense loading grossed up on the suggested rate</div></div>`).join('');
+  return `
+    <div class="card" id="rv-params-card">
+      <h3>Parameters - validate every month</h3>
+      <div class="hint">These are the judgements the review is measured against. Each is stored with the date it was last changed; change one and every cell re-computes. Reset a field to blank to go back to the house default.</div>
+      <div class="rv-params" style="margin-top:12px;">
+        ${field('target_loss_ratio', 'Target loss ratio (net) %', (p.target_loss_ratio * 100).toFixed(0), 'the loss ratio each cell is priced TO, after loading', 1)}
+        ${loadings}
+        ${field('full_credibility_member_years', 'Full credibility (member-years)', p.full_credibility_member_years, 'exposure at which a cell\'s own experience is trusted in full', 1)}
+        ${field('min_member_years_to_act', 'Minimum member-years to act', p.min_member_years_to_act, 'below this a cell is shown as thin, never as a call', 1)}
+        ${field('max_increase_pct', 'Max increase per round %', p.max_increase_pct, 'the most any cell may rise in one review', 5)}
+        ${field('max_discount_pct', 'Max discount per round %', p.max_discount_pct, 'the most any cell may fall in one review', 5)}
+        ${field('large_claim_cap', 'Large-claim cap (AED)', p.large_claim_cap || '', 'per-member claims above this are pooled across the book for pricing; blank = no cap', 10000)}
+        ${field('materiality_pct', 'Materiality (LR points)', p.materiality_pct, 'a smaller month-to-month move is noise, not news', 1)}
+        ${field('stale_after_days', 'Data stale after (days)', p.stale_after_days, 'older data than this is flagged before acting', 1)}
+        <div><label>Age bands</label><input type="text" id="rv-param-age_bands" value="${escapeHtml(p.age_bands.map(b => b.join('-')).join(', '))}"><div class="hint">the bands the review runs on, e.g. 0-1, 2-17, 18-25 ...</div></div>
+        <div><label>Networks reviewed separately</label><input type="text" id="rv-param-separate_networks" value="${escapeHtml((p.separate_networks || []).join(', '))}"><div class="hint">kept out of the main table, each on its own</div></div>
+      </div>
+      <div class="row" style="margin-top:14px; gap:8px;">
+        <button class="primary" onclick="rvSaveParameters()">Save parameters</button>
+        <button onclick="rvState.showParams = false; hcRailRateReview();">Close</button>
+      </div>
+    </div>`;
+}
+
+function _rvDecisionsHtml(r) {
+  const scopeLabel = d => d.network_scope === 'all' ? 'All networks' : d.network_scope === 'only' ? `${d.network} only` : 'Excluding separate networks';
+  const rows = (r.decisions || []).map(d => `
+    <tr>
+      <td>${escapeHtml(scopeLabel(d))}</td>
+      <td>${d.from_age}-${d.to_age}</td>
+      <td>${d.gender === 'M' ? 'Male' : d.gender === 'F' ? 'Female' : 'Both'}</td>
+      <td><span class="rv-act ${_rvActClass(d.action)}">${escapeHtml(d.action)} ${d.action === 'hold' ? '' : (d.change_pct > 0 ? '+' : '') + d.change_pct.toFixed(0) + '%'}</span></td>
+      <td style="font-size:12px; color:var(--ink-2);">${escapeHtml(d.note || '')}</td>
+      <td style="font-size:11px; color:var(--ink-muted); white-space:nowrap;">${escapeHtml((d.updated_at || '').slice(0, 10))}</td>
+      <td><button style="padding:3px 9px; font-size:11.5px;" onclick="rvDeleteDecision(${d.id})">Remove</button></td>
+    </tr>`).join('');
+  return `
+    <div class="card" id="rv-decisions-card">
+      <h3>Agreed decisions - ${escapeHtml(r.product)}</h3>
+      <div class="hint">What the team decided, kept apart from what the book suggests. A decision spanning several bands applies to each of them; a cell with no decision reads "No decision yet" on the table above, never "Hold".</div>
+      <table style="margin-top:10px;"><tr><th>Scope</th><th>Ages</th><th>Sex</th><th>Action</th><th>Note</th><th>Updated</th><th></th></tr>
+        ${rows || '<tr><td colspan="7">No decisions recorded yet.</td></tr>'}
+      </table>
+      <h4 style="margin-top:16px;">Add a decision</h4>
+      <div class="rv-params">
+        <div><label>Scope</label><select id="rv-dec-scope">
+          <option value="excluding">Excluding separate networks</option>
+          <option value="only">${escapeHtml(rvState.network)} only</option>
+          <option value="all">All networks</option></select></div>
+        <div><label>From age</label><input type="number" id="rv-dec-from" value="18"></div>
+        <div><label>To age</label><input type="number" id="rv-dec-to" value="40"></div>
+        <div><label>Sex</label><select id="rv-dec-gender"><option value="">Both</option><option value="M">Male</option><option value="F">Female</option></select></div>
+        <div><label>Action</label><select id="rv-dec-action"><option value="increase">Increase</option><option value="discount">Discount</option><option value="hold">Hold</option><option value="review">Review</option></select></div>
+        <div><label>Change %</label><input type="number" id="rv-dec-pct" value="0" step="5"><div class="hint">positive for an increase, negative for a discount, 0 for hold</div></div>
+        <div style="grid-column: 1 / -1;"><label>Note (why)</label><input type="text" id="rv-dec-note" placeholder="e.g. 211 lives at 158% gross, fully credible"></div>
+      </div>
+      <div class="row" style="margin-top:12px; gap:8px;">
+        <button class="primary" onclick="rvAddDecision()">Add decision</button>
+        <button onclick="rvState.showDecisions = false; hcRailRateReview();">Close</button>
+      </div>
+    </div>`;
+}
+
+async function hcRailRateReview() {
+  _hcRailSetActive('hc-rail-rate-review');
+  currentCase = null;
+  const main = document.getElementById('main');
+  main.innerHTML = '<div class="card"><h3>Rate Review</h3><div class="hint">Reading the book&hellip;</div></div>';
+  try {
+    const p = new URLSearchParams({ product: rvState.product, network_scope: rvState.scope });
+    if (rvState.scope === 'only') p.set('network', rvState.network);
+    const r = await api(`/new-business/rate-review?${p}`);
+    const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const pct = v => v == null ? '-' : (v * 100).toFixed(0) + '%';
+    const t = r.totals;
+    const separate = r.parameters.separate_networks || [];
+    if (separate.length && !separate.includes(rvState.network)) rvState.network = separate[0];
+    const scopeOptions = [
+      ['excluding', separate.length ? `All networks except ${separate.join(', ')}` : 'All networks'],
+      ...separate.map(n => ['only:' + n, `${n} only`]),
+      ['all', 'Whole product (every network)'],
+    ];
+    const scopeValue = rvState.scope === 'only' ? 'only:' + rvState.network : rvState.scope;
+    const decided = r.cells.filter(c => c.decision).length;
+
+    main.innerHTML = `
+      <div class="card">
+        <h3>Rate Review - ${escapeHtml(r.scope_label)}</h3>
+        <div class="hint">For each age band and sex: what the book earns, what it costs (paid + outstanding + IBNR), the loss ratio, what the arithmetic suggests at a ${pct(r.target_loss_ratio)} net target and ${(r.loading_pct * 100).toFixed(1)}% loading - and beside it, what was agreed and where the cell lands under it.</div>
+        <div class="rv-controls" style="margin-top:12px;">
+          <div><label>Product</label><select onchange="rvState.product = this.value; hcRailRateReview();">
+            ${(r.products || [r.product]).map(x => `<option value="${escapeHtml(x)}" ${x === r.product ? 'selected' : ''}>${escapeHtml(x)}</option>`).join('')}
+          </select></div>
+          <div style="min-width:260px;"><label>Table</label><select onchange="const v = this.value; if (v.startsWith('only:')) { rvState.scope = 'only'; rvState.network = v.slice(5); } else { rvState.scope = v; } hcRailRateReview();">
+            ${scopeOptions.map(([v, l]) => `<option value="${escapeHtml(v)}" ${v === scopeValue ? 'selected' : ''}>${escapeHtml(l)}</option>`).join('')}
+          </select></div>
+          <div class="rv-actions">
+            <button onclick="rvState.showParams = !rvState.showParams; hcRailRateReview();">Parameters</button>
+            <button onclick="rvState.showDecisions = !rvState.showDecisions; hcRailRateReview();">Decisions (${decided} cells covered)</button>
+            <button class="primary" onclick="rvSaveSnapshot()">Save this month's review</button>
+          </div>
+        </div>
+        <div class="rv-strip">
+          <div class="kpi"><span class="label">Lives</span><div class="value">${t.lives.toLocaleString()}</div><div class="after">${t.member_years.toLocaleString(undefined, { maximumFractionDigits: 0 })} member-years</div></div>
+          <div class="kpi"><span class="label">Premium / member-yr</span><div class="value">${money(t.premium_pmpy)}</div><div class="after">cost ${money(t.cost_pmpy)}</div></div>
+          <div class="kpi"><span class="label">Gross loss ratio</span><div class="value">${_rvLr(t.gross_loss_ratio)}</div><div class="after">after decisions ${_rvLr(t.gross_loss_ratio_after)}</div></div>
+          <div class="kpi"><span class="label">Net loss ratio</span><div class="value">${_rvLr(t.net_loss_ratio)}</div><div class="after">after decisions ${_rvLr(t.net_loss_ratio_after)} &middot; target ${pct(r.target_loss_ratio)}</div></div>
+          <div class="kpi"><span class="label">Premium under decisions</span><div class="value">${t.premium_change_pct == null ? '-' : (t.premium_change_pct > 0 ? '+' : '') + t.premium_change_pct.toFixed(1) + '%'}</div><div class="after">same book, same claims</div></div>
+          <div class="kpi"><span class="label">Data as of</span><div class="value" style="font-size:16px;">${escapeHtml(r.data_as_of || '-')}</div><div class="after">${r.last_snapshot ? 'last review ' + escapeHtml(r.last_snapshot.data_as_of || '') : 'no review saved yet'}</div></div>
+        </div>
+      </div>
+      ${rvState.showParams ? _rvParametersHtml(r) : ''}
+      ${rvState.showDecisions ? _rvDecisionsHtml(r) : ''}
+      ${_rvValidationHtml(r)}
+      <div class="card">
+        <h3>Age band &times; sex</h3>
+        ${_rvMainTableHtml(r)}
+        <div class="rv-foot">
+          <b>Rate now</b> is the card price where the card has this exact band, otherwise the premium actually earned per member-year in the cell.
+          <b>Book suggests</b> = cost per member-year (claims capped at AED ${money(r.large_claim_cap)} per member, excess pooled) &divide; ${pct(r.target_loss_ratio)} &divide; (1 &minus; ${(r.loading_pct * 100).toFixed(1)}%), credibility-blended toward the band (full credibility at ${r.parameters.full_credibility_member_years} member-years), then held to the round's caps of +${r.parameters.max_increase_pct}% / &minus;${r.parameters.max_discount_pct}%.
+          <b>Thin</b> = under ${r.parameters.min_member_years_to_act} member-years - shown, never a call.
+          <b>Rate after / LR after</b> apply the agreed action to today's earned premium with the same claims.
+        </div>
+      </div>
+      ${_rvBreakdownHtml(r)}
+    `;
+  } catch (err) {
+    main.innerHTML = `<div class="card"><h3>Rate Review</h3><div class="hint">${escapeHtml(err.message)}</div>
+      <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button></div>`;
+  }
+}
+
+async function rvSaveSnapshot() {
+  const p = new URLSearchParams({ product: rvState.product, network_scope: rvState.scope });
+  if (rvState.scope === 'only') p.set('network', rvState.network);
+  try {
+    const s = await api(`/new-business/rate-review/snapshots?${p}`, { method: 'POST' });
+    toast(`Saved this review on ${s.data_as_of || 'current'} data - next month's will compare against it`);
+    hcRailRateReview();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function rvSaveParameters() {
+  const num = key => { const el = document.getElementById(`rv-param-${key}`); return el && el.value !== '' ? parseFloat(el.value) : null; };
+  const body = {};
+  const tlr = num('target_loss_ratio'); if (tlr != null) body.target_loss_ratio = tlr / 100;
+  ['full_credibility_member_years', 'min_member_years_to_act', 'max_increase_pct', 'max_discount_pct', 'materiality_pct'].forEach(k => { const v = num(k); if (v != null) body[k] = v; });
+  const stale = num('stale_after_days'); if (stale != null) body.stale_after_days = Math.round(stale);
+  const cap = document.getElementById('rv-param-large_claim_cap');
+  body.large_claim_cap = cap && cap.value !== '' ? parseFloat(cap.value) : 0;
+  const loadings = {};
+  document.querySelectorAll('[data-loading-product]').forEach(el => { if (el.value !== '') loadings[el.dataset.loadingProduct] = parseFloat(el.value) / 100; });
+  if (Object.keys(loadings).length) body.loading_by_product = loadings;
+  const bandsText = (document.getElementById('rv-param-age_bands') || {}).value || '';
+  const bands = bandsText.split(',').map(s => s.trim()).filter(Boolean).map(s => s.split('-').map(x => parseInt(x, 10)));
+  if (bands.length && bands.every(b => b.length === 2 && !isNaN(b[0]) && !isNaN(b[1]))) body.age_bands = bands;
+  const nets = (document.getElementById('rv-param-separate_networks') || {}).value || '';
+  body.separate_networks = nets.split(',').map(s => s.trim()).filter(Boolean);
+  try {
+    await api('/new-business/rate-review/parameters', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('Parameters saved - every cell re-computed');
+    hcRailRateReview();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function rvAddDecision() {
+  const g = id => document.getElementById(id);
+  const scope = g('rv-dec-scope').value;
+  const body = {
+    product: rvState.product, network_scope: scope, network: scope === 'only' ? rvState.network : null,
+    from_age: parseInt(g('rv-dec-from').value, 10), to_age: parseInt(g('rv-dec-to').value, 10),
+    gender: g('rv-dec-gender').value || null, action: g('rv-dec-action').value,
+    change_pct: parseFloat(g('rv-dec-pct').value) || 0, note: g('rv-dec-note').value || null,
+  };
+  try {
+    await api('/new-business/rate-review/decisions', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    toast('Decision recorded');
+    hcRailRateReview();
+  } catch (err) { toast(err.message, true); }
+}
+
+async function rvDeleteDecision(id) {
+  if (!confirm('Remove this decision?')) return;
+  try {
+    await api(`/new-business/rate-review/decisions/${id}`, { method: 'DELETE' });
+    hcRailRateReview();
+  } catch (err) { toast(err.message, true); }
 }
 
 async function hcRailRateCardCalibration() {

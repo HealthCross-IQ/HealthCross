@@ -174,7 +174,7 @@ def _reason(cell: dict, params: dict) -> str:
     if cell["member_years"] <= 0 or cell["premium"] <= 0:
         return "No exposure in this cell."
     z = cell["credibility"]
-    cred = "fully credible" if z >= 1 else f"{z:.0%} credible - rest from the {cell['scope_label']} average"
+    cred = "fully credible" if z >= 1 else f"{z:.0%} credible - rest from the {cell['age_band']} band average"
     text = (
         f"{cell['lives']} lives, {cell['member_years']:.0f} member-years ({cred}). "
         f"Costs AED {cell['cost_pmpy']:,.0f} per member-year against {cell['premium_pmpy']:,.0f} earned: "
@@ -186,7 +186,7 @@ def _reason(cell: dict, params: dict) -> str:
             f"excess pooled across the book, priced cost {cell['pricing_cost_pmpy']:,.0f}."
         )
     if cell["relativity_capped"]:
-        text += " Blended cost held within the relativity band of the scope average."
+        text += " Blended cost held within the relativity band of the age band's average."
     if cell["recommendation"] in ("Increase", "Discount") and cell["capped_change_pct"] != cell["change_pct"]:
         text += f" Cost-to-target is {cell['change_pct']:+.0f}%; capped at {cell['capped_change_pct']:+.0f}% for this round."
     return text
@@ -240,25 +240,40 @@ def review_cells(
         if label and g in GENDERS:
             by_cell[(label, g)].append(r)
 
+    def _credibility(my: float) -> float:
+        return min(1.0, math.sqrt(my / full_cred)) if my > 0 and full_cred > 0 else 0.0
+
+    def _blend(own: Optional[float], complement: Optional[float], z: float) -> Optional[float]:
+        if own is None:
+            return complement
+        if complement is None:
+            return own
+        return z * own + (1 - z) * complement
+
     cells: List[dict] = []
     for low, high in bands:
         label = f"{low}-{high}"
+        # The band as a whole (both sexes) is the complement for each sex
+        # within it, and is itself blended toward the scope average. Age
+        # is the strongest structural driver of cost, so a band is never
+        # capped against the all-ages average - a child genuinely costs
+        # a third of an adult; only a sex within its band is held within
+        # the relativity range of the band.
+        band_rows = by_cell.get((label, "M"), []) + by_cell.get((label, "F"), [])
+        bt = _totals(band_rows, cap)
+        band_own = (bt["priced_claims"] / bt["member_years"] + pooled_load) if bt["member_years"] else None
+        band_cost = _blend(band_own, scope_cost, _credibility(bt["member_years"]))
         for g in GENDERS:
             rows = by_cell.get((label, g), [])
             t = _totals(rows, cap)
             my = t["member_years"]
             own_cost = (t["incurred"] / my) if my else None
             own_priced = (t["priced_claims"] / my + pooled_load) if my else None
-            z = min(1.0, math.sqrt(my / full_cred)) if my > 0 and full_cred > 0 else 0.0
-            if own_priced is None:
-                blended = scope_cost
-            elif scope_cost is None:
-                blended = own_priced
-            else:
-                blended = z * own_priced + (1 - z) * scope_cost
+            z = _credibility(my)
+            blended = _blend(own_priced, band_cost, z)
             rel_capped = False
-            if blended is not None and scope_cost:
-                bounded = max(min_rel * scope_cost, min(max_rel * scope_cost, blended))
+            if blended is not None and band_cost:
+                bounded = max(min_rel * band_cost, min(max_rel * band_cost, blended))
                 rel_capped = abs(bounded - blended) > 1e-9
                 blended = bounded
             suggested = (blended / target / (1 - loading)) if blended is not None else None
@@ -286,6 +301,7 @@ def review_cells(
                 "pricing_cost_pmpy": round(own_priced, 2) if own_priced is not None else None,
                 "capped_members": t["capped_members"],
                 "credibility": round(z, 4),
+                "band_cost_pmpy": round(band_cost, 2) if band_cost is not None else None,
                 "blended_cost_pmpy": round(blended, 2) if blended is not None else None,
                 "relativity_capped": rel_capped,
                 "gross_loss_ratio": round(gross, 4) if gross is not None else None,
@@ -360,12 +376,13 @@ def apply_decisions(review: dict, decisions: List[dict]) -> dict:
         for d in decisions:
             if (d.get("product") or "").strip().lower() != product.strip().lower():
                 continue
-            if (d.get("network_scope") or "all") != scope:
-                continue
-            if scope in ("only", "excluding") and (d.get("network") or "").strip().lower() != (network or "").strip().lower():
-                # An "excluding" decision with no network named applies to
-                # the product's standard excluding-table.
-                if not (scope == "excluding" and not d.get("network") and not network):
+            d_scope = d.get("network_scope") or "all"
+            # A decision taken for all networks applies on every table;
+            # a scoped one only on its own table.
+            if d_scope != "all":
+                if d_scope != scope:
+                    continue
+                if scope == "only" and (d.get("network") or "").strip().lower() != (network or "").strip().lower():
                     continue
             if d.get("gender") and d["gender"].strip().upper()[:1] != cell["gender"]:
                 continue
@@ -573,8 +590,12 @@ def snapshot_of(review: dict, params: dict, data_as_of: Optional[date]) -> dict:
 #: actual position rather than a blank sheet. Editable on screen; once
 #: the table has rows this list is never consulted again.
 SEED_DECISIONS: List[dict] = [
-    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 0, "to_age": 1, "gender": None,
-     "action": "increase", "change_pct": 100.0, "note": "Infants 0-1 ran at 215% gross (29 lives) - priced as a separate band from 2-17."},
+    {"product": "Bronze", "network_scope": "all", "network": None, "from_age": 0, "to_age": 1, "gender": None,
+     "action": "increase", "change_pct": 100.0, "note": "Infants 0-1 ran at 215% gross (29 lives) - priced as a separate band from 2-17, on every network."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 2, "to_age": 17, "gender": "F",
+     "action": "discount", "change_pct": -10.0, "note": "Girls 2-17 cost 1,469 against 3,845 charged (38% gross) - room to compete; -10% keeps them at 42% gross."},
+    {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 2, "to_age": 17, "gender": "M",
+     "action": "hold", "change_pct": 0.0, "note": "Boys 2-17 at 86% gross / 117% net - no room for a discount, not enough to raise."},
     {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 18, "to_age": 35, "gender": "M",
      "action": "discount", "change_pct": -15.0, "note": "Males 18-35 at 52% gross, fully credible - room to compete."},
     {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 26, "to_age": 35, "gender": "F",
@@ -583,6 +604,8 @@ SEED_DECISIONS: List[dict] = [
      "action": "hold", "change_pct": 0.0, "note": "Held this round (34 lives, 109% gross) - watch."},
     {"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 36, "to_age": 40, "gender": None,
      "action": "hold", "change_pct": 0.0, "note": "Held this round (90-98% gross) - watch."},
+    {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 2, "to_age": 17, "gender": None,
+     "action": "hold", "change_pct": 0.0, "note": "Platinum children 2-17 at 76-95% gross on thin data (56 lives) - hold."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 35, "gender": "M",
      "action": "increase", "change_pct": 50.0, "note": "Platinum males 18-35: 105% gross excluding one AED 209k claim; usage-driven (OP 2.4x, IP 3.4x other networks)."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 35, "gender": "F",

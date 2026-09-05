@@ -15,6 +15,7 @@ from app.api import (
     routes_feedback,
     routes_new_business_rating,
     routes_portfolio_analysis,
+    routes_rate_review,
     routes_reference_plans,
     routes_scoring,
 )
@@ -144,6 +145,7 @@ app.include_router(routes_admin.router)
 app.include_router(routes_analysis.router)
 app.include_router(routes_reference_plans.router)
 app.include_router(routes_new_business_rating.router)
+app.include_router(routes_rate_review.router)
 app.include_router(routes_portfolio_analysis.router)
 app.include_router(routes_chat.router)
 
