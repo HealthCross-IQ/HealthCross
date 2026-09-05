@@ -358,10 +358,9 @@ def _reviewed_price_payload(db: Session, case_id: int, as_of: Optional[date]) ->
     if not categories:
         raise HTTPException(status_code=400, detail="Each census category needs a Product and Network before this can price")
     design = {c["category"]: c for c in categories}
-    products = {c.get("product") for c in categories if c.get("product")}
-    if len(products) != 1:
-        raise HTTPException(status_code=400, detail="The reviewed price needs every category on one product")
-    product = products.pop()
+    products = sorted({c.get("product") for c in categories if c.get("product")})
+    if not products:
+        raise HTTPException(status_code=400, detail="Each census category needs a Product and Network before this can price")
 
     params = stored_parameters(db)
     separate = params.get("separate_networks") or []
@@ -370,28 +369,32 @@ def _reviewed_price_payload(db: Session, case_id: int, as_of: Optional[date]) ->
         results = book_analysis.run_analysis(db, as_of=effective_as_of, require_rate_card=False)
     except HTTPException:
         raise HTTPException(status_code=400, detail="Portfolio Analysis has no membership/claims uploaded - there is no book to price against")
-    decisions = stored_decisions(db, product)
     rate_cards = book_repo.rate_cards(db)
+    all_decisions = stored_decisions(db)
 
-    priced_census = [{**m, "network": (design.get(m.get("category")) or {}).get("network")} for m in census]
-    scopes = {"excluding"} | {f"only:{n}" for n in separate}
+    priced_census = [{**m, "network": (design.get(m.get("category")) or {}).get("network"),
+                      "product": (design.get(m.get("category")) or {}).get("product")} for m in census]
     reviews, factors = {}, {}
     bands = [tuple(b) for b in params["age_bands"]]
-    for key in scopes:
-        scope, network = ("only", key[5:]) if key.startswith("only:") else ("excluding", None)
-        review = rr.review_cells(results, product, params, network_scope=scope, network=network, rate_cards=rate_cards)
-        if review["totals"]["lives"] == 0:
-            continue
-        rr.apply_decisions(review, decisions)
-        reviews[key] = review
-        members = rr.scope_members(results, product, scope, network, separate)
-        needed = {(rr._band_label(m.get("age"), bands), (m.get("gender") or "").strip().upper()[:1])
-                  for m in priced_census
-                  if (f"only:{(m.get('network') or '').strip()}" if rr._is_separate(m.get("network"), separate) else "excluding") == key}
-        for band, g in needed:
-            if band and g in rr.GENDERS:
-                cell_members = [m for m in members if rr._band_label(m.get("age"), bands) == band and (m.get("gender") or "").strip().upper()[:1] == g]
-                factors[(key, band, g)] = rr.nationality_factors(cell_members, params)
+    for product in products:
+        decisions = [d for d in all_decisions if (d.get("product") or "") == product]
+        for scope_part in ["excluding"] + [f"only:{n}" for n in separate]:
+            key = f"{product}|{scope_part}"
+            scope, network = ("only", scope_part[5:]) if scope_part.startswith("only:") else ("excluding", None)
+            review = rr.review_cells(results, product, params, network_scope=scope, network=network, rate_cards=rate_cards)
+            if review["totals"]["lives"] == 0:
+                continue
+            rr.apply_decisions(review, decisions)
+            reviews[key] = review
+            members = rr.scope_members(results, product, scope, network, separate)
+            needed = {(rr._band_label(m.get("age"), bands), (m.get("gender") or "").strip().upper()[:1])
+                      for m in priced_census
+                      if m.get("product") == product
+                      and (f"only:{(m.get('network') or '').strip()}" if rr._is_separate(m.get("network"), separate) else "excluding") == scope_part}
+            for band, g in needed:
+                if band and g in rr.GENDERS:
+                    cell_members = [m for m in members if rr._band_label(m.get("age"), bands) == band and (m.get("gender") or "").strip().upper()[:1] == g]
+                    factors[(key, band, g)] = rr.nationality_factors(cell_members, params)
 
     out = rr.reviewed_price_for_census(priced_census, reviews, factors, params, rate_cards=rate_cards, categories_by_name=design)
     by_cat = {}
@@ -402,14 +405,16 @@ def _reviewed_price_payload(db: Session, case_id: int, as_of: Optional[date]) ->
             e["priced"] += 1
             e["reviewed_premium"] += m["price"]
     out["categories"] = [{**e, "reviewed_premium": round(e["reviewed_premium"], 2),
-                          "product": product, "network": (design.get(e["category"]) or {}).get("network")} for e in by_cat.values()]
+                          "product": (design.get(e["category"]) or {}).get("product"),
+                          "network": (design.get(e["category"]) or {}).get("network")} for e in by_cat.values()]
     quote = db.query(models.NewBusinessQuote).filter_by(case_id=case_id).order_by(models.NewBusinessQuote.created_at.desc()).first()
     card = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
     out["rate_card_premium"] = card or None
     out["gap_pct"] = round((out["reviewed_premium"] / card - 1) * 100, 1) if card and out["reviewed_premium"] else None
-    out["product"] = product
+    out["product"] = " + ".join(products)
+    out["products"] = products
     out["data_as_of"] = effective_as_of.isoformat() if effective_as_of else None
-    out["decisions_count"] = len(decisions)
+    out["decisions_count"] = sum(1 for d in all_decisions if (d.get("product") or "") in products)
     out["_context"] = {
         "case": case, "categories": categories, "params": params, "results": results,
         "reviews": reviews, "effective_as_of": effective_as_of, "quote": quote,
@@ -441,7 +446,6 @@ def get_underwriter_findings(case_id: int, as_of: Optional[date] = Query(None), 
     reviewed = _reviewed_price_payload(db, case_id, as_of)
     ctx = reviewed.pop("_context")
     case, categories, params, results, reviews = ctx["case"], ctx["categories"], ctx["params"], ctx["results"], ctx["reviews"]
-    product = reviewed["product"]
     lives = reviewed["member_count"]
 
     try:

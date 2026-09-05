@@ -704,3 +704,22 @@ def test_price_comparison_without_an_issued_quote_reports_no_discount(client, ra
     body = client.get(f"/cases/{case_id}/price-comparison").json()
     assert body["prices"]["issued_price"] is None
     assert body["discount"] is None
+
+
+def test_census_categories_carry_the_region_read_off_their_own_emirates(client):
+    from app.models import db_models as models
+    db = client.db_session_local()
+    case = models.Case(broker_name="b", company_name="Region test", industry="unknown", region="Dubai", business_type="new")
+    db.add(case)
+    db.commit()
+    db.add_all([
+        models.CensusRecord(case_id=case.id, category="A", age=30, gender="M", relation="employee", emirates="AUH"),
+        models.CensusRecord(case_id=case.id, category="A", age=32, gender="F", relation="employee", emirates="AUH"),
+        models.CensusRecord(case_id=case.id, category="B", age=40, gender="M", relation="employee", emirates="SHJ"),
+        models.CensusRecord(case_id=case.id, category="C", age=41, gender="M", relation="employee", emirates="DXB"),
+    ])
+    db.commit()
+    r = client.get(f"/cases/{case.id}/census-categories")
+    assert r.status_code == 200
+    by = {c["category"]: c["region"] for c in r.json()["categories"]}
+    assert by == {"A": "Abu Dhabi", "B": "Northern Emirates", "C": "Dubai"}

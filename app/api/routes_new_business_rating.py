@@ -215,11 +215,13 @@ def census_categories(case_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Case not found")
 
     counts: Dict[str, int] = defaultdict(int)
+    emirates_by_category: Dict[str, Dict[str, int]] = defaultdict(lambda: defaultdict(int))
     uncategorized = 0
     for c in case.census_records:
         category = _normalize_category(c.category)
         if category:
             counts[category] += 1
+            emirates_by_category[category][region_for_emirate(c.emirates)] += 1
         else:
             uncategorized += 1
 
@@ -229,7 +231,15 @@ def census_categories(case_id: int, db: Session = Depends(get_db)):
         suggested_product = pref.suggested_product if pref else None
 
     return {
-        "categories": [{"category": k, "member_count": v} for k, v in sorted(counts.items())],
+        # Each category's region is read off its own members' Emirates
+        # (DXB = Dubai, AUH = Abu Dhabi, the rest = Northern Emirates -
+        # see region_for_emirate), most common wins, so the variant
+        # options preview opens on the region the census actually is.
+        "categories": [
+            {"category": k, "member_count": v,
+             "region": max(emirates_by_category[k].items(), key=lambda kv: kv[1])[0] if emirates_by_category[k] else None}
+            for k, v in sorted(counts.items())
+        ],
         "uncategorized_member_count": uncategorized,
         "suggested_product": suggested_product,
     }

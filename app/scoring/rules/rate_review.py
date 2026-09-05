@@ -756,9 +756,12 @@ def reviewed_price_for_census(
     after the agreed decision, times that member's nationality factor
     inside the cell.
 
-    `reviews_by_scope` maps a scope key ("excluding", or "only:<network>")
-    to a review with decisions applied; `factors_by_cell` maps (scope
-    key, age band, sex) to nationality_factors() output. A member whose
+    `reviews_by_scope` maps a scope key ("<product>|excluding", or
+    "<product>|only:<network>") to a review with decisions applied;
+    `factors_by_cell` maps (scope key, age band, sex) to
+    nationality_factors() output. A census may put its categories on
+    different products (A on Platinum, B on Bronze) - each member is
+    priced on the review for the product their own category is on. A member whose
     cell has no decision is priced at the cell's current rate and
     flagged, so the total can never quietly rest on an unreviewed cell.
 
@@ -785,7 +788,9 @@ def reviewed_price_for_census(
     factor_weighted = 0.0
     for m in census:
         net = (m.get("network") or "").strip()
-        scope_key = f"only:{net}" if _is_separate(net, separate) else "excluding"
+        design = designs.get(m.get("category")) if designs else None
+        product = (design or {}).get("product") or m.get("product") or ""
+        scope_key = f"{product}|only:{net}" if _is_separate(net, separate) else f"{product}|excluding"
         review = reviews_by_scope.get(scope_key)
         band = _band_label(m.get("age"), bands)
         g = (m.get("gender") or "").strip().upper()[:1]
@@ -794,7 +799,7 @@ def reviewed_price_for_census(
             cell = next((c for c in review["cells"] if c["age_band"] == band and c["gender"] == g), None)
         if not cell or not cell.get("current_rate"):
             unmatched += 1
-            members_out.append({**m, "scope": scope_key, "age_band": band, "cell_rate": None, "reviewed_rate": None,
+            members_out.append({**m, "product": product, "scope": scope_key, "age_band": band, "cell_rate": None, "reviewed_rate": None,
                                 "nationality_factor": None, "price": None, "note": "no reviewed cell for this member"})
             continue
         pct = cell.get("decision_change_pct")
@@ -802,7 +807,6 @@ def reviewed_price_for_census(
             undecided += 1
             pct = 0.0
         base_rate, basis = cell["current_rate"], cell.get("current_rate_basis") or "earned premium"
-        design = designs.get(m.get("category")) if designs else None
         if cards and design and design.get("product") and design.get("network"):
             priced = price_member(m, {"product": design["product"], "network": design["network"], "tpa": design.get("tpa"),
                                       "variant_selections": {}}, cards, [])
@@ -827,7 +831,7 @@ def reviewed_price_for_census(
         factor_weighted += factor
         card_members += 1 if basis == "card" else 0
         members_out.append({
-            **m, "scope": scope_key, "age_band": band, "cell_rate": round(base_rate, 2), "rate_basis": basis,
+            **m, "product": product, "scope": scope_key, "age_band": band, "cell_rate": round(base_rate, 2), "rate_basis": basis,
             "decision_change_pct": pct if cell.get("decision") is not None else None,
             "reviewed_rate": round(reviewed_rate, 2), "nationality_factor": round(factor, 4),
             "price": round(price, 2),
@@ -881,16 +885,18 @@ def underwriter_findings(
     the reviewed price, the risk-based price and the reviews, so the page
     and the screens it summarises can never disagree.
     """
-    product = reviewed["product"]
-    loading = loading_for_product(params, product)
+    products = reviewed.get("products") or [reviewed.get("product")]
+    product = " + ".join(products)
+    loading_by_product = {p: loading_for_product(params, p) for p in products}
+    loading = loading_by_product[products[0]]
     members = reviewed["members"]
     priced = [m for m in members if m.get("price") is not None]
 
     # --- the census against the book's own cells
     groups: Dict[Tuple[str, str, str], dict] = {}
     for m in members:
-        key = (m.get("scope") or "excluding", m.get("age_band") or "?", (m.get("gender") or "?").upper()[:1])
-        g = groups.setdefault(key, {"scope": key[0], "age_band": key[1], "gender": key[2], "members": 0, "reviewed_premium": 0.0, "priced": 0})
+        key = (m.get("scope") or "|excluding", m.get("age_band") or "?", (m.get("gender") or "?").upper()[:1])
+        g = groups.setdefault(key, {"scope": key[0], "product": m.get("product") or "", "age_band": key[1], "gender": key[2], "members": 0, "reviewed_premium": 0.0, "priced": 0})
         g["members"] += 1
         if m.get("price") is not None:
             g["priced"] += 1
@@ -899,9 +905,10 @@ def underwriter_findings(
     for (scope, band, g), grp in groups.items():
         review = reviews.get(scope)
         cell = next((c for c in review["cells"] if c["age_band"] == band and c["gender"] == g), None) if review else None
+        scope_part = scope.split("|", 1)[1] if "|" in scope else scope
         population.append({
             **grp,
-            "scope_label": (scope[5:] if scope.startswith("only:") else "standard networks"),
+            "scope_label": ((grp["product"] + " ") if len(products) > 1 else "") + (scope_part[5:] if scope_part.startswith("only:") else "standard networks"),
             "reviewed_rate": round(grp["reviewed_premium"] / grp["priced"], 2) if grp["priced"] else None,
             "reviewed_premium": round(grp["reviewed_premium"], 2),
             "book_lives": cell["lives"] if cell else None,
@@ -935,10 +942,14 @@ def underwriter_findings(
         key=lambda r: -r["members"],
     )
 
-    # --- the census's network(s) on the book
-    nets = network_breakdown(results, product, loading)
+    # --- the census's network(s) on the book, per product the census is on
+    network_rows = []
     census_networks = sorted({(c.get("network") or "") for c in categories if c.get("network")})
-    network_rows = [n for n in nets if n["network"] in census_networks]
+    for prod in products:
+        prod_networks = {(c.get("network") or "").strip() for c in categories if (c.get("product") or "") == prod}
+        for n in network_breakdown(results, prod, loading_by_product[prod]):
+            if n["network"] in prod_networks:
+                network_rows.append({**n, "product": prod})
 
     # --- prices
     risk_total = risk.get("suggested_premium") if risk and "error" not in risk else None
@@ -1016,7 +1027,7 @@ def underwriter_findings(
     why = []
     for p in population[:3]:
         if p["book_gross_loss_ratio"] is None:
-            why.append({"tone": "grey", "text": f"{p['members']} {'male' if p['gender']=='M' else 'female'}(s) aged {p['age_band']} - our book has no {product} experience for this cell."})
+            why.append({"tone": "grey", "text": f"{p['members']} {'male' if p['gender']=='M' else 'female'}(s) aged {p['age_band']} - our book has no {p.get('product') or product} experience for this cell."})
             continue
         lr = p["book_gross_loss_ratio"]
         cred_txt = "fully credible" if (p["book_credibility"] or 0) >= 1 else f"{p['book_credibility']:.0%} credible"
@@ -1048,7 +1059,7 @@ def underwriter_findings(
         if n.get("gross_loss_ratio") is not None:
             why.append({
                 "tone": "bad" if n["gross_loss_ratio"] > 1.0 else "good",
-                "text": (f"{n['network']} runs at {n['gross_loss_ratio']:.0%} gross on {product}"
+                "text": (f"{n['network']} runs at {n['gross_loss_ratio']:.0%} gross on {n.get('product') or product}"
                          + (f" and costs {n['cost_factor']:.1f}x the cheapest network while charging {n['premium_factor']:.1f}x" if n.get("cost_factor") and n.get("premium_factor") and n["cost_factor"] > 1.3 else "")
                          + (" - do not go below the reviewed rate on this network." if n["gross_loss_ratio"] > 0.95 else ".")),
             })
@@ -1066,9 +1077,12 @@ def underwriter_findings(
         "case": case,
         "plan": {
             "product": product,
+            "products": products,
             "networks": census_networks,
+            "categories": [{"category": c.get("category"), "product": c.get("product"), "network": c.get("network"), "tpa": c.get("tpa")} for c in categories],
             "tpa": sorted({(c.get("tpa") or "") for c in categories if c.get("tpa")}),
             "loading_pct": loading,
+            "loading_by_product": loading_by_product,
         },
         "lives": lives,
         "data_as_of": data_as_of.isoformat() if data_as_of else None,

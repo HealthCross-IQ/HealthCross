@@ -195,11 +195,12 @@ def test_reviewed_price_applies_the_decision_then_the_nationality_factor():
     review = review_cells(book, "Bronze", params)
     apply_decisions(review, [{"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 26,
                               "to_age": 35, "gender": "F", "action": "increase", "change_pct": 100.0}])
-    factors = {("excluding", "26-35", "F"): nationality_factors(book, params)}
+    factors = {("Bronze|excluding", "26-35", "F"): nationality_factors(book, params)}
     census = [{"age": 30, "gender": "F", "nationality": "EGYPT", "nationality_zone": "zone_2_middle_east", "network": "MSH Comprehensive", "category": "A"},
               {"age": 30, "gender": "F", "nationality": "INDIA", "nationality_zone": "zone_1_asia", "network": "MSH Comprehensive", "category": "A"},
               {"age": 50, "gender": "M", "nationality": "INDIA", "nationality_zone": "zone_1_asia", "network": "MSH Comprehensive", "category": "A"}]
-    out = reviewed_price_for_census(census, {"excluding": review}, factors, params)
+    out = reviewed_price_for_census(census, {"Bronze|excluding": review}, factors, params,
+                                    categories_by_name={"A": {"product": "Bronze", "network": "MSH Comprehensive"}})
     egypt, india, man = out["members"]
     assert egypt["reviewed_rate"] == pytest.approx(10000.0)  # 5,000 x (1 + 100%)
     assert egypt["price"] > india["price"]

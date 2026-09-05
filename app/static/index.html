@@ -9066,7 +9066,11 @@ async function loadNewBusinessRating() {
       commission_pct: prior && prior.commission_pct != null ? prior.commission_pct * 100 : '',
       loading_pct: prior && prior.loading_pct != null ? prior.loading_pct * 100 : '',
       variant_selections: prior ? { ...(prior.variant_selections || {}) } : {},
-      previewRegion: (nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai',
+      // The census's own Emirates decides the region (DXB Dubai, AUH Abu
+      // Dhabi, the rest Northern Emirates) - the card's first region was
+      // previewing Abu Dhabi and Sharjah censuses on Dubai's options.
+      previewRegion: (c.region && (!nbRateCardOptions || nbRateCardOptions.regions.includes(c.region))) ? c.region
+        : ((nbRateCardOptions && nbRateCardOptions.regions[0]) || 'Dubai'),
       variantOptions: null,
     };
   });
@@ -9253,9 +9257,9 @@ function _findingsBodyHtml(d) {
     <div class="fd-head">
       <div>
         <div class="fd-title">Underwriter Findings &mdash; ${escapeHtml(c.company_name)}</div>
-        <div class="fd-sub"><b>${escapeHtml(d.plan.product)} &middot; ${escapeHtml(d.plan.networks.join(', ') || '-')}${d.plan.tpa.length ? ' &middot; ' + escapeHtml(d.plan.tpa.join(', ')) : ''}</b>
+        <div class="fd-sub"><b>${(d.plan.categories && d.plan.categories.length > 1) ? d.plan.categories.map(c => `${escapeHtml(c.category)}: ${escapeHtml(c.product || '-')} / ${escapeHtml(c.network || '-')}`).join(' &middot; ') : escapeHtml(d.plan.product) + ' &middot; ' + escapeHtml(d.plan.networks.join(', ') || '-')}${d.plan.tpa.length ? ' &middot; ' + escapeHtml(d.plan.tpa.join(', ')) : ''}</b>
           &nbsp;&middot;&nbsp; ${d.lives} lives &nbsp;&middot;&nbsp; ${escapeHtml(c.region || '-')} &nbsp;&middot;&nbsp; broker ${escapeHtml(c.broker_name || '-')}${c.policy_start_date ? ' &nbsp;&middot;&nbsp; policy start ' + _fdDate(c.policy_start_date) : ''}<br>
-          Book as of ${_fdDate(d.data_as_of)} &nbsp;&middot;&nbsp; ${d.decisions_count} ${escapeHtml(d.plan.product)} rate decisions applied &nbsp;&middot;&nbsp; prepared ${_fdDate(d.prepared_on)}</div>
+          Book as of ${_fdDate(d.data_as_of)} &nbsp;&middot;&nbsp; ${d.decisions_count} ${escapeHtml(d.plan.product)} rate decision${d.decisions_count === 1 ? '' : 's'} applied &nbsp;&middot;&nbsp; prepared ${_fdDate(d.prepared_on)}</div>
       </div>
     </div>
     <div class="fd-verdict">
@@ -9283,7 +9287,7 @@ function _findingsBodyHtml(d) {
       </div>
     </div>
     <div class="fd-sign"><div>Underwriter</div><div>Decision &amp; premium issued</div><div>Date</div></div>
-    <div class="fd-foot">HealthCross Underwriting Intelligence &middot; Reviewed rate uses the Rate Review decisions stored as of ${_fdDate(d.prepared_on)} (target ${_fdPct(d.target_loss_ratio)} net, ${escapeHtml(d.plan.product)} loading ${(d.plan.loading_pct * 100).toFixed(1)}%${d.large_claim_cap ? ', large-claim cap AED ' + _fdNum(d.large_claim_cap) : ''}). Book cost price = expected claims from the burning-cost cube${bookCost.trend_pct != null ? ' + ' + (bookCost.trend_pct * 100).toFixed(0) + '% trend' : ''}, grossed up for loading.</div>`;
+    <div class="fd-foot">HealthCross Underwriting Intelligence &middot; Reviewed rate uses the Rate Review decisions stored as of ${_fdDate(d.prepared_on)} (target ${_fdPct(d.target_loss_ratio)} net, loading ${Object.entries(d.plan.loading_by_product || {[d.plan.product]: d.plan.loading_pct}).map(([p, l]) => `${escapeHtml(p)} ${(l * 100).toFixed(1)}%`).join(', ')}${d.large_claim_cap ? ', large-claim cap AED ' + _fdNum(d.large_claim_cap) : ''}). Book cost price = expected claims from the burning-cost cube${bookCost.trend_pct != null ? ' + ' + (bookCost.trend_pct * 100).toFixed(0) + '% trend' : ''}, grossed up for loading.</div>`;
 }
 
 async function loadFindings() {
