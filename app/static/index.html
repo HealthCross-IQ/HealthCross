@@ -2241,10 +2241,14 @@ async function rvShowNationality(ageBand, gender) {
     const zones = r.zones.map(z => `
       <tr><td>${escapeHtml(z.zone_label)}</td><td class="num">${z.lives}</td><td class="num">${money(z.premium_pmpy)}</td><td class="num">${money(z.cost_pmpy)}</td>
         <td class="num">${_rvLr(z.gross_loss_ratio)}</td><td class="num">${fac(z.factor)}</td><td class="num">${money(z.rate_after_decision)}</td></tr>`).join('');
-    const nats = r.nationalities.map(n => `
+    const natRow = n => `
       <tr class="${n.named ? '' : 'undecided'}"><td>${escapeHtml(n.nationality)}</td><td>${escapeHtml(n.zone_label)}</td><td class="num">${n.lives}${n.named ? '' : '<span class="rv-thin">zone</span>'}</td>
         <td class="num">${money(n.premium_pmpy)}</td><td class="num">${money(n.cost_pmpy)}</td><td class="num">${_rvLr(n.gross_loss_ratio)}</td>
-        <td class="num">${fac(n.factor)}</td><td class="num">${money(n.rate_after_decision)}</td></tr>`).join('');
+        <td class="num">${fac(n.factor)}</td><td class="num">${money(n.rate_after_decision)}</td></tr>`;
+    const named = r.nationalities.filter(n => n.named), thin = r.nationalities.filter(n => !n.named);
+    const nats = named.map(natRow).join('');
+    const thinHtml = thin.length ? `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; font-weight:600;">${thin.length} other nationalities with under 10 member-years - take their zone's factor</summary>
+        <table style="margin-top:8px;"><tr><th>Nationality</th><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${thin.map(natRow).join('')}</table></details>` : '';
     area.innerHTML = `
       <div class="card">
         <h3>Nationality inside ${escapeHtml(ageBand)} ${gender === 'M' ? 'Male' : 'Female'} - ${escapeHtml(r.scope_label)}</h3>
@@ -2252,8 +2256,9 @@ async function rvShowNationality(ageBand, gender) {
         <h4 style="margin-top:14px;">By zone</h4>
         <table><tr><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${zones}</table>
         <h4 style="margin-top:14px;">By nationality</h4>
-        <table><tr><th>Nationality</th><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${nats}</table>
-        <div class="rv-foot">A nationality marked <b>zone</b> has under 10 member-years in this cell and takes its zone's factor. ${(r.measured_share * 100).toFixed(0)}% of the cell's exposure is on a nationality with a factor of its own.</div>
+        <table><tr><th>Nationality</th><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${nats || '<tr><td colspan="8">No nationality in this cell has 10 member-years of its own - every member takes the zone factor.</td></tr>'}</table>
+        ${thinHtml}
+        <div class="rv-foot">A nationality needs 10 member-years in this cell to carry a factor of its own; below that it takes its zone's factor. ${(r.measured_share * 100).toFixed(0)}% of the cell's exposure is on a nationality with a factor of its own.</div>
       </div>`;
     area.scrollIntoView({ behavior: 'smooth', block: 'start' });
   } catch (err) {
