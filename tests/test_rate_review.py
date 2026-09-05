@@ -156,3 +156,54 @@ def test_defaults_fill_in_for_parameters_not_yet_stored():
     assert p["target_loss_ratio"] == 0.9
     assert p["max_increase_pct"] == DEFAULT_PARAMETERS["max_increase_pct"]
     assert p["age_bands"] == DEFAULT_PARAMETERS["age_bands"]
+
+
+def _nat(age, gender, claims, nationality, zone, premium=5000.0, n=1):
+    return [dict(_m(age, gender, claims, premium=premium), nationality=nationality, nationality_zone=zone) for _ in range(n)]
+
+
+def test_nationality_factors_redistribute_inside_the_cell_and_average_to_one():
+    from app.scoring.rules.rate_review import nationality_factors
+    # 40 Egyptian women costing 16,000 and 60 Indian women costing 6,000
+    # in the same cell: cell cost 10,000; Egypt above it, India below.
+    members = _nat(30, "F", 16000.0, "EGYPT", "zone_2_middle_east", n=40) + _nat(30, "F", 6000.0, "INDIA", "zone_1_asia", n=60)
+    out = nationality_factors(members, _params(large_claim_cap=None))
+    by = {r["nationality"]: r for r in out["nationalities"]}
+    assert out["cell_cost_pmpy"] == pytest.approx(10000.0)
+    assert by["Egypt"]["factor"] > 1.0 > by["India"]["factor"]
+    assert by["Egypt"]["named"] and by["India"]["named"]
+    # Exposure-weighted average of the factors is exactly 1 - the
+    # decision on the cell is not added to a second time.
+    weighted = sum(r["factor"] * r["member_years"] for r in out["nationalities"]) / sum(r["member_years"] for r in out["nationalities"])
+    assert weighted == pytest.approx(1.0, abs=1e-3)
+
+
+def test_a_thin_nationality_takes_its_zone_factor_rather_than_its_own():
+    from app.scoring.rules.rate_review import nationality_factors
+    members = _nat(30, "F", 6000.0, "INDIA", "zone_1_asia", n=60) + _nat(30, "F", 90000.0, "NEPAL", "zone_1_asia", n=2)
+    out = nationality_factors(members, _params(large_claim_cap=None))
+    by = {r["nationality"]: r for r in out["nationalities"]}
+    zone = {z["zone"]: z for z in out["zones"]}
+    assert by["Nepal"]["named"] is False
+    assert by["Nepal"]["factor"] == pytest.approx(zone["zone_1_asia"]["factor"])
+
+
+def test_reviewed_price_applies_the_decision_then_the_nationality_factor():
+    from app.scoring.rules.rate_review import nationality_factors, reviewed_price_for_census
+    params = _params(large_claim_cap=None)
+    book = _nat(30, "F", 16000.0, "EGYPT", "zone_2_middle_east", n=40) + _nat(30, "F", 6000.0, "INDIA", "zone_1_asia", n=60)
+    review = review_cells(book, "Bronze", params)
+    apply_decisions(review, [{"product": "Bronze", "network_scope": "excluding", "network": None, "from_age": 26,
+                              "to_age": 35, "gender": "F", "action": "increase", "change_pct": 100.0}])
+    factors = {("excluding", "26-35", "F"): nationality_factors(book, params)}
+    census = [{"age": 30, "gender": "F", "nationality": "EGYPT", "nationality_zone": "zone_2_middle_east", "network": "MSH Comprehensive", "category": "A"},
+              {"age": 30, "gender": "F", "nationality": "INDIA", "nationality_zone": "zone_1_asia", "network": "MSH Comprehensive", "category": "A"},
+              {"age": 50, "gender": "M", "nationality": "INDIA", "nationality_zone": "zone_1_asia", "network": "MSH Comprehensive", "category": "A"}]
+    out = reviewed_price_for_census(census, {"excluding": review}, factors, params)
+    egypt, india, man = out["members"]
+    assert egypt["reviewed_rate"] == pytest.approx(10000.0)  # 5,000 x (1 + 100%)
+    assert egypt["price"] > india["price"]
+    assert egypt["nationality_factor"] > 1 > india["nationality_factor"]
+    # Nobody aged 50 on this book: no cell, so not priced and said so.
+    assert man["price"] is None and out["unmatched_member_count"] == 1
+    assert out["priced_member_count"] == 2

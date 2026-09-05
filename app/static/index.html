@@ -1998,7 +1998,8 @@ function _rvMainTableHtml(r) {
     const cells = r.cells.filter(c => c.age_band === band);
     if (!cells.some(c => c.lives)) return '';  // a band with no lives on either sex says nothing
     return cells.map((c, i) => `
-      <tr class="${i === 0 ? 'band-first' : 'band-second'} ${c.decision ? '' : 'undecided'}">
+      <tr class="${i === 0 ? 'band-first' : 'band-second'} ${c.decision ? '' : 'undecided'} rv-row" style="cursor:pointer;" title="Show nationality inside this cell"
+          onclick="rvShowNationality('${escapeHtml(c.age_band)}', '${c.gender}')">
         <td class="band">${i === 0 ? escapeHtml(band) : ''}</td>
         <td>${c.gender === 'M' ? 'Male' : 'Female'}</td>
         <td class="num">${c.lives}${c.thin && c.lives ? '<span class="rv-thin">thin</span>' : ''}</td>
@@ -2213,13 +2214,50 @@ async function hcRailRateReview() {
           <b>Book suggests</b> = cost per member-year (claims capped at AED ${money(r.large_claim_cap)} per member, excess pooled) &divide; ${pct(r.target_loss_ratio)} &divide; (1 &minus; ${(r.loading_pct * 100).toFixed(1)}%), credibility-blended toward the band (full credibility at ${r.parameters.full_credibility_member_years} member-years), then held to the round's caps of +${r.parameters.max_increase_pct}% / &minus;${r.parameters.max_discount_pct}%.
           <b>Thin</b> = under ${r.parameters.min_member_years_to_act} member-years - shown, never a call.
           <b>Rate after / LR after</b> apply the agreed action to today's earned premium with the same claims.
+          <b>Click a row</b> to see nationality inside that cell.
         </div>
       </div>
+      <div id="rv-nationality-area"></div>
       ${_rvBreakdownHtml(r)}
     `;
   } catch (err) {
     main.innerHTML = `<div class="card"><h3>Rate Review</h3><div class="hint">${escapeHtml(err.message)}</div>
       <button onclick="hcRailClaimsExplorer()">Go to Portfolio Analysis</button></div>`;
+  }
+}
+
+async function rvShowNationality(ageBand, gender) {
+  const area = document.getElementById('rv-nationality-area');
+  if (!area) return;
+  area.innerHTML = `<div class="card"><h3>Nationality inside ${escapeHtml(ageBand)} ${gender === 'M' ? 'Male' : 'Female'}</h3><div class="hint">Reading the cell&hellip;</div></div>`;
+  const p = new URLSearchParams({ product: rvState.product, network_scope: rvState.scope, age_band: ageBand, gender });
+  if (rvState.scope === 'only') p.set('network', rvState.network);
+  try {
+    const r = await api(`/new-business/rate-review/nationality?${p}`);
+    const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+    const fac = v => `<span class="rv-act ${v > 1.05 ? 'increase' : v < 0.95 ? 'discount' : 'hold'}">${v.toFixed(2)}&times;</span>`;
+    const cell = r.cell || {};
+    const base = cell.rate_after_decision || cell.current_rate;
+    const zones = r.zones.map(z => `
+      <tr><td>${escapeHtml(z.zone_label)}</td><td class="num">${z.lives}</td><td class="num">${money(z.premium_pmpy)}</td><td class="num">${money(z.cost_pmpy)}</td>
+        <td class="num">${_rvLr(z.gross_loss_ratio)}</td><td class="num">${fac(z.factor)}</td><td class="num">${money(z.rate_after_decision)}</td></tr>`).join('');
+    const nats = r.nationalities.map(n => `
+      <tr class="${n.named ? '' : 'undecided'}"><td>${escapeHtml(n.nationality)}</td><td>${escapeHtml(n.zone_label)}</td><td class="num">${n.lives}${n.named ? '' : '<span class="rv-thin">zone</span>'}</td>
+        <td class="num">${money(n.premium_pmpy)}</td><td class="num">${money(n.cost_pmpy)}</td><td class="num">${_rvLr(n.gross_loss_ratio)}</td>
+        <td class="num">${fac(n.factor)}</td><td class="num">${money(n.rate_after_decision)}</td></tr>`).join('');
+    area.innerHTML = `
+      <div class="card">
+        <h3>Nationality inside ${escapeHtml(ageBand)} ${gender === 'M' ? 'Male' : 'Female'} - ${escapeHtml(r.scope_label)}</h3>
+        <div class="hint">${r.lives} lives. The cell's decision sets the base rate for the <em>average</em> member (${money(base)}${cell.decision_change_pct ? `, after ${cell.decision_change_pct > 0 ? '+' : ''}${cell.decision_change_pct.toFixed(0)}%` : ''}). Each nationality's factor says how far it sits from that average - credibility-blended toward its zone, capped, and normalised so the factors average 1.00 on today's mix. It redistributes inside the cell; it never adds to the decision.</div>
+        <h4 style="margin-top:14px;">By zone</h4>
+        <table><tr><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${zones}</table>
+        <h4 style="margin-top:14px;">By nationality</h4>
+        <table><tr><th>Nationality</th><th>Zone</th><th class="num">Lives</th><th class="num">Premium PMPY</th><th class="num">Cost PMPY</th><th class="num">Gross LR</th><th class="num">Factor</th><th class="num">Rate for a quote</th></tr>${nats}</table>
+        <div class="rv-foot">A nationality marked <b>zone</b> has under 10 member-years in this cell and takes its zone's factor. ${(r.measured_share * 100).toFixed(0)}% of the cell's exposure is on a nationality with a factor of its own.</div>
+      </div>`;
+    area.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  } catch (err) {
+    area.innerHTML = `<div class="card"><div class="hint">${escapeHtml(err.message)}</div></div>`;
   }
 }
 
@@ -9476,6 +9514,25 @@ async function loadNbRiskBasedPrice() {
       </tr>`).join('');
 
     const gap = r.gap_pct;
+    let reviewed = null;
+    try { reviewed = await api(`/new-business/rate-review/reviewed-price/${currentCase.id}`); } catch (e) { reviewed = { error: e.message }; }
+    const reviewedHtml = reviewed && !reviewed.error ? `
+        <div class="kpi-grid" style="margin-top:14px;">
+          <div class="kpi" style="border-left:3px solid var(--accent);"><span class="label">Reviewed card rate</span><div class="value">${money(reviewed.reviewed_premium)}</div>
+            <span class="label" style="margin:4px 0 0;">${reviewed.priced_member_count} of ${reviewed.member_count} members priced on reviewed cells</span></div>
+          <div class="kpi"><span class="label">Per member</span><div class="value">${money(reviewed.reviewed_per_member)}</div></div>
+          <div class="kpi"><span class="label">Nationality mix</span><div class="value">${reviewed.average_nationality_factor == null ? '-' : reviewed.average_nationality_factor.toFixed(2) + '&times;'}</div>
+            <span class="label" style="margin:4px 0 0;">inside each cell, vs the cell average</span></div>
+          <div class="kpi"><span class="label">vs rate card</span><div class="value">${reviewed.gap_pct == null ? '-' : (reviewed.gap_pct > 0 ? '+' : '') + reviewed.gap_pct + '%'}</div>
+            <span class="label" style="margin:4px 0 0;">${reviewed.undecided_member_count ? `${reviewed.undecided_member_count} member(s) in cells with no decision yet` : 'every member in a decided cell'}</span></div>
+        </div>
+        <div class="hint"><strong>Reviewed card rate</strong> = each member's Rate Review cell rate after the agreed decision, times that member's nationality factor within the cell (${reviewed.decisions_count} ${escapeHtml(reviewed.product)} decisions, book as of ${escapeHtml(reviewed.data_as_of || '-')}). ${reviewed.unmatched_member_count ? `${reviewed.unmatched_member_count} member(s) had no reviewed cell and are not in this figure.` : ''}</div>
+        <details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px; font-weight:600;">Member by member</summary>
+          <table style="margin-top:8px;"><tr><th>Age</th><th>Sex</th><th>Nationality</th><th>Cell</th><th class="num">Cell rate</th><th class="num">Decision</th><th class="num">Factor</th><th class="num">Price</th></tr>
+          ${reviewed.members.map(m => `<tr><td>${m.age ?? '-'}</td><td>${escapeHtml(m.gender || '-')}</td><td>${escapeHtml(m.nationality || '-')}</td><td>${escapeHtml(m.age_band || '-')} ${escapeHtml(m.scope === 'excluding' ? '' : m.scope.replace('only:', ''))}</td>
+            <td class="num">${money(m.cell_rate)}</td><td class="num">${m.decision_change_pct == null ? (m.note ? 'none' : '-') : (m.decision_change_pct > 0 ? '+' : '') + m.decision_change_pct.toFixed(0) + '%'}</td>
+            <td class="num">${m.nationality_factor == null ? '-' : m.nationality_factor.toFixed(2) + '&times;'}</td><td class="num" style="font-weight:600;">${money(m.price)}</td></tr>`).join('')}
+          </table></details>` : (reviewed && reviewed.error ? `<div class="hint" style="margin-top:10px;">Reviewed card rate not available: ${escapeHtml(reviewed.error)}</div>` : '');
     area.innerHTML = `
       <div class="card">
         <h3>Risk-based price suggestion</h3>
@@ -9499,6 +9556,7 @@ async function loadNbRiskBasedPrice() {
           </label>
         </div>
         <div class="hint">The nationality refinement is measured <strong>within zone</strong>, not against the book: the demographic cell already prices by zone, so applying the book-relative factor would charge the zone effect twice.</div>
+        ${reviewedHtml}
         <table style="margin-top:14px;">
           <tr><th>Category</th><th>Plan</th><th class="num">Members</th><th class="num">Expected claims</th>
             <th class="num">Loading</th><th class="num">Suggested</th><th class="num">Cell match</th></tr>

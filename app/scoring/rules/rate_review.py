@@ -617,3 +617,198 @@ SEED_DECISIONS: List[dict] = [
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 40, "gender": "M",
      "action": "hold", "change_pct": 0.0, "note": "Held this round - 18-25 M carries one AED 209k claim; 26-35 M at 112% gross, 36-40 M at 128% on thin data - watch."},
 ]
+
+
+# ---------------------------------------------------------------- nationality
+
+ZONE_LABELS = {
+    "zone_1_asia": "Asia",
+    "zone_2_middle_east": "Middle East",
+    "zone_3_europe_americas": "Europe & Americas",
+}
+
+
+def nationality_factors(
+    members: List[dict],
+    params: dict,
+    min_member_years_named: float = 10.0,
+) -> dict:
+    """How far each nationality in one cell sits from the cell's own
+    average cost - the factor a quote applies INSIDE a reviewed cell.
+
+    The decision on a cell sets its base rate for the average member.
+    This does not add to that: each nationality's raw ratio to the cell
+    cost is credibility-blended toward its zone's ratio (itself blended
+    toward 1.0), capped to the relativity range, and then the whole set is
+    re-normalised so that, weighted by today's exposure, the factors
+    average exactly 1.0. The book's premium does not move again; the
+    factor only redistributes it between nationalities at quote time.
+
+    A nationality below `min_member_years_named` is folded into its zone
+    rather than shown on its own - a factor read off six member-years
+    would be one family's claims wearing a country's name.
+    """
+    full_cred = float(params["full_credibility_member_years"])
+    min_rel, max_rel = float(params["min_relativity"]), float(params["max_relativity"])
+    cap = params.get("large_claim_cap")
+    cap = float(cap) if cap not in (None, "", 0) else None
+
+    cell = _totals(members, cap)
+    cell_my = cell["member_years"]
+    if not cell_my:
+        return {"cell_cost_pmpy": None, "zones": [], "nationalities": [], "measured_share": 0.0}
+    pooled = (cell["incurred"] - cell["priced_claims"]) / cell_my
+    cell_cost = cell["priced_claims"] / cell_my + pooled
+
+    def z_of(my: float) -> float:
+        return min(1.0, math.sqrt(my / full_cred)) if my > 0 else 0.0
+
+    by_zone: Dict[str, List[dict]] = defaultdict(list)
+    by_nat: Dict[Tuple[str, str], List[dict]] = defaultdict(list)
+    for r in members:
+        zone = (r.get("nationality_zone") or "unmapped").strip()
+        nat = (r.get("nationality") or "Unknown").strip().upper()
+        by_zone[zone].append(r)
+        by_nat[(zone, nat)].append(r)
+
+    zone_rows = []
+    zone_factor: Dict[str, float] = {}
+    for zone, rows in by_zone.items():
+        t = _totals(rows, cap)
+        my = t["member_years"]
+        own = ((t["priced_claims"] / my + pooled) / cell_cost) if (my and cell_cost) else 1.0
+        z = z_of(my)
+        blended = z * own + (1 - z) * 1.0
+        blended = max(min_rel, min(max_rel, blended))
+        zone_factor[zone] = blended
+        zone_rows.append({
+            "zone": zone, "zone_label": ZONE_LABELS.get(zone, zone),
+            "lives": t["lives"], "member_years": round(my, 1),
+            "premium_pmpy": round(t["premium"] / my, 2) if my else None,
+            "cost_pmpy": round(t["incurred"] / my, 2) if my else None,
+            "gross_loss_ratio": round(t["incurred"] / t["premium"], 4) if t["premium"] else None,
+            "raw_factor": round(own, 4), "credibility": round(z, 4), "factor": blended,
+        })
+
+    nat_rows = []
+    for (zone, nat), rows in by_nat.items():
+        t = _totals(rows, cap)
+        my = t["member_years"]
+        z = z_of(my)
+        own = ((t["priced_claims"] / my + pooled) / cell_cost) if (my and cell_cost) else zone_factor[zone]
+        blended = z * own + (1 - z) * zone_factor[zone]
+        blended = max(min_rel, min(max_rel, blended))
+        nat_rows.append({
+            "nationality": nat.title(), "zone": zone, "zone_label": ZONE_LABELS.get(zone, zone),
+            "lives": t["lives"], "member_years": round(my, 1),
+            "premium_pmpy": round(t["premium"] / my, 2) if my else None,
+            "cost_pmpy": round(t["incurred"] / my, 2) if my else None,
+            "gross_loss_ratio": round(t["incurred"] / t["premium"], 4) if t["premium"] else None,
+            "raw_factor": round(own, 4), "credibility": round(z, 4),
+            "factor": blended,
+            # Named on its own only with enough exposure; otherwise it
+            # takes its zone's factor and is listed for completeness.
+            "named": my >= min_member_years_named,
+            "_my": my,
+        })
+    for row in nat_rows:
+        if not row["named"]:
+            row["factor"] = zone_factor[row["zone"]]
+
+    # Re-normalise on today's mix so the factors are a redistribution
+    # within the cell, never a second increase on top of the decision.
+    weighted = sum(r["factor"] * r["_my"] for r in nat_rows)
+    scale = (cell_my / weighted) if weighted else 1.0
+    for row in nat_rows:
+        row["factor"] = round(row["factor"] * scale, 4)
+        del row["_my"]
+    for row in zone_rows:
+        row["factor"] = round(row["factor"] * scale, 4)
+
+    nat_rows.sort(key=lambda r: -r["member_years"])
+    zone_rows.sort(key=lambda r: -r["member_years"])
+    measured = sum(r["member_years"] for r in nat_rows if r["named"])
+    return {
+        "cell_cost_pmpy": round(cell_cost, 2),
+        "normalisation": round(scale, 4),
+        "zones": zone_rows,
+        "nationalities": nat_rows,
+        "measured_share": round(measured / cell_my, 4) if cell_my else 0.0,
+    }
+
+
+def reviewed_price_for_census(
+    census: List[dict],
+    reviews_by_scope: Dict[str, dict],
+    factors_by_cell: Dict[Tuple[str, str, str], dict],
+    params: dict,
+) -> dict:
+    """What a census costs on the REVIEWED card: each member's cell rate
+    after the agreed decision, times that member's nationality factor
+    inside the cell.
+
+    `reviews_by_scope` maps a scope key ("excluding", or "only:<network>")
+    to a review with decisions applied; `factors_by_cell` maps (scope
+    key, age band, sex) to nationality_factors() output. A member whose
+    cell has no decision is priced at the cell's current rate and
+    flagged, so the total can never quietly rest on an unreviewed cell.
+    """
+    separate = params.get("separate_networks") or []
+    bands = [tuple(b) for b in params["age_bands"]]
+    members_out = []
+    total = 0.0
+    undecided = 0
+    unmatched = 0
+    factor_weighted = 0.0
+    for m in census:
+        net = (m.get("network") or "").strip()
+        scope_key = f"only:{net}" if _is_separate(net, separate) else "excluding"
+        review = reviews_by_scope.get(scope_key)
+        band = _band_label(m.get("age"), bands)
+        g = (m.get("gender") or "").strip().upper()[:1]
+        cell = None
+        if review and band and g in GENDERS:
+            cell = next((c for c in review["cells"] if c["age_band"] == band and c["gender"] == g), None)
+        if not cell or not cell.get("current_rate"):
+            unmatched += 1
+            members_out.append({**m, "scope": scope_key, "age_band": band, "cell_rate": None, "reviewed_rate": None,
+                                "nationality_factor": None, "price": None, "note": "no reviewed cell for this member"})
+            continue
+        pct = cell.get("decision_change_pct")
+        if cell.get("decision") is None:
+            undecided += 1
+            pct = 0.0
+        reviewed_rate = cell["current_rate"] * (1 + (pct or 0.0) / 100)
+        factor = 1.0
+        f = factors_by_cell.get((scope_key, band, g))
+        if f:
+            nat = (m.get("nationality") or "").strip().upper()
+            zone = (m.get("nationality_zone") or "").strip()
+            row = next((r for r in f["nationalities"] if r["nationality"].upper() == nat and r["named"]), None)
+            if row:
+                factor = row["factor"]
+            else:
+                zrow = next((r for r in f["zones"] if r["zone"] == zone), None)
+                if zrow:
+                    factor = zrow["factor"]
+        price = reviewed_rate * factor
+        total += price
+        factor_weighted += factor
+        members_out.append({
+            **m, "scope": scope_key, "age_band": band, "cell_rate": round(cell["current_rate"], 2),
+            "decision_change_pct": pct if cell.get("decision") is not None else None,
+            "reviewed_rate": round(reviewed_rate, 2), "nationality_factor": round(factor, 4),
+            "price": round(price, 2),
+            "note": None if cell.get("decision") is not None else "cell has no decision yet - priced at current rate",
+        })
+    priced = len(census) - unmatched
+    return {
+        "member_count": len(census),
+        "priced_member_count": priced,
+        "unmatched_member_count": unmatched,
+        "undecided_member_count": undecided,
+        "reviewed_premium": round(total, 2),
+        "reviewed_per_member": round(total / priced, 2) if priced else None,
+        "average_nationality_factor": round(factor_weighted / priced, 4) if priced else None,
+        "members": members_out,
+    }

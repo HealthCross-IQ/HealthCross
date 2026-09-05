@@ -299,3 +299,119 @@ def delete_decision(decision_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Decision not found")
     db.delete(row)
     db.commit()
+
+
+# ---------------------------------------------------------------- nationality
+
+def _scope_key(network_scope: str, network: Optional[str]) -> str:
+    return f"only:{network}" if network_scope == "only" else network_scope
+
+
+@router.get("/nationality")
+def get_nationality_factors(
+    product: str = Query("Bronze"),
+    network_scope: str = Query("excluding"),
+    network: Optional[str] = Query(None),
+    age_band: Optional[str] = Query(None, description="e.g. 26-35; omit for the whole scope"),
+    gender: Optional[str] = Query(None, description="M or F; omit for both"),
+    as_of: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+):
+    """Nationality inside one reviewed cell: what each nationality costs
+    against the cell's own average, and the factor a quote applies
+    within that cell. Normalised to 1.0 on today's mix - it never adds
+    to the cell's decision, only redistributes inside it."""
+    review, params, results, effective_as_of = _build_review(db, product, network_scope, network, None, as_of)
+    members = rr.scope_members(results, product, review["network_scope"], review["network"], params.get("separate_networks") or [])
+    bands = [tuple(b) for b in params["age_bands"]]
+    if age_band:
+        members = [m for m in members if rr._band_label(m.get("age"), bands) == age_band]
+    if gender:
+        g = gender.strip().upper()[:1]
+        members = [m for m in members if (m.get("gender") or "").strip().upper()[:1] == g]
+    out = rr.nationality_factors(members, params)
+    out.update({
+        "product": product, "scope_label": review["scope_label"], "age_band": age_band, "gender": gender,
+        "lives": len(members), "data_as_of": effective_as_of.isoformat() if effective_as_of else None,
+    })
+    cell = next((c for c in review["cells"] if c["age_band"] == age_band and c["gender"] == (gender or "").strip().upper()[:1]), None) if age_band and gender else None
+    if cell:
+        out["cell"] = {k: cell.get(k) for k in ("current_rate", "decision_action", "decision_change_pct", "rate_after_decision", "gross_loss_ratio")}
+        base = cell.get("rate_after_decision") or cell.get("current_rate")
+        for row in out["nationalities"] + out["zones"]:
+            row["rate_after_decision"] = round(base * row["factor"], 2) if base else None
+    return out
+
+
+@router.get("/reviewed-price/{case_id}")
+def get_reviewed_price(case_id: int, as_of: Optional[date] = Query(None), db: Session = Depends(get_db)):
+    """A case's census priced on the reviewed card: each member's cell
+    rate after the agreed decision, times the member's nationality factor
+    within that cell. Sits beside the card price and the risk-based price
+    on New Quote - it is what the book, and the team's decisions on it,
+    say this population should pay."""
+    from app.api.routes_new_business_rating import _case_census_dicts, _resolve_auto_quote_categories
+
+    case = db.get(models.Case, case_id)
+    if not case:
+        raise HTTPException(status_code=404, detail="Case not found")
+    census = _case_census_dicts(case)
+    if not census:
+        raise HTTPException(status_code=400, detail="Upload a census for this case first")
+    categories = _resolve_auto_quote_categories(case, db)
+    if not categories:
+        raise HTTPException(status_code=400, detail="Each census category needs a Product and Network before this can price")
+    design = {c["category"]: c for c in categories}
+    products = {c.get("product") for c in categories if c.get("product")}
+    if len(products) != 1:
+        raise HTTPException(status_code=400, detail="The reviewed price needs every category on one product")
+    product = products.pop()
+
+    params = stored_parameters(db)
+    separate = params.get("separate_networks") or []
+    effective_as_of = as_of or book_repo.stored_as_of(db)
+    try:
+        results = book_analysis.run_analysis(db, as_of=effective_as_of, require_rate_card=False)
+    except HTTPException:
+        raise HTTPException(status_code=400, detail="Portfolio Analysis has no membership/claims uploaded - there is no book to price against")
+    decisions = stored_decisions(db, product)
+    rate_cards = book_repo.rate_cards(db)
+
+    priced_census = [{**m, "network": (design.get(m.get("category")) or {}).get("network")} for m in census]
+    scopes = {"excluding"} | {f"only:{n}" for n in separate}
+    reviews, factors = {}, {}
+    bands = [tuple(b) for b in params["age_bands"]]
+    for key in scopes:
+        scope, network = ("only", key[5:]) if key.startswith("only:") else ("excluding", None)
+        review = rr.review_cells(results, product, params, network_scope=scope, network=network, rate_cards=rate_cards)
+        if review["totals"]["lives"] == 0:
+            continue
+        rr.apply_decisions(review, decisions)
+        reviews[key] = review
+        members = rr.scope_members(results, product, scope, network, separate)
+        needed = {(rr._band_label(m.get("age"), bands), (m.get("gender") or "").strip().upper()[:1])
+                  for m in priced_census
+                  if (f"only:{(m.get('network') or '').strip()}" if rr._is_separate(m.get("network"), separate) else "excluding") == key}
+        for band, g in needed:
+            if band and g in rr.GENDERS:
+                cell_members = [m for m in members if rr._band_label(m.get("age"), bands) == band and (m.get("gender") or "").strip().upper()[:1] == g]
+                factors[(key, band, g)] = rr.nationality_factors(cell_members, params)
+
+    out = rr.reviewed_price_for_census(priced_census, reviews, factors, params)
+    by_cat = {}
+    for m in out["members"]:
+        e = by_cat.setdefault(m.get("category") or "-", {"category": m.get("category") or "-", "members": 0, "priced": 0, "reviewed_premium": 0.0})
+        e["members"] += 1
+        if m["price"] is not None:
+            e["priced"] += 1
+            e["reviewed_premium"] += m["price"]
+    out["categories"] = [{**e, "reviewed_premium": round(e["reviewed_premium"], 2),
+                          "product": product, "network": (design.get(e["category"]) or {}).get("network")} for e in by_cat.values()]
+    quote = db.query(models.NewBusinessQuote).filter_by(case_id=case_id).order_by(models.NewBusinessQuote.created_at.desc()).first()
+    card = quote.result.get("case_gross_annual_premium") if quote and quote.result else None
+    out["rate_card_premium"] = card
+    out["gap_pct"] = round((out["reviewed_premium"] / card - 1) * 100, 1) if card and out["reviewed_premium"] else None
+    out["product"] = product
+    out["data_as_of"] = effective_as_of.isoformat() if effective_as_of else None
+    out["decisions_count"] = len(decisions)
+    return out
