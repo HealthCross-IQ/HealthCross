@@ -127,12 +127,42 @@ def _ensure_default_insurer_tier_preferences() -> None:
         db.close()
 
 
+def _reclassify_stored_nationality_zones() -> None:
+    """Bring stored nationality zones in line with the current mapping.
+
+    A member's zone is assigned at upload from classify_zone and then
+    sits in the row. When the mapping gains a nationality it used to
+    miss (129 Americans were falling to the Middle East default), every
+    row already uploaded keeps the old answer until the file is
+    re-uploaded - so the zone experience every price rests on stays
+    wrong for exactly the members the fix was for. Re-checking on
+    startup costs a few thousand string lookups and only writes rows
+    whose answer actually changed.
+    """
+    from app.reference.nationality_zones import classify_zone
+
+    db = SessionLocal()
+    try:
+        changed = 0
+        for model in (models.PortfolioMember, models.CensusRecord):
+            for row in db.query(model).filter(model.nationality.isnot(None)).all():
+                zone = classify_zone(row.nationality)
+                if row.nationality_zone != zone:
+                    row.nationality_zone = zone
+                    changed += 1
+        if changed:
+            db.commit()
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(bind=engine)
     auto_migrate_missing_columns(engine, Base)
     _ensure_default_weight_set()
     _ensure_default_insurer_tier_preferences()
+    _reclassify_stored_nationality_zones()
     yield
 
 
