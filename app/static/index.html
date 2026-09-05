@@ -2138,6 +2138,11 @@ function _rvParametersHtml(r) {
         ${field('large_claim_cap', 'Large-claim cap (AED)', p.large_claim_cap || '', 'per-member claims above this are pooled across the book for pricing; blank = no cap', 10000)}
         ${field('materiality_pct', 'Materiality (LR points)', p.materiality_pct, 'a smaller month-to-month move is noise, not news', 1)}
         ${field('stale_after_days', 'Data stale after (days)', p.stale_after_days, 'older data than this is flagged before acting', 1)}
+        ${field('youth_discount_pct', 'Youth discount %', p.youth_discount_pct, 'extra discount on each member in the youth ages when the group qualifies; 0 = off', 0.5)}
+        ${field('youth_share_threshold_pct', 'Youth share needed %', p.youth_share_threshold_pct, 'the group qualifies when this share of its lives are in the youth ages', 5)}
+        ${field('youth_age_from', 'Youth age from', p.youth_age_from, 'first age that counts as youth - infants below it never get the discount', 1)}
+        ${field('youth_age_to', 'Youth age to', p.youth_age_to, 'last age that counts as youth', 1)}
+        ${field('youth_skip_above_gross', 'Youth: skip cells above (gross LR %)', (p.youth_skip_above_gross * 100).toFixed(0), 'a young member whose cell already runs above this on the book is not discounted', 5)}
         <div><label>Age bands</label><input type="text" id="rv-param-age_bands" value="${escapeHtml(p.age_bands.map(b => b.join('-')).join(', '))}"><div class="hint">the bands the review runs on, e.g. 0-1, 2-17, 18-25 ...</div></div>
         <div><label>Networks reviewed separately</label><input type="text" id="rv-param-separate_networks" value="${escapeHtml((p.separate_networks || []).join(', '))}"><div class="hint">kept out of the main table, each on its own</div></div>
       </div>
@@ -2314,6 +2319,9 @@ async function rvSaveParameters() {
   const tlr = num('target_loss_ratio'); if (tlr != null) body.target_loss_ratio = tlr / 100;
   ['full_credibility_member_years', 'min_member_years_to_act', 'max_increase_pct', 'max_discount_pct', 'materiality_pct'].forEach(k => { const v = num(k); if (v != null) body[k] = v; });
   const stale = num('stale_after_days'); if (stale != null) body.stale_after_days = Math.round(stale);
+  ['youth_discount_pct', 'youth_share_threshold_pct'].forEach(k => { const v = num(k); if (v != null) body[k] = v; });
+  ['youth_age_from', 'youth_age_to'].forEach(k => { const v = num(k); if (v != null) body[k] = Math.round(v); });
+  const ySkip = num('youth_skip_above_gross'); if (ySkip != null) body.youth_skip_above_gross = ySkip / 100;
   const cap = document.getElementById('rv-param-large_claim_cap');
   body.large_claim_cap = cap && cap.value !== '' ? parseFloat(cap.value) : 0;
   const loadings = {};
@@ -9234,6 +9242,13 @@ function _fdAct(p) {
   const label = (a === 'review' ? 'Review ' : '') + (pct > 0 ? '+' : '') + pct.toFixed(0) + '%';
   return `<span class="fd-pill ${a === 'increase' ? 'bad' : a === 'discount' ? 'good' : 'warn'}">${label}</span>`;
 }
+function _fdYouthLine(y) {
+  // The youth rule is a group-level discount, so it reads on the total,
+  // not on any one cell's row.
+  if (!y || !y.young_members) return '';
+  if (y.applied) return `<br>incl. ${y.discount_pct.toFixed(0)}% youth discount on ${y.members_discounted} member${y.members_discounted === 1 ? '' : 's'} aged ${y.age_from}-${y.age_to} (${(y.share * 100).toFixed(0)}% of the group)`;
+  return `<br>no youth discount: ${y.age_from}-${y.age_to}s are ${(y.share * 100).toFixed(0)}% of the group, threshold ${y.threshold_pct.toFixed(0)}%`;
+}
 function _fdDate(iso) {
   if (!iso) return '-';
   const d = new Date(iso + (iso.length === 10 ? 'T00:00:00' : ''));
@@ -9265,7 +9280,7 @@ function _findingsBodyHtml(d) {
     <div class="fd-verdict">
       <div class="rec"><div class="k">Recommendation</div><div class="v"><span class="fd-pill ${tonePill}">${escapeHtml(rec.verdict)}</span></div><div class="s">${escapeHtml(rec.rule)}</div></div>
       <div><div class="k">Card price</div><div class="v">${_fdMoney(pr.card.total)}</div><div class="s">${pr.card.total ? _fdNum(pr.card.per_member) + ' / member' : 'compute a quote on Set-up &amp; quote'}</div></div>
-      <div><div class="k">Reviewed rate</div><div class="v">${_fdMoney(pr.reviewed.total)}</div><div class="s">${_fdNum(pr.reviewed.per_member)} / member &middot; ${pr.reviewed.basis === 'card' ? 'card' : pr.reviewed.basis === 'mixed' ? 'card / earned' : 'book earned'} &times; decisions &times; nationality${pr.reviewed_vs_card_pct != null ? ' &middot; ' + (pr.reviewed_vs_card_pct > 0 ? '+' : '') + pr.reviewed_vs_card_pct + '% vs card' : ''}</div></div>
+      <div><div class="k">Reviewed rate</div><div class="v">${_fdMoney(pr.reviewed.total)}</div><div class="s">${_fdNum(pr.reviewed.per_member)} / member &middot; ${pr.reviewed.basis === 'card' ? 'card' : pr.reviewed.basis === 'mixed' ? 'card / earned' : 'book earned'} &times; decisions &times; nationality${pr.reviewed_vs_card_pct != null ? ' &middot; ' + (pr.reviewed_vs_card_pct > 0 ? '+' : '') + pr.reviewed_vs_card_pct + '% vs card' : ''}${_fdYouthLine(pr.reviewed.youth)}</div></div>
       <div><div class="k">Book cost price</div><div class="v">${bookCost.error ? '&mdash;' : _fdMoney(bookCost.total)}</div><div class="s">${bookCost.error ? escapeHtml(bookCost.error) : _fdNum(bookCost.per_member) + ' / member &middot; risk-based, ' + _fdPct(bookCost.credibility) + ' credible'}</div></div>
     </div>
     <h4 class="fd-h">Why</h4>

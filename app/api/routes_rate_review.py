@@ -172,6 +172,11 @@ class ParametersIn(BaseModel):
     age_bands: Optional[List[List[int]]] = None
     separate_networks: Optional[List[str]] = None
     stale_after_days: Optional[int] = Field(None, ge=1)
+    youth_discount_pct: Optional[float] = Field(None, ge=0, le=50)
+    youth_share_threshold_pct: Optional[float] = Field(None, ge=0, le=100)
+    youth_age_from: Optional[int] = Field(None, ge=0)
+    youth_age_to: Optional[int] = Field(None, ge=0)
+    youth_skip_above_gross: Optional[float] = Field(None, gt=0, lt=5)
 
 
 @router.get("/parameters")
@@ -202,6 +207,10 @@ def put_parameters(body: ParametersIn, db: Session = Depends(get_db)):
         changes["age_bands"] = [list(b) for b in bands]
     if "loading_by_product" in changes and any(not (0 <= float(v) < 1) for v in changes["loading_by_product"].values()):
         raise HTTPException(status_code=400, detail="Loadings must be fractions between 0 and 1")
+    if "youth_age_from" in changes or "youth_age_to" in changes:
+        current = stored_parameters(db)
+        if changes.get("youth_age_from", current["youth_age_from"]) > changes.get("youth_age_to", current["youth_age_to"]):
+            raise HTTPException(status_code=400, detail="youth_age_from must not exceed youth_age_to")
     if "min_relativity" in changes or "max_relativity" in changes:
         current = stored_parameters(db)
         lo = changes.get("min_relativity", current["min_relativity"])

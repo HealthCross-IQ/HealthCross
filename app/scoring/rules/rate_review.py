@@ -69,6 +69,18 @@ DEFAULT_PARAMETERS: Dict[str, object] = {
     "separate_networks": ["MSH Platinum"],
     # Data older than this at review time is flagged as stale.
     "stale_after_days": 45,
+    # Youth discount: an additional discount on the members aged
+    # youth_age_from..youth_age_to when they are at least
+    # youth_share_threshold_pct of a group's lives. Never on infants
+    # (below youth_age_from), and never in a cell whose own gross loss
+    # ratio is already above youth_skip_above_gross - a discount there
+    # would push the cell past target however young the group is.
+    # Agreed 5 Sep 2026: 3% when the 2-25s are 30% or more of the group.
+    "youth_discount_pct": 3.0,
+    "youth_share_threshold_pct": 30.0,
+    "youth_age_from": 2,
+    "youth_age_to": 25,
+    "youth_skip_above_gross": 0.85,
 }
 
 GENDERS = ("M", "F")
@@ -862,15 +874,58 @@ def reviewed_price_for_census(
         card_members += 1 if basis == "card" else 0
         members_out.append({
             **m, "product": product, "scope": scope_key, "age_band": band, "cell_rate": round(base_rate, 2), "rate_basis": basis,
+            "cell_gross_loss_ratio": cell.get("gross_loss_ratio"),
             "decision_change_pct": pct if cell.get("decision") is not None else None,
             "reviewed_rate": round(reviewed_rate, 2), "nationality_factor": round(factor, 4),
             "price": round(price, 2),
             "note": None if decided else "cell has no decision yet - priced at card, no nationality factor",
         })
     priced = len(census) - unmatched
+
+    # --- youth discount: a group-level rule, applied after every member
+    # has its reviewed price. The share is measured on the whole census
+    # (every category), the discount lands only on the eligible members.
+    y_from, y_to = int(params.get("youth_age_from") or 2), int(params.get("youth_age_to") or 25)
+    y_pct = float(params.get("youth_discount_pct") or 0.0)
+    y_threshold = float(params.get("youth_share_threshold_pct") or 0.0)
+    y_skip = float(params.get("youth_skip_above_gross") or 0.85)
+    young = [m for m in census if m.get("age") is not None and y_from <= m["age"] <= y_to]
+    youth_share = (len(young) / len(census)) if census else 0.0
+    youth_applies = bool(census) and y_pct > 0 and youth_share * 100 >= y_threshold
+    youth_members = 0
+    youth_amount = 0.0
+    for out_m in members_out:
+        out_m["youth_discount_pct"] = 0.0
+        if not youth_applies or out_m.get("price") is None:
+            continue
+        age = out_m.get("age")
+        if age is None or not (y_from <= age <= y_to):
+            continue
+        cell_lr = out_m.get("cell_gross_loss_ratio")
+        if cell_lr is None or cell_lr > y_skip:
+            out_m["youth_skipped"] = "cell above the gross loss-ratio limit" if cell_lr is not None else "no book experience for the cell"
+            continue
+        before = out_m["price"]
+        out_m["price"] = round(before * (1 - y_pct / 100), 2)
+        out_m["youth_discount_pct"] = -y_pct
+        youth_members += 1
+        youth_amount += before - out_m["price"]
+    total -= youth_amount
+
     return {
         "member_count": len(census),
         "priced_member_count": priced,
+        "youth": {
+            "share": round(youth_share, 4),
+            "young_members": len(young),
+            "threshold_pct": y_threshold,
+            "discount_pct": y_pct,
+            "age_from": y_from,
+            "age_to": y_to,
+            "applied": youth_applies,
+            "members_discounted": youth_members,
+            "amount": round(youth_amount, 2),
+        },
         "unmatched_member_count": unmatched,
         "undecided_member_count": undecided,
         "card_priced_member_count": card_members,
@@ -988,6 +1043,7 @@ def underwriter_findings(
         "card": {"total": card_total, "per_member": round(card_total / lives, 2) if card_total else None},
         "reviewed": {"total": reviewed_total, "per_member": reviewed.get("reviewed_per_member"),
                      "basis": reviewed.get("rate_basis"), "card_priced_members": reviewed.get("card_priced_member_count"),
+                     "youth": reviewed.get("youth"),
                      "priced_members": reviewed["priced_member_count"], "undecided_members": reviewed["undecided_member_count"],
                      "unmatched_members": reviewed["unmatched_member_count"]},
         "book_cost": {"total": risk_total, "per_member": (risk or {}).get("suggested_per_member"),
@@ -1067,6 +1123,22 @@ def underwriter_findings(
             "tone": "bad" if lr > 1.0 else "warn" if lr >= 0.85 else "good",
             "text": (f"{p['members']} {'male' if p['gender']=='M' else 'female'}{'s' if p['members']!=1 else ''} aged {p['age_band']} on {p['scope_label']} - "
                      f"on our book this cell runs at {lr:.0%} gross ({p['book_lives']} lives, {cred_txt}), {_lr_word(lr)}. Agreed action: {act_txt}."),
+        })
+    youth = reviewed.get("youth") or {}
+    if youth.get("applied"):
+        why.append({
+            "tone": "good",
+            "text": (f"Youth discount applied: members aged {youth['age_from']}-{youth['age_to']} are {youth['share']:.0%} of the group "
+                     f"(threshold {youth['threshold_pct']:.0f}%) - an additional {youth['discount_pct']:.0f}% off on "
+                     f"{youth['members_discounted']} of them, worth AED {youth['amount']:,.0f}."
+                     + (f" {youth['young_members'] - youth['members_discounted']} young member(s) skipped: their cell already runs above "
+                        f"{float(params.get('youth_skip_above_gross') or 0.85):.0%} gross." if youth['young_members'] > youth['members_discounted'] else "")),
+        })
+    elif youth.get("young_members"):
+        why.append({
+            "tone": "grey",
+            "text": (f"Members aged {youth['age_from']}-{youth['age_to']} are {youth['share']:.0%} of the group - below the "
+                     f"{youth['threshold_pct']:.0f}% threshold, so no youth discount."),
         })
     if nationalities:
         top = nationalities[0]

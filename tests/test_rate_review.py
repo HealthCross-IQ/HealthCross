@@ -216,3 +216,39 @@ def test_reviewed_price_applies_the_decision_then_the_nationality_factor():
     assert all(m["nationality_factor"] == 1.0 and m["decision_change_pct"] is None for m in out2["members"])
     assert out2["undecided_member_count"] == 2
     assert out["priced_member_count"] == 2
+
+
+def test_youth_discount_applies_only_when_the_young_share_clears_the_threshold_and_skips_hot_cells():
+    from app.scoring.rules.rate_review import reviewed_price_for_census
+    params = _params(large_claim_cap=None)
+    # Book: cheap children, cheap young men, expensive young women.
+    book = [_m(10, "M", 1000.0) for _ in range(60)] + [_m(22, "M", 1500.0) for _ in range(60)] + [_m(22, "F", 9000.0) for _ in range(60)]
+    review = review_cells(book, "Bronze", params)
+    apply_decisions(review, [])
+    reviews = {"Bronze|excluding": review}
+    cat = {"A": {"product": "Bronze", "network": "MSH Comprehensive"}}
+    # 3 of 4 members are 2-25 (75% >= 30%): the boy and the young man get
+    # the extra 3%; the young woman's cell is above 85% gross and is
+    # skipped; the 30-year-old is not young (and has no book cell, so no
+    # price at all).
+    census = [{"age": 10, "gender": "M", "network": "MSH Comprehensive", "category": "A"},
+              {"age": 22, "gender": "M", "network": "MSH Comprehensive", "category": "A"},
+              {"age": 22, "gender": "F", "network": "MSH Comprehensive", "category": "A"},
+              {"age": 30, "gender": "M", "network": "MSH Comprehensive", "category": "A"}]
+    out = reviewed_price_for_census(census, reviews, {}, params, categories_by_name=cat)
+    boy, man, woman, older = out["members"]
+    assert out["youth"]["applied"] is True and out["youth"]["share"] == 0.75
+    assert boy["youth_discount_pct"] == -3.0 and man["youth_discount_pct"] == -3.0
+    assert boy["price"] == pytest.approx(5000.0 * 0.97)
+    assert woman["youth_discount_pct"] == 0.0 and "above" in woman["youth_skipped"]
+    assert older["youth_discount_pct"] == 0.0 and older["price"] is None
+    assert out["youth"]["members_discounted"] == 2
+    assert out["reviewed_premium"] == pytest.approx(sum(m["price"] for m in out["members"] if m["price"] is not None))
+    # Exactly on the threshold it still applies (3 of 10 = 30%) ...
+    census2 = census + [{"age": 45, "gender": "M", "network": "MSH Comprehensive", "category": "A"} for _ in range(6)]
+    out2 = reviewed_price_for_census(census2, reviews, {}, params, categories_by_name=cat)
+    assert out2["youth"]["applied"] is True and out2["youth"]["share"] == pytest.approx(0.30)
+    # ... one more older life and it is below: nothing changes.
+    census3 = census2 + [{"age": 45, "gender": "M", "network": "MSH Comprehensive", "category": "A"}]
+    out3 = reviewed_price_for_census(census3, reviews, {}, params, categories_by_name=cat)
+    assert out3["youth"]["applied"] is False and all(m["youth_discount_pct"] == 0.0 for m in out3["members"])
