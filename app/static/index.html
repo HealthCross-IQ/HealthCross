@@ -9843,11 +9843,13 @@ async function showReinsuranceReport() {
       <div id="rr-maternity-area">${_rrLoadingCard()}</div>
       <div id="rr-burning-cost-area">${_rrLoadingCard()}</div>
       <div id="rr-provider-compare-area"></div>
+      <div id="rr-crosstab-area"></div>
       <div id="rr-top-claimants-area">${_rrLoadingCard()}</div>
       <div id="rr-shed-area">${_rrLoadingCard()}</div>
     </div>
   `;
   _rrProviderCompareToolHtml();
+  _rrCrossTabToolHtml();
   loadReinsuranceReport();
 }
 
@@ -10589,6 +10591,75 @@ function _rrProviderCompareHtml(compare) {
           </tr>
         </tbody>
       </table>
+    </div>
+  `;
+}
+
+// --- Cross-tab: is a segment's risk uniform, or concentrated? ---
+// e.g. "is Spouse risk the same across every age band, or worse at one
+// age specifically" - filter to one slice, see every OTHER dimension
+// broken out at once, same as the product/enrollment drill above.
+
+const RR_XTAB_DIMENSIONS = [['age_band', 'Age band'], ['gender', 'Gender'], ['relation', 'Relation'], ['network', 'Network']];
+
+function _rrCrossTabToolHtml() {
+  const area = document.getElementById('rr-crosstab-area');
+  if (!area) return;
+  area.innerHTML = `
+    <div class="lr-card">
+      <div class="lr-card-head">
+        <div>
+          <div class="lr-card-title">Cross-tab: is a segment's risk uniform, or concentrated?</div>
+          <div class="lr-card-note">Filter to one slice - e.g. Age band = 18-40, or Relation = spouse, or Network = MSH Platinum - and see every other dimension broken out for that slice alone. Answers "is this risk spread evenly, or concentrated in one gender/network/age?" Uses the Product filter above. Values are case-sensitive and match the book's own raw values (e.g. relation is lowercase: employee/spouse/child; gender is M/F).</div>
+        </div>
+      </div>
+      <div style="display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:12px;">
+        <div class="lr-field">
+          <label>Filter by</label>
+          <select id="rr-xtab-filter-dim" style="min-width:130px;">
+            ${RR_XTAB_DIMENSIONS.map(([dim, label]) => `<option value="${dim}">${escapeHtml(label)}</option>`).join('')}
+          </select>
+        </div>
+        <div class="lr-field">
+          <label>Equals</label>
+          <input type="text" id="rr-xtab-filter-value" placeholder="e.g. 18-40, spouse, MSH Platinum, F" style="min-width:180px;">
+        </div>
+        <button class="lr-btn" onclick="_rrRunCrossTab()">Run</button>
+      </div>
+      <div id="rr-crosstab-result"><div class="lr-empty">Pick a dimension and a value, then click Run.</div></div>
+    </div>
+  `;
+}
+
+async function _rrRunCrossTab() {
+  const filterDim = (document.getElementById('rr-xtab-filter-dim') || {}).value;
+  const filterValue = ((document.getElementById('rr-xtab-filter-value') || {}).value || '').trim();
+  const resultArea = document.getElementById('rr-crosstab-result');
+  if (!filterValue) { toast('Enter a value to filter by first', true); return; }
+  const otherDims = RR_XTAB_DIMENSIONS.filter(([dim]) => dim !== filterDim);
+  resultArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
+  try {
+    const results = await Promise.all(otherDims.map(([dim]) => {
+      const params = _rrProductParams({ group_by: dim, [filterDim]: filterValue });
+      return api(`/portfolio-analysis/summary?${params.toString()}`);
+    }));
+    rrData.crossTab = {
+      filterDim, filterValue,
+      byDimension: Object.fromEntries(otherDims.map(([dim], i) => [dim, results[i].rows || []])),
+    };
+    resultArea.innerHTML = _rrCrossTabResultHtml(rrData.crossTab, otherDims);
+  } catch (err) {
+    resultArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function _rrCrossTabResultHtml(x, otherDims) {
+  const filterLabel = (RR_XTAB_DIMENSIONS.find(([d]) => d === x.filterDim) || [, x.filterDim])[1];
+  const tables = otherDims.map(([dim, label]) => _rrDrillDimensionTableHtml(dim, label, x.byDimension[dim] || [])).join('');
+  return `
+    <div class="lr-card-note" style="margin-bottom:8px;">Scoped to <b>${escapeHtml(filterLabel)} = ${escapeHtml(x.filterValue)}</b>.</div>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
+      ${tables}
     </div>
   `;
 }
