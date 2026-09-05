@@ -9943,21 +9943,28 @@ async function _rrLoadEnrollmentType() {
 function _rrEnrollmentTypeHtml(rows) {
   const order = ['Initial', 'Addition', 'Unmapped'];
   const sorted = [...rows].sort((a, b) => order.indexOf(a.enrollment_type) - order.indexOf(b.enrollment_type));
-  const body = sorted.map(r => `
-    <tr>
+  const body = sorted.map(r => {
+    // Unmapped has no real enrollment_type value to filter the drill by
+    // (it means the dates needed to classify it are missing) - dead-end,
+    // so it's shown but not clickable, rather than a drill that comes
+    // back empty with no explanation.
+    const clickable = r.enrollment_type === 'Initial' || r.enrollment_type === 'Addition';
+    return `
+    <tr class="${clickable ? 'rr-clickable' : ''}" ${clickable ? `onclick="_rrDrillEnrollment('${escapeHtml(r.enrollment_type)}')"` : ''}>
       <td>${escapeHtml(r.enrollment_type)}</td>
       <td class="num">${r.member_count.toLocaleString()}</td>
       <td class="num">${_lrMoney(r.actual_premium)}</td>
       <td class="num">${_lrMoney((r.actual_claims || 0) + (r.ibnr || 0))}</td>
       <td class="num ${_lrBand(r.loss_ratio_incl_ibnr)}">${_lrPct(r.loss_ratio_incl_ibnr)}</td>
       <td class="num ${_lrBand(r.net_loss_ratio)}">${_lrPct(r.net_loss_ratio)}</td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
   return `
     <div class="lr-card">
       <div class="lr-card-head">
         <div>
           <div class="lr-card-title">Loss ratio: Additions vs. Initial members</div>
-          <div class="lr-card-note">Initial = enrolled the day the policy itself incepted (the original census). Addition = joined later via endorsement - often a different risk from the group that was actually underwritten, since a mid-term joiner isn't medically underwritten the same way. "Unmapped" = missing member-start or policy-start date to compare.</div>
+          <div class="lr-card-note">Initial = enrolled the day the policy itself incepted (the original census). Addition = joined later via endorsement - often a different risk from the group that was actually underwritten, since a mid-term joiner isn't medically underwritten the same way. "Unmapped" = missing member-start or policy-start date to compare. Click Initial or Addition to drill into it by Relation/Gender/Age band/Network.</div>
         </div>
       </div>
       <div class="lr-table-wrap">
@@ -9965,6 +9972,38 @@ function _rrEnrollmentTypeHtml(rows) {
           <thead><tr><th>Enrollment</th><th class="num">Members</th><th class="num">Premium</th><th class="num">Incurred</th><th class="num">Gross LR</th><th class="num">Net LR</th></tr></thead>
           <tbody>${body || '<tr><td colspan="6" class="lr-empty">No data yet.</td></tr>'}</tbody>
         </table>
+      </div>
+      <div id="rr-enrollment-drill-area"></div>
+    </div>
+  `;
+}
+
+async function _rrDrillEnrollment(enrollmentType) {
+  rrState.drillEnrollment = enrollmentType;
+  const drillArea = document.getElementById('rr-enrollment-drill-area');
+  if (!drillArea) return;
+  drillArea.innerHTML = '<div class="lr-empty">Loading&hellip;</div>';
+  try {
+    const results = await Promise.all(RR_DRILL_DIMENSIONS.map(([dim]) => {
+      const params = _rrProductParams({ group_by: dim, enrollment_type: enrollmentType });
+      return api(`/portfolio-analysis/summary?${params.toString()}`);
+    }));
+    rrData.enrollmentDrill = { enrollmentType, byDimension: Object.fromEntries(RR_DRILL_DIMENSIONS.map(([dim], i) => [dim, results[i].rows || []])) };
+    drillArea.innerHTML = _rrEnrollmentDrillHtml(rrData.enrollmentDrill);
+  } catch (err) {
+    drillArea.innerHTML = `<div class="lr-empty">${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function _rrEnrollmentDrillHtml(drill) {
+  const tables = RR_DRILL_DIMENSIONS.map(([dim, label]) => _rrDrillDimensionTableHtml(dim, label, drill.byDimension[dim] || [])).join('');
+  return `
+    <div style="margin-top:10px; padding-top:10px; border-top:1px dashed rgba(15,28,46,.16);">
+      <div class="lr-card-note" style="margin-bottom:8px;">Drilling into <b>${escapeHtml(drill.enrollmentType)}</b> members - which segments are driving the difference from the rest of the book.
+        <button class="lr-btn ghost" style="padding:4px 10px; font-size:12px; margin-left:8px;" onclick="rrData.enrollmentDrill=null; document.getElementById('rr-enrollment-drill-area').innerHTML='';">Close</button>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(320px, 1fr)); gap:14px;">
+        ${tables}
       </div>
     </div>
   `;
