@@ -631,7 +631,7 @@ SEED_DECISIONS: List[dict] = [
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 36, "to_age": 40, "gender": None,
      "action": "increase", "change_pct": 10.0, "note": "36-40 at 120% (M) / 126% (F) gross - first step. Males driven by MSH Platinum network (139%)."},
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 41, "to_age": 59, "gender": "M",
-     "action": "discount", "change_pct": -5.0, "note": "Males 41-59 at 54% gross excluding one AED 656k cancer case (124 lives); 87% including it. Conservative step - the ex-case book allows -23%."},
+     "action": "discount", "change_pct": -10.0, "note": "Males 41-59 at 54% gross excluding one AED 656k cancer case (124 lives); 87% including it. The ex-case book allows -23%."},
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 41, "to_age": 59, "gender": "F",
      "action": "increase", "change_pct": 10.0, "note": "Females 41-59 at 83% gross / 113% net (91 lives) - above the net target on every network; cost-to-target +19%."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 2, "to_age": 17, "gender": None,
