@@ -634,6 +634,8 @@ SEED_DECISIONS: List[dict] = [
      "action": "discount", "change_pct": -10.0, "note": "Males 41-59 at 54% gross excluding one AED 656k cancer case (124 lives); 87% including it. The ex-case book allows -23%."},
     {"product": "Silver", "network_scope": "all", "network": None, "from_age": 41, "to_age": 59, "gender": "F",
      "action": "increase", "change_pct": 10.0, "note": "Females 41-59 at 83% gross / 113% net (91 lives) - above the net target on every network; cost-to-target +19%."},
+    {"product": "Silver", "network_scope": "all", "network": None, "from_age": 60, "to_age": 99, "gender": None,
+     "action": "hold", "change_pct": 0.0, "note": "No change - 17 lives, under 13 member-years; too few members to read a rate from."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 2, "to_age": 17, "gender": None,
      "action": "hold", "change_pct": 0.0, "note": "Platinum children 2-17 at 76-95% gross on thin data (56 lives) - hold."},
     {"product": "Bronze", "network_scope": "only", "network": "MSH Platinum", "from_age": 18, "to_age": 40, "gender": "F",
