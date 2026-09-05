@@ -1854,7 +1854,61 @@ function renderAccountDashboard(data) {
    cell, before anyone quotes rather than as a footnote after. A cell at
    140% implied loss ratio is not an opinion - it has lost money on every
    case it ever priced, and will keep doing so until the number changes. */
-let calibrationState = { target: 85, loading: null, minYears: 5, filter: 'all' };
+let calibrationState = { target: 85, loading: null, minYears: 5, filter: 'all', pivotProduct: '', pivotNetwork: '' };
+
+function _calibrationPivotHtml(cells, product, network) {
+  const money = v => v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 0 });
+  const relevant = cells.filter(c => c.product === product && c.network === network && (c.gender === 'male' || c.gender === 'female'));
+  const byBand = {};
+  relevant.forEach(c => {
+    const b = byBand[c.age_band] || (byBand[c.age_band] = { from_age: c.from_age });
+    b[c.gender] = c;
+  });
+  const bands = Object.keys(byBand).sort((a, b) => byBand[a].from_age - byBand[b].from_age);
+
+  let stdWeighted = 0, sugWeighted = 0, totalYears = 0;
+  const rows = bands.map(band => {
+    const m = byBand[band].male, f = byBand[band].female;
+    const present = [m, f].filter(Boolean);
+    const stdAvg = present.length ? present.reduce((s, c) => s + c.card_price, 0) / present.length : null;
+    const sugAvg = present.length ? present.reduce((s, c) => s + c.suggested_price, 0) / present.length : null;
+    const years = present.reduce((s, c) => s + (c.exposure_member_years || 0), 0);
+    stdWeighted += (stdAvg || 0) * years;
+    sugWeighted += (sugAvg || 0) * years;
+    totalYears += years;
+    return `<tr>
+      <td>${escapeHtml(band)}</td>
+      <td class="num">${money(m ? m.card_price : null)}</td>
+      <td class="num">${money(f ? f.card_price : null)}</td>
+      <td class="num">${money(m ? m.suggested_price : null)}</td>
+      <td class="num">${money(f ? f.suggested_price : null)}</td>
+      <td class="num" style="font-weight:600;">${money(stdAvg)}</td>
+      <td class="num" style="font-weight:600;">${money(sugAvg)}</td>
+    </tr>`;
+  }).join('');
+
+  const totalStd = totalYears ? stdWeighted / totalYears : null;
+  const totalSug = totalYears ? sugWeighted / totalYears : null;
+
+  return `
+    <table>
+      <tr>
+        <th rowspan="2">Age Band</th>
+        <th colspan="2">Standard Card Rate</th>
+        <th colspan="2">Suggested Loading</th>
+        <th rowspan="2" class="num">Total Standard</th>
+        <th rowspan="2" class="num">Total Loading</th>
+      </tr>
+      <tr><th class="num">Male</th><th class="num">Female</th><th class="num">Male</th><th class="num">Female</th></tr>
+      ${rows || `<tr><td colspan="7">No cells for ${escapeHtml(product)} / ${escapeHtml(network)}.</td></tr>`}
+      <tr style="font-weight:700; border-top:2px solid var(--border-strong);">
+        <td>Total</td><td></td><td></td><td></td><td></td>
+        <td class="num">${money(totalStd)}</td>
+        <td class="num">${money(totalSug)}</td>
+      </tr>
+    </table>
+  `;
+}
 
 async function hcRailRateCardCalibration() {
   _hcRailSetActive('hc-rail-card-calibration');
@@ -1901,9 +1955,26 @@ async function hcRailRateCardCalibration() {
         <td class="num">${pct(p.underpriced_share)}</td>
       </tr>`).join('');
 
+    const productOptions = [...new Set(r.cells.map(c => c.product).filter(Boolean))].sort();
+    if (!calibrationState.pivotProduct && productOptions.length) calibrationState.pivotProduct = productOptions[0];
+    const networkOptions = [...new Set(r.cells.filter(c => c.product === calibrationState.pivotProduct).map(c => c.network).filter(Boolean))].sort();
+    if (!networkOptions.includes(calibrationState.pivotNetwork)) calibrationState.pivotNetwork = networkOptions[0] || '';
+
     main.innerHTML = `
       <div class="card">
-        <h3>Rate Card Calibration</h3>
+        <h3>Standard Card Rate vs. Suggested Loading</h3>
+        <div class="row" style="align-items:flex-end; margin-bottom:12px; gap:10px; flex-wrap:wrap;">
+          <div><label>Product</label><select style="width:140px;" onchange="calibrationState.pivotProduct = this.value; calibrationState.pivotNetwork = ''; hcRailRateCardCalibration();">
+            ${productOptions.map(p => `<option value="${escapeHtml(p)}" ${p === calibrationState.pivotProduct ? 'selected' : ''}>${escapeHtml(p)}</option>`).join('')}
+          </select></div>
+          <div><label>Network</label><select style="width:180px;" onchange="calibrationState.pivotNetwork = this.value; hcRailRateCardCalibration();">
+            ${networkOptions.map(n => `<option value="${escapeHtml(n)}" ${n === calibrationState.pivotNetwork ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+          </select></div>
+        </div>
+        ${_calibrationPivotHtml(r.cells, calibrationState.pivotProduct, calibrationState.pivotNetwork)}
+      </div>
+      <div class="card">
+        <h3>Rate Card Calibration - every cell</h3>
         <div class="hint">What the card charges for each cell, against what that cell actually costs on HealthCross's own book. <strong>Implied loss ratio</strong> is the cell's expected claims over the part of its price that is available to pay them - price &times; (1 &minus; loading), not the price itself, which would flatter every cell by the whole expense load.</div>
         <div class="hint">The suggested price sits beside the current one rather than replacing it: a rate card is a commercial document too, and a cell may be knowingly held below cost to win a segment. Cells marked <strong>thin</strong> lack the exposure to be a finding; <strong>fallback</strong> means the book had no experience for that exact cell and the cost came from a broader one.</div>
         <div class="row" style="align-items:flex-end; margin:14px 0; gap:10px; flex-wrap:wrap;">
