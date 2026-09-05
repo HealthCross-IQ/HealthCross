@@ -190,7 +190,7 @@ def test_census_categories_reports_member_counts_and_uncategorized(client):
     resp = client.get(f"/cases/{case_id}/census-categories")
     assert resp.status_code == 200
     body = resp.json()
-    assert body["categories"] == [{"category": "A", "member_count": 2}]
+    assert body["categories"] == [{"category": "A", "member_count": 2, "region": "Dubai"}]
     assert body["uncategorized_member_count"] == 1
 
 
@@ -218,7 +218,7 @@ def test_census_categories_merges_inconsistently_cased_or_padded_category_values
 
     resp = client.get(f"/cases/{case_id}/census-categories")
     assert resp.status_code == 200
-    assert resp.json()["categories"] == [{"category": "A", "member_count": 3}]
+    assert resp.json()["categories"] == [{"category": "A", "member_count": 3, "region": "Dubai"}]
 
 
 def test_census_categories_suggests_a_product_tier_from_the_existing_insurer(client):
